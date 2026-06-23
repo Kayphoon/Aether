@@ -769,7 +769,7 @@ mod tests {
         let transport = sample_transport(
             "glm_coding_plan",
             "openai:chat",
-            "https://api.z.ai/api/paas/v4",
+            "https://api.z.ai/api/coding/paas/v4",
             Some("/chat/completions"),
         );
 
@@ -787,7 +787,7 @@ mod tests {
 
         assert_eq!(
             url,
-            "https://api.z.ai/api/paas/v4/chat/completions?tenant=demo"
+            "https://api.z.ai/api/coding/paas/v4/chat/completions?tenant=demo"
         );
     }
 

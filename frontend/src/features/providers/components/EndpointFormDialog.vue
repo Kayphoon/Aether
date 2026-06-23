@@ -1803,8 +1803,8 @@ const glmCodingPlanMessagesBaseUrlPresets = [
   { label: 'Zhipu', value: 'https://open.bigmodel.cn/api/anthropic' },
 ] as const
 const glmCodingPlanChatBaseUrlPresets = [
-  { label: 'Z.ai', value: 'https://api.z.ai/api/paas/v4' },
-  { label: 'Zhipu', value: 'https://open.bigmodel.cn/api/paas/v4' },
+  { label: 'Z.ai', value: 'https://api.z.ai/api/coding/paas/v4' },
+  { label: 'Zhipu', value: 'https://open.bigmodel.cn/api/coding/paas/v4' },
 ] as const
 
 // 新端点表单

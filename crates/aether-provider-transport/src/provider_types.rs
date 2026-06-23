@@ -458,7 +458,7 @@ const GLM_CODING_PLAN_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProv
         FixedProviderEndpointTemplate {
             item_key: "openai:chat",
             api_format: "openai:chat",
-            base_url: Some("https://api.z.ai/api/paas/v4"),
+            base_url: Some("https://api.z.ai/api/coding/paas/v4"),
             custom_path: Some("/chat/completions"),
             config_defaults: EMPTY_ENDPOINT_CONFIG_DEFAULTS,
         },
@@ -813,7 +813,7 @@ mod tests {
             fixed_provider_endpoint_template_by_api_format("glm_coding_plan", "openai:chat")
                 .expect("GLM chat endpoint should exist");
         assert_eq!(messages_template.base_url, None);
-        assert_eq!(chat_template.base_url, Some("https://api.z.ai/api/paas/v4"));
+        assert_eq!(chat_template.base_url, Some("https://api.z.ai/api/coding/paas/v4"));
         assert_eq!(chat_template.custom_path, Some("/chat/completions"));
 
         let policy = provider_runtime_policy("glm_coding_plan");

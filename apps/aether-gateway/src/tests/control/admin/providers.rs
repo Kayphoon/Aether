@@ -1313,7 +1313,7 @@ async fn gateway_preserves_glm_coding_plan_base_url_override_after_provider_reco
         .find(|endpoint| endpoint.api_format == "openai:chat")
         .expect("GLM chat endpoint should exist");
     assert_eq!(messages_endpoint.base_url, "https://api.z.ai/api/anthropic");
-    assert_eq!(chat_endpoint.base_url, "https://api.z.ai/api/paas/v4");
+    assert_eq!(chat_endpoint.base_url, "https://api.z.ai/api/coding/paas/v4");
     assert_eq!(
         chat_endpoint.custom_path.as_deref(),
         Some("/chat/completions")
@@ -1329,7 +1329,7 @@ async fn gateway_preserves_glm_coding_plan_base_url_override_after_provider_reco
         .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
         .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
         .json(&json!({
-            "base_url": "https://open.bigmodel.cn/api/paas/v4"
+            "base_url": "https://open.bigmodel.cn/api/coding/paas/v4"
         }))
         .send()
         .await
@@ -1369,7 +1369,7 @@ async fn gateway_preserves_glm_coding_plan_base_url_override_after_provider_reco
     assert_eq!(messages_endpoint.base_url, "https://api.z.ai/api/anthropic");
     assert_eq!(
         chat_endpoint.base_url,
-        "https://open.bigmodel.cn/api/paas/v4"
+        "https://open.bigmodel.cn/api/coding/paas/v4"
     );
     assert_eq!(
         chat_endpoint.custom_path.as_deref(),
