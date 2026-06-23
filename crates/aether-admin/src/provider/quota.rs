@@ -2020,18 +2020,30 @@ mod tests {
                     "limits": [
                         {
                             "type": "TOKENS_LIMIT",
-                            "percentage": 72.5,
-                            "currentValue": 725,
-                            "usage": 1000
+                            "unit": 3,
+                            "number": 5,
+                            "percentage": 2,
+                            "nextResetTime": 1782257194399_u64
+                        },
+                        {
+                            "type": "TOKENS_LIMIT",
+                            "unit": 6,
+                            "number": 1,
+                            "percentage": 36,
+                            "nextResetTime": 1782698593995_u64
                         },
                         {
                             "type": "TIME_LIMIT",
-                            "percentage": 40,
-                            "currentValue": 4,
-                            "usage": 10,
-                            "usageDetails": [{"name": "mcp", "count": 4}]
+                            "unit": 5,
+                            "number": 1,
+                            "percentage": 0,
+                            "currentValue": 0,
+                            "usage": 4000,
+                            "nextResetTime": 1783303393993_u64,
+                            "usageDetails": [{"name": "mcp", "count": 0}]
                         }
-                    ]
+                    ],
+                    "level": "max"
                 }
             }),
             1_234,
@@ -2039,12 +2051,17 @@ mod tests {
         .expect("glm coding plan quota limit should parse");
 
         assert_eq!(parsed.get("updated_at"), Some(&json!(1_234)));
-        assert_eq!(parsed.get("token_used_percent"), Some(&json!(72.5)));
-        assert_eq!(parsed.get("token_current_usage"), Some(&json!(725.0)));
-        assert_eq!(parsed.get("token_usage_limit"), Some(&json!(1000.0)));
-        assert_eq!(parsed.get("mcp_used_percent"), Some(&json!(40.0)));
-        assert_eq!(parsed.get("mcp_current_usage"), Some(&json!(4.0)));
-        assert_eq!(parsed.get("mcp_usage_limit"), Some(&json!(10.0)));
+        // backward-compat: max percentage across windows
+        assert_eq!(parsed.get("token_used_percent"), Some(&json!(36.0)));
+        // per-window extraction
+        assert_eq!(parsed.get("token_5h_used_percent"), Some(&json!(2.0)));
+        assert_eq!(parsed.get("token_weekly_used_percent"), Some(&json!(36.0)));
+        assert_eq!(parsed.get("token_5h_reset_at"), Some(&json!(1782257194_u64)));
+        assert_eq!(parsed.get("token_weekly_reset_at"), Some(&json!(1782698593_u64)));
+        // MCP
+        assert_eq!(parsed.get("mcp_used_percent"), Some(&json!(0.0)));
+        assert_eq!(parsed.get("mcp_usage_limit"), Some(&json!(4000.0)));
+        assert_eq!(parsed.get("mcp_reset_at"), Some(&json!(1783303393_u64)));
         assert!(parsed.get("mcp_usage_details").is_some());
     }
 
