@@ -32,11 +32,15 @@ jobs:
           tags: |
             type=raw,value=test
             type=sha,prefix=,format=short
+      - name: Patch Dockerfile to force aether-admin recompile
+        run: |
+          sed 's/cargo build --release --locked -p aether-gateway/cargo clean -p aether-admin \&\& cargo build --release --locked -p aether-gateway/' \
+            Dockerfile.app.release-local > Dockerfile.app.ci
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile.app.release-local
+          file: ./Dockerfile.app.ci
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           platforms: linux/amd64
@@ -45,4 +49,3 @@ jobs:
             AETHER_BUILD_TYPE=release
             NODE_BASE_IMAGE=node:22-slim
             RUST_BASE_IMAGE=rust:1.95.0-slim
-          no-cache: true
