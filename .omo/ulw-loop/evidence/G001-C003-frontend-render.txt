@@ -1,0 +1,7 @@
+> node --experimental-require-module --disable-warning=ExperimentalWarning ./node_modules/vitest/vitest.mjs run src/views/admin/system-settings/__tests__/useBackupRecords.spec.ts
+ RUN  v4.0.10 /root/Aether/frontend
+ ✓ src/views/admin/system-settings/__tests__/useBackupRecords.spec.ts (5 tests) 73ms
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  10:05:02
+   Duration  1.72s (transform 543ms, setup 40ms, collect 673ms, tests 73ms, environment 697ms, prepare 11ms)

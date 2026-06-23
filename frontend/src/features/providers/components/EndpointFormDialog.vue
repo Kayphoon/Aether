@@ -141,11 +141,30 @@
               <div class="flex items-end gap-3">
                 <div class="flex-1 min-w-0 grid grid-cols-3 gap-3">
                   <div class="col-span-2 space-y-1.5">
-                    <Label class="text-xs text-muted-foreground">Base URL</Label>
+                    <div class="flex items-center justify-between gap-2">
+                      <Label class="text-xs text-muted-foreground">Base URL</Label>
+                      <div
+                        v-if="isGlmCodingPlanProvider"
+                        class="flex items-center gap-1"
+                      >
+                        <Button
+                          v-for="preset in getGlmCodingPlanBaseUrlPresets(endpoint)"
+                          :key="preset.value"
+                          variant="ghost"
+                          size="sm"
+                          class="h-6 px-2 text-[10px]"
+                          :disabled="savingEndpointId === endpoint.id"
+                          :title="preset.value"
+                          @click="applyGlmCodingPlanBaseUrlPreset(endpoint, preset.value)"
+                        >
+                          {{ preset.label }}
+                        </Button>
+                      </div>
+                    </div>
                     <Input
                       :model-value="getEndpointEditState(endpoint.id)?.url ?? endpoint.base_url"
                       :placeholder="provider?.website || 'https://api.example.com'"
-                      :disabled="isFixedProvider"
+                      :disabled="isEndpointBaseUrlLocked"
                       @update:model-value="(v) => updateEndpointField(endpoint.id, 'url', v)"
                     />
                   </div>
@@ -1777,6 +1796,16 @@ const isFixedProvider = computed(() => {
   const t = props.provider?.provider_type
   return !!t && t !== 'custom'
 })
+const isGlmCodingPlanProvider = computed(() => (props.provider?.provider_type || '').toLowerCase() === 'glm_coding_plan')
+const isEndpointBaseUrlLocked = computed(() => isFixedProvider.value && !isGlmCodingPlanProvider.value)
+const glmCodingPlanMessagesBaseUrlPresets = [
+  { label: 'Z.ai', value: 'https://api.z.ai/api/anthropic' },
+  { label: 'Zhipu', value: 'https://open.bigmodel.cn/api/anthropic' },
+] as const
+const glmCodingPlanChatBaseUrlPresets = [
+  { label: 'Z.ai', value: 'https://api.z.ai/api/paas/v4' },
+  { label: 'Zhipu', value: 'https://open.bigmodel.cn/api/paas/v4' },
+] as const
 
 // 新端点表单
 const newEndpoint = ref({
@@ -1861,9 +1890,21 @@ function getDefaultPath(apiFormat: string, baseUrl?: string): string {
 
 function getDisplayedPath(endpoint: ProviderEndpoint): string {
   if (isFixedProvider.value) {
+    if (endpoint.custom_path) return endpoint.custom_path
     return getDefaultPath(endpoint.api_format, endpoint.base_url)
   }
   return getEndpointEditState(endpoint.id)?.path ?? (endpoint.custom_path || '')
+}
+
+function getGlmCodingPlanBaseUrlPresets(endpoint: ProviderEndpoint) {
+  const apiFormat = endpoint.api_format.trim().toLowerCase()
+  if (apiFormat === 'claude:messages') return glmCodingPlanMessagesBaseUrlPresets
+  if (apiFormat === 'openai:chat') return glmCodingPlanChatBaseUrlPresets
+  return []
+}
+
+function applyGlmCodingPlanBaseUrlPreset(endpoint: ProviderEndpoint, baseUrl: string): void {
+  updateEndpointField(endpoint.id, 'url', baseUrl)
 }
 
 // 读取端点的上游流式策略（endpoint.config.upstream_stream_policy）
@@ -3202,8 +3243,11 @@ async function saveEndpoint(endpoint: ProviderEndpoint) {
     // 仅提交变更字段，避免 fixed provider 因 base_url/custom_path 被锁定而更新失败
     const payload: Record<string, unknown> = {}
 
+    if (!isEndpointBaseUrlLocked.value && state.url !== endpoint.base_url) {
+      payload.base_url = state.url
+    }
+
     if (!isFixedProvider.value) {
-      if (state.url !== endpoint.base_url) payload.base_url = state.url
       if (state.path !== (endpoint.custom_path || '')) payload.custom_path = state.path || null
     }
 

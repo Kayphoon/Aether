@@ -374,6 +374,45 @@ export interface CleanupRunListResponse {
   items: CleanupRunRecord[]
 }
 
+export type BackupRunStatus =
+  | 'queued'
+  | 'running'
+  | 'retrying'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'skipped'
+
+export interface BackupRunRecord {
+  readonly id: string
+  readonly task_key: string
+  readonly kind: 'scheduled' | 'daemon' | 'on_demand' | 'fire_and_forget'
+  readonly trigger: string
+  readonly status: BackupRunStatus
+  readonly attempt: number
+  readonly max_attempts: number
+  readonly owner_instance: string | null
+  readonly progress_percent: number
+  readonly progress_message: string | null
+  readonly payload: Record<string, unknown> | null
+  readonly result: Record<string, unknown> | null
+  readonly error_message: string | null
+  readonly cancel_requested: boolean
+  readonly created_by: string | null
+  readonly created_at: string | null
+  readonly started_at: string | null
+  readonly finished_at: string | null
+  readonly updated_at: string | null
+}
+
+export interface BackupRunListResponse {
+  readonly items: readonly BackupRunRecord[]
+  readonly total: number
+  readonly page: number
+  readonly page_size: number
+  readonly pages: number
+}
+
 export interface CleanupTaskResponse {
   message: string
   task: CleanupRunRecord
@@ -1463,6 +1502,10 @@ export const adminApi = {
   },
   async getCleanupRuns(): Promise<CleanupRunListResponse> {
     const response = await apiClient.get<CleanupRunListResponse>('/api/admin/system/cleanup/runs')
+    return response.data
+  },
+  async getBackupRuns(): Promise<BackupRunListResponse> {
+    const response = await apiClient.get<BackupRunListResponse>('/api/admin/system/backup-runs')
     return response.data
   },
 

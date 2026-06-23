@@ -85,6 +85,15 @@ impl MysqlBackgroundTaskRepository {
             }
             builder.push("`trigger` = ").push_bind(trigger.to_string());
         }
+        if let Some(task_key) = query.task_key.as_deref() {
+            if !has_where {
+                builder.push(" WHERE ");
+                has_where = true;
+            } else {
+                builder.push(" AND ");
+            }
+            builder.push("task_key = ").push_bind(task_key.to_string());
+        }
         if let Some(task_key_substring) = query.task_key_substring.as_deref() {
             if !has_where {
                 builder.push(" WHERE ");

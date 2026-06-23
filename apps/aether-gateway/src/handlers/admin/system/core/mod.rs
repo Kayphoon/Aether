@@ -36,6 +36,7 @@ const ADMIN_AWS_REGIONS: &[&str] = &[
     "us-west-1",
     "us-west-2",
 ];
+mod backup_runs;
 mod system_routes;
 
 pub(crate) async fn maybe_build_local_admin_core_response(

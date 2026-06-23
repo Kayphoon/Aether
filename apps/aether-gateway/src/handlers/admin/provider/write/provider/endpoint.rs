@@ -39,12 +39,14 @@ pub(crate) fn build_admin_fixed_provider_endpoint_defaults(
     )
     .and_then(|(_, rules)| (!rules.is_empty()).then_some(serde_json::Value::Array(rules)));
 
+    let default_base_url = endpoint_template.base_url.unwrap_or(template.base_url);
+
     Ok(AdminFixedProviderEndpointDefaults {
         api_format: normalized_api_format.to_string(),
         api_family: api_family.to_string(),
         endpoint_kind: endpoint_kind.to_string(),
         is_active: true,
-        base_url: normalize_admin_base_url(template.base_url)?,
+        base_url: normalize_admin_base_url(default_base_url)?,
         header_rules: None,
         body_rules,
         max_retries: Some(provider.max_retries.unwrap_or(2)),

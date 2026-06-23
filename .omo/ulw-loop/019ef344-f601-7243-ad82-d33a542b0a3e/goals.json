@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "createdAt": "2026-06-23T08:06:02.120Z",
+  "updatedAt": "2026-06-23T10:11:01.298Z",
+  "briefPath": ".omo/ulw-loop/019ef344-f601-7243-ad82-d33a542b0a3e/brief.md",
+  "goalsPath": ".omo/ulw-loop/019ef344-f601-7243-ad82-d33a542b0a3e/goals.json",
+  "ledgerPath": ".omo/ulw-loop/019ef344-f601-7243-ad82-d33a542b0a3e/ledger.jsonl",
+  "codexGoalMode": "aggregate",
+  "goals": [
+    {
+      "id": "G001-aether",
+      "title": "为 Aether 管理后台新增完整备份记录查看能力：管理员执行完整备份导出时记录后台任务运行状态；新增只读接口返回最近备份记录；系统设置页...",
+      "objective": "为 Aether 管理后台新增完整备份记录查看能力：管理员执行完整备份导出时记录后台任务运行状态；新增只读接口返回最近备份记录；系统设置页面展示最近备份是否成功、数量和时间等信息。复用现有 background_task_runs，不新增数据库表。",
+      "status": "blocked",
+      "successCriteria": [
+        {
+          "id": "C001",
+          "scenario": "HTTP happy path: trigger GET /api/admin/system/data/export in a gateway integration test, then query GET /api/admin/system/backup-runs and observe one admin.system.data_export run with status=succeeded, started/finished timestamps, progress=100, and result summary including exported byte count.",
+          "userModel": "happy",
+          "expectedEvidence": ".omo/ulw-loop/evidence/G001-C001-http-backup-runs.txt containing command output/test transcript plus response/status JSON excerpt",
+          "essential": true,
+          "capturedEvidence": "artifact: .omo/ulw-loop/evidence/G001-C001-http-backup-runs.txt; refreshed backend focused run prints backup-runs JSON after complete export with status=succeeded, progress_percent=100, payload.scope=complete_backup, result.exported_bytes>0, config_data/user_data absent, created_by present. cleanup: no persistent server; test aborts local handles; target-codex-clean is a local build dir.",
+          "status": "pass",
+          "capturedAt": "2026-06-23T10:06:24.153Z"
+        },
+        {
+          "id": "C002",
+          "scenario": "Boundary path: GET /api/admin/system/backup-runs before any complete backup run returns HTTP 200 with items=[], total=0, page/page_size metadata, and no malformed task statuses; route classifier recognizes backup_runs as admin:system.",
+          "userModel": "edge",
+          "expectedEvidence": ".omo/ulw-loop/evidence/G001-C002-empty-and-classification.txt containing focused route-classification test output and empty-list response evidence",
+          "essential": true,
+          "capturedEvidence": "artifacts: .omo/ulw-loop/evidence/G001-C002-empty-and-classification.txt and .omo/ulw-loop/evidence/G001-C002-failure-record.txt; refreshed backend focused run confirms route classification admin_proxy/system_manage/backup_runs/admin:system, exact task_key filtering excludes near-match admin.system.data_export.extra and unrelated admin.provider.delete, safe response whitelist drops seeded payload.secret and result.user_data, empty page preserves total, and failure path records one failed run with progress_message 完整备份导出失败, error_message, result null. cleanup: no persistent server; test aborts local handles; target-codex-clean is a local build dir.",
+          "status": "pass",
+          "capturedAt": "2026-06-23T10:06:24.170Z"
+        },
+        {
+          "id": "C003",
+          "scenario": "Frontend/regression: SystemSettings renders a 备份记录 section fed by the backup-runs API, shows latest success/failure/time/count and empty state, while existing DataManagement complete backup export wiring remains callable.",
+          "userModel": "regression",
+          "expectedEvidence": ".omo/ulw-loop/evidence/G001-C003-frontend-render.txt containing Vitest/typecheck output or browser screenshot/test transcript for SystemSettings backup-record section",
+          "essential": false,
+          "capturedEvidence": "artifacts: .omo/ulw-loop/evidence/G001-C003-frontend-render.txt and .omo/ulw-loop/evidence/G001-C003-frontend-typecheck.txt; refreshed Vitest 5 tests passed (recent summary, empty state, load error, populated DOM, empty/error DOM) and vue-tsc --noEmit passed. Browser screenshot not captured because no Chrome/Chromium/Playwright available in this restricted environment. cleanup: no dev server/browser spawned.",
+          "status": "pass",
+          "capturedAt": "2026-06-23T10:06:24.175Z"
+        }
+      ],
+      "attempt": 1,
+      "createdAt": "2026-06-23T08:06:02.120Z",
+      "updatedAt": "2026-06-23T10:11:01.298Z",
+      "startedAt": "2026-06-23T09:01:58.816Z",
+      "blockedReason": "Codex goal 已以功能目标文案 complete，但 ulw-loop 期望 plan 级目标文案，二者账本对齐不通过。功能本身已全部实现并验证通过（4 后端测试 + 5 前端测试，三位审查者 APPROVE，无阻塞）。此为 Codex goal 与 ulw-loop 的对齐摩擦，非功能缺陷。"
+    }
+  ],
+  "codexObjective": "Complete the durable ulw-loop plan in .omo/ulw-loop/019ef344-f601-7243-ad82-d33a542b0a3e/goals.json, including later accepted/appended stories, under the original brief constraints; use .omo/ulw-loop/019ef344-f601-7243-ad82-d33a542b0a3e/ledger.jsonl as the audit trail."
+}

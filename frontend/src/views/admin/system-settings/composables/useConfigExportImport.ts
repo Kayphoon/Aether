@@ -379,9 +379,11 @@ export function useConfigExportImport(systemConfig: { value: SystemConfig }) {
         `${systemConfig.value.site_name.toLowerCase()}-data-${new Date().toISOString().slice(0, 10)}.json`,
       )
       success('完整备份已导出')
+      return true
     } catch (err) {
       error('导出完整备份失败')
       log.error('导出完整备份失败:', err)
+      return false
     } finally {
       exportAggregateLoading.value = false
     }

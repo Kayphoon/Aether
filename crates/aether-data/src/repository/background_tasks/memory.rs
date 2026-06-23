@@ -39,6 +39,11 @@ impl InMemoryBackgroundTaskRepository {
                 return false;
             }
         }
+        if let Some(task_key) = query.task_key.as_deref() {
+            if run.task_key != task_key {
+                return false;
+            }
+        }
         if let Some(task_key_substring) = query.task_key_substring.as_deref() {
             let needle = task_key_substring.to_ascii_lowercase();
             if !run.task_key.to_ascii_lowercase().contains(&needle) {

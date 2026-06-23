@@ -296,12 +296,16 @@ impl<'a> AdminAppState<'a> {
         use aether_admin::provider::endpoints as admin_provider_endpoints_pure;
         let (fields, payload) = patch.into_parts();
 
-        if self.provider_type_is_fixed(&provider.provider_type)
-            && (fields.contains("base_url") || fields.contains("custom_path"))
-        {
-            return Err(
-                "固定类型 Provider 的 Endpoint 不允许修改 base_url/custom_path".to_string(),
-            );
+        if self.provider_type_is_fixed(&provider.provider_type) {
+            let provider_type = provider.provider_type.trim().to_ascii_lowercase();
+            let base_url_edit_allowed = provider_type == "glm_coding_plan";
+            if fields.contains("custom_path")
+                || (fields.contains("base_url") && !base_url_edit_allowed)
+            {
+                return Err(
+                    "固定类型 Provider 的 Endpoint 不允许修改 base_url/custom_path".to_string(),
+                );
+            }
         }
 
         let mut update_fields = admin_provider_endpoints_pure::AdminProviderEndpointUpdateFields {

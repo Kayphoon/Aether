@@ -216,6 +216,7 @@ impl UpsertBackgroundTaskEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct BackgroundTaskListQuery {
+    pub task_key: Option<String>,
     pub task_key_substring: Option<String>,
     pub kind: Option<BackgroundTaskKind>,
     pub status: Option<BackgroundTaskStatus>,

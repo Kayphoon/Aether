@@ -765,6 +765,33 @@ mod tests {
     }
 
     #[test]
+    fn builds_glm_coding_plan_chat_url_from_paas_v4_custom_path() {
+        let transport = sample_transport(
+            "glm_coding_plan",
+            "openai:chat",
+            "https://api.z.ai/api/paas/v4",
+            Some("/chat/completions"),
+        );
+
+        let url = build_transport_request_url(
+            &transport,
+            TransportRequestUrlParams {
+                provider_api_format: "openai:chat",
+                mapped_model: None,
+                upstream_is_stream: false,
+                request_query: Some("tenant=demo"),
+                kiro_api_region: None,
+            },
+        )
+        .expect("GLM coding plan chat url");
+
+        assert_eq!(
+            url,
+            "https://api.z.ai/api/paas/v4/chat/completions?tenant=demo"
+        );
+    }
+
+    #[test]
     fn expands_custom_path_templates_when_hook_does_not_apply() {
         let transport = sample_transport(
             "custom",

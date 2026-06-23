@@ -1263,6 +1263,133 @@ async fn gateway_updates_fixed_provider_and_reconciles_template_managed_endpoint
 }
 
 #[tokio::test]
+async fn gateway_preserves_glm_coding_plan_base_url_override_after_provider_reconcile() {
+    let mut provider = sample_provider("provider-glm", "GLM Coding Plan", 10)
+        .with_transport_fields(true, false, true, None, None, None, None, None, None);
+    provider.provider_type = "glm_coding_plan".to_string();
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![],
+        vec![],
+    ));
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_repository_for_tests(Arc::clone(
+                    &provider_catalog_repository,
+                )),
+            ),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .patch(format!("{gateway_url}/api/admin/providers/provider-glm"))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "max_retries": 3
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+    let status = response.status();
+    let body = response.text().await.expect("body should read");
+    assert_eq!(status, StatusCode::OK, "body={body}");
+
+    let endpoints = provider_catalog_repository
+        .list_endpoints_by_provider_ids(&["provider-glm".to_string()])
+        .await
+        .expect("endpoints should list");
+    let messages_endpoint = endpoints
+        .iter()
+        .find(|endpoint| endpoint.api_format == "claude:messages")
+        .expect("GLM messages endpoint should exist");
+    let chat_endpoint = endpoints
+        .iter()
+        .find(|endpoint| endpoint.api_format == "openai:chat")
+        .expect("GLM chat endpoint should exist");
+    assert_eq!(messages_endpoint.base_url, "https://api.z.ai/api/anthropic");
+    assert_eq!(chat_endpoint.base_url, "https://api.z.ai/api/paas/v4");
+    assert_eq!(
+        chat_endpoint.custom_path.as_deref(),
+        Some("/chat/completions")
+    );
+
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{gateway_url}/api/admin/endpoints/{}",
+            chat_endpoint.id
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "base_url": "https://open.bigmodel.cn/api/paas/v4"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+    let status = response.status();
+    let body = response.text().await.expect("body should read");
+    assert_eq!(status, StatusCode::OK, "body={body}");
+
+    let response = reqwest::Client::new()
+        .patch(format!("{gateway_url}/api/admin/providers/provider-glm"))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "max_retries": 4
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+    let status = response.status();
+    let body = response.text().await.expect("body should read");
+    assert_eq!(status, StatusCode::OK, "body={body}");
+
+    let endpoints = provider_catalog_repository
+        .list_endpoints_by_provider_ids(&["provider-glm".to_string()])
+        .await
+        .expect("endpoints should list");
+    let messages_endpoint = endpoints
+        .iter()
+        .find(|endpoint| endpoint.api_format == "claude:messages")
+        .expect("GLM messages endpoint should exist");
+    let chat_endpoint = endpoints
+        .iter()
+        .find(|endpoint| endpoint.api_format == "openai:chat")
+        .expect("GLM chat endpoint should exist");
+    assert_eq!(messages_endpoint.base_url, "https://api.z.ai/api/anthropic");
+    assert_eq!(
+        chat_endpoint.base_url,
+        "https://open.bigmodel.cn/api/paas/v4"
+    );
+    assert_eq!(
+        chat_endpoint.custom_path.as_deref(),
+        Some("/chat/completions")
+    );
+    assert_eq!(
+        chat_endpoint
+            .config
+            .as_ref()
+            .and_then(|value| value.get("_aether_fixed_provider_template"))
+            .and_then(|value| value.get("overrides"))
+            .and_then(serde_json::Value::as_array)
+            .map(|items| items.iter().any(|item| item == "base_url")),
+        Some(true)
+    );
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_lists_effective_api_formats_for_fixed_oauth_provider_keys() {
     let mut provider = sample_provider("provider-codex", "codex", 10)
         .with_transport_fields(true, false, true, None, None, None, None, None, None);

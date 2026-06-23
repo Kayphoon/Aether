@@ -1,3 +1,6 @@
+use super::backup_runs::{
+    build_admin_system_backup_runs_payload, build_admin_system_data_export_payload_with_run_record,
+};
 use super::ADMIN_AWS_REGIONS;
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
 use crate::handlers::admin::shared::attach_admin_audit_response;
@@ -323,12 +326,26 @@ pub(super) async fn maybe_build_local_admin_core_system_response(
         && request_path == "/api/admin/system/data/export"
     {
         return Ok(Some(attach_admin_audit_response(
-            Json(state.build_admin_system_data_export_payload().await?).into_response(),
+            Json(
+                build_admin_system_data_export_payload_with_run_record(state, request_context)
+                    .await?,
+            )
+            .into_response(),
             "admin_system_data_exported",
             "export_system_data",
             "system_data_export",
             "global",
         )));
+    }
+
+    if decision.route_kind.as_deref() == Some("backup_runs")
+        && request_method == http::Method::GET
+        && request_path == "/api/admin/system/backup-runs"
+    {
+        return Ok(Some(
+            Json(build_admin_system_backup_runs_payload(state, request_context).await?)
+                .into_response(),
+        ));
     }
 
     if decision.route_kind.as_deref() == Some("data_import")
@@ -876,7 +893,7 @@ fn parse_manual_usage_cleanup_request(
                 http::StatusCode::BAD_REQUEST,
                 Json(json!({ "detail": format!("请求体无效 JSON: {err}") })),
             )
-                .into_response())
+                .into_response());
         }
     };
     let Some(object) = parsed.as_object() else {
@@ -1055,7 +1072,7 @@ fn parse_manual_cleanup_targets(
             _ => {
                 return Err(bad_manual_cleanup_request(
                     "targets 只能包含 detail_body、compressed_body、headers、records",
-                ))
+                ));
             }
         }
     }

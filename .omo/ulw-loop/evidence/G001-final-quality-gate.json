@@ -1,0 +1,133 @@
+{
+  "codeReview": {
+    "by": "lazycodex-code-reviewer",
+    "recommendation": "APPROVE",
+    "codeQualityStatus": "CLEAR",
+    "reportPath": ".omo/evidence/complete-backup-record-code-review.md",
+    "evidence": "Previous BLOCK was oversized production handler + missing failure test + verbatim payload/result exposure. Fixed: new backup-record logic extracted to apps/aether-gateway/src/handlers/admin/system/core/backup_runs.rs (211 pure LOC); failure path regression test added in focused admin/backup_runs.rs; response whitelisted to payload.scope and result.exported_bytes.",
+    "blockers": []
+  },
+  "manualQa": {
+    "by": "lazycodex-qa-executor",
+    "status": "passed",
+    "evidence": "Backend focused tests (4) passed: route classification, exact task_key filter with near-match exclusion, empty page, success record, and failure record. Frontend Vitest (5) and vue-tsc passed.",
+    "surfaceEvidence": [
+      {
+        "id": "surface-backend-success",
+        "criterionRef": "C001",
+        "surface": "gateway-integration-http-test",
+        "invocation": "rtk proxy env CARGO_TARGET_DIR=/root/Aether/target-codex-clean RUSTC_WRAPPER= cargo test -p aether-gateway backup_run -- --nocapture",
+        "verdict": "passed",
+        "artifactRefs": ["artifact-c001"]
+      },
+      {
+        "id": "surface-backend-filter-classification",
+        "criterionRef": "C002",
+        "surface": "gateway-integration-http-test",
+        "invocation": "rtk proxy env CARGO_TARGET_DIR=/root/Aether/target-codex-clean RUSTC_WRAPPER= cargo test -p aether-gateway backup_run -- --nocapture",
+        "verdict": "passed",
+        "artifactRefs": ["artifact-c002"]
+      },
+      {
+        "id": "surface-backend-failure",
+        "criterionRef": "C002",
+        "surface": "gateway-integration-http-test",
+        "invocation": "rtk proxy env CARGO_TARGET_DIR=/root/Aether/target-codex-clean RUSTC_WRAPPER= cargo test -p aether-gateway backup_run -- --nocapture",
+        "verdict": "passed",
+        "artifactRefs": ["artifact-c002-failure"]
+      },
+      {
+        "id": "surface-frontend-dom",
+        "criterionRef": "C003",
+        "surface": "vue-vitest-dom",
+        "invocation": "cd frontend && rtk npm run test:run -- src/views/admin/system-settings/__tests__/useBackupRecords.spec.ts",
+        "verdict": "passed",
+        "artifactRefs": ["artifact-c003"]
+      },
+      {
+        "id": "surface-frontend-typecheck",
+        "criterionRef": "C003",
+        "surface": "vue-typescript-typecheck",
+        "invocation": "cd frontend && rtk npm run type-check",
+        "verdict": "passed",
+        "artifactRefs": ["artifact-c003-typecheck"]
+      }
+    ],
+    "adversarialCases": [
+      {
+        "id": "adv-near-match-filter",
+        "criterionRef": "C002",
+        "scenario": "near-match task_key admin.system.data_export.extra must not appear in complete-backup history",
+        "expectedBehavior": "Only exact admin.system.data_export on_demand runs returned",
+        "verdict": "passed",
+        "artifactRefs": ["artifact-c002"]
+      },
+      {
+        "id": "adv-empty-page",
+        "criterionRef": "C002",
+        "scenario": "out-of-range page returns empty items while preserving total",
+        "expectedBehavior": "items empty, total stays correct",
+        "verdict": "passed",
+        "artifactRefs": ["artifact-c002"]
+      },
+      {
+        "id": "adv-export-failure",
+        "criterionRef": "C002",
+        "scenario": "export failure must leave a visible failed record, not vanish silently",
+        "expectedBehavior": "one failed run with progress_message, error_message, result null",
+        "verdict": "passed",
+        "artifactRefs": ["artifact-c002-failure"]
+      },
+      {
+        "id": "adv-payload-leak",
+        "criterionRef": "C002",
+        "scenario": "seeded payload.secret and result.user_data must not surface to admins",
+        "expectedBehavior": "response whitelist drops everything except scope and exported_bytes",
+        "verdict": "passed",
+        "artifactRefs": ["artifact-c002"]
+      },
+      {
+        "id": "adv-frontend-empty-error",
+        "criterionRef": "C003",
+        "scenario": "empty backend response and failed request show readable states",
+        "expectedBehavior": "empty state and error text rendered",
+        "verdict": "passed",
+        "artifactRefs": ["artifact-c003"]
+      }
+    ],
+    "artifactRefs": [
+      {"id": "artifact-c001", "kind": "test transcript", "description": "Success backup record JSON after complete export", "path": ".omo/ulw-loop/evidence/G001-C001-http-backup-runs.txt"},
+      {"id": "artifact-c002", "kind": "test transcript", "description": "Route classification, filtered listing with safe summary, empty page", "path": ".omo/ulw-loop/evidence/G001-C002-empty-and-classification.txt"},
+      {"id": "artifact-c002-failure", "kind": "test transcript", "description": "Failed backup record JSON after export error", "path": ".omo/ulw-loop/evidence/G001-C002-failure-record.txt"},
+      {"id": "artifact-c003", "kind": "test transcript", "description": "Vitest DOM/composable tests for backup record rendering, empty and error states", "path": ".omo/ulw-loop/evidence/G001-C003-frontend-render.txt"},
+      {"id": "artifact-c003-typecheck", "kind": "typecheck transcript", "description": "vue-tsc --noEmit passed", "path": ".omo/ulw-loop/evidence/G001-C003-frontend-typecheck.txt"}
+    ]
+  },
+  "gateReview": {
+    "by": "lazycodex-gate-reviewer",
+    "recommendation": "APPROVE",
+    "reportPath": ".omo/ulw-loop/evidence/G001-final-quality-gate.json",
+    "evidence": "Previous FAIL blockers resolved: backend logic extracted to focused module backup_runs.rs; failure path evidenced by gateway_records_failed_admin_system_data_export_backup_run; response whitelisted; durable gate artifact and manual QA matrix written under .omo. Residual: no real browser screenshot because Chrome/Chromium/Playwright unavailable; covered by Vitest DOM tests.",
+    "blockers": []
+  },
+  "iteration": {
+    "fullRerun": true,
+    "status": "passed",
+    "rerunCommands": [
+      "rtk proxy env CARGO_TARGET_DIR=/root/Aether/target-codex-clean RUSTC_WRAPPER= cargo test -p aether-gateway backup_run -- --nocapture",
+      "cd frontend && rtk npm run test:run -- src/views/admin/system-settings/__tests__/useBackupRecords.spec.ts",
+      "cd frontend && rtk npm run type-check",
+      "rtk cargo fmt --all --check",
+      "rtk git diff --check"
+    ],
+    "evidence": "All reruns passed; fmt and git diff clean."
+  },
+  "criteriaCoverage": {
+    "totalCriteria": 3,
+    "passCount": 3,
+    "originalIntent": "Add a viewable complete backup history/status/count/time surface to the admin backend.",
+    "desiredOutcome": "Admins see whether each complete backup succeeded or failed, how many exist, and when; records are safe (no S3 credentials or backup payload content).",
+    "userOutcomeReview": "Backend records each complete backup export as a background task run (succeeded and failed paths tested), exposes a read-only admin-only backup-runs endpoint with exact task_key filtering and a safe response whitelist, and the System Settings page renders the latest status/count/time plus empty/error states and refreshes after a successful export.",
+    "adversarialClassesCovered": ["near_match_filtering", "out_of_range_page", "export_failure_visibility", "payload_secret_leak", "empty_and_error_states"]
+  }
+}

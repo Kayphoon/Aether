@@ -428,6 +428,24 @@ export interface GrokUpstreamMetadata {
   account_user_id?: string | null
 }
 
+export interface GlmCodingPlanUpstreamMetadata {
+  updated_at?: number
+  token_used_percent?: number | null
+  token_current_usage?: number | null
+  token_usage_limit?: number | null
+  mcp_used_percent?: number | null
+  mcp_current_usage?: number | null
+  mcp_usage_limit?: number | null
+  mcp_usage_details?: unknown
+  model_usage?: unknown
+  tool_usage?: unknown
+  quota_limit?: unknown
+  probe_warnings?: Array<{
+    probe?: string | null
+    message?: string | null
+  }> | null
+}
+
 export interface UpstreamMetadata {
   codex?: CodexUpstreamMetadata
   antigravity?: AntigravityUpstreamMetadata
@@ -435,6 +453,7 @@ export interface UpstreamMetadata {
   windsurf?: WindsurfUpstreamMetadata
   chatgpt_web?: ChatGPTWebUpstreamMetadata
   grok?: GrokUpstreamMetadata
+  glm_coding_plan?: GlmCodingPlanUpstreamMetadata
 }
 
 // 按格式的健康度数据
@@ -562,7 +581,7 @@ export interface PublicEndpointStatusMonitorResponse {
   formats: PublicEndpointStatusMonitor[]
 }
 
-export type ProviderType = 'custom' | 'claude_code' | 'codex' | 'chatgpt_web' | 'gemini_cli' | 'antigravity' | 'kiro' | 'grok' | 'windsurf' | 'vertex_ai'
+export type ProviderType = 'custom' | 'claude_code' | 'codex' | 'chatgpt_web' | 'gemini_cli' | 'antigravity' | 'kiro' | 'grok' | 'glm_coding_plan' | 'windsurf' | 'vertex_ai'
 
 export interface ClaudeCodeAdvancedConfig {
   // 会话数量控制：null/undefined 表示不限制

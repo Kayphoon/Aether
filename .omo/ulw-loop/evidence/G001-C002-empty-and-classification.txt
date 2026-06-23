@@ -1,0 +1,21 @@
+# G001-C002: route classification + exact task_key filter + safe summary + empty page
+
+command (gateway focused tests, bind loopback listener):
+  rtk proxy env CARGO_TARGET_DIR=/root/Aether/target-codex-clean RUSTC_WRAPPER= cargo test -p aether-gateway backup_run -- --nocapture
+
+classification test: control::tests::admin_core::classifies_admin_system_backup_runs_as_admin_proxy_route
+result: GET /api/admin/system/backup-runs classifies to route_class=admin_proxy, route_family=system_manage, route_kind=backup_runs, auth_endpoint_signature=admin:system.
+
+listing test: tests::control::admin::backup_runs::gateway_lists_admin_system_backup_runs_filtered_to_data_export_task
+seeded runs include exact match admin.system.data_export, near-match admin.system.data_export.extra, and unrelated admin.provider.delete.
+backup-runs filtered response (verbatim JSON excerpt):
+{"items":[{"id":"backup-run-1","task_key":"admin.system.data_export","kind":"on_demand","trigger":"manual","status":"succeeded","attempt":1,"max_attempts":1,"owner_instance":null,"progress_percent":100,"progress_message":null,"payload":{"scope":"complete_backup"},"result":{"exported_bytes":512},"error_message":null,"cancel_requested":false,"created_by":"admin-user-123","created_at":"2024-03-21T05:46:40Z","started_at":"2024-03-21T05:46:40Z","finished_at":"2024-03-21T05:46:41Z","updated_at":"2024-03-21T05:46:41Z"}],"total":1,"page":1,"page_size":20,"pages":1}
+
+assertions: total=1 (exact task_key only; near-match and unrelated excluded),
+payload == {"scope":"complete_backup"} (seeded secret field dropped), result == {"exported_bytes":512} (seeded user_data dropped),
+pagination metadata page=1/page_size=20/pages=1.
+backup-runs empty page response: {"items":[],"total":1,"page":2,"page_size":20,"pages":1}
+upstream_hits=0.
+
+safety: response whitelist drops seeded payload.secret and result.user_data.
+cleanup: no persistent server; test aborts local test handles; target-codex-clean is a local build dir.

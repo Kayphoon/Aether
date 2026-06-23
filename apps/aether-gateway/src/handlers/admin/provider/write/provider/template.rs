@@ -14,12 +14,14 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 const FIXED_PROVIDER_TEMPLATE_METADATA_KEY: &str = "_aether_fixed_provider_template";
+const OVERRIDE_BASE_URL: &str = "base_url";
 const OVERRIDE_BODY_RULES: &str = "body_rules";
 const OVERRIDE_FORMAT_ACCEPTANCE_CONFIG: &str = "format_acceptance_config";
 const OVERRIDE_HEADER_RULES: &str = "header_rules";
 const OVERRIDE_IS_ACTIVE: &str = "is_active";
 const OVERRIDE_MAX_RETRIES: &str = "max_retries";
 const OVERRIDE_PROXY: &str = "proxy";
+const OVERRIDE_CUSTOM_PATH: &str = "custom_path";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct FixedProviderEndpointMetadata {
@@ -160,6 +162,20 @@ pub(crate) fn apply_admin_fixed_provider_endpoint_template_overrides(
 
     sync_override_if_changed(
         &mut overrides,
+        OVERRIDE_BASE_URL,
+        &existing_endpoint.base_url,
+        &updated_endpoint.base_url,
+        &defaults.base_url,
+    );
+    sync_override_if_changed(
+        &mut overrides,
+        OVERRIDE_CUSTOM_PATH,
+        &existing_endpoint.custom_path,
+        &updated_endpoint.custom_path,
+        &defaults.custom_path,
+    );
+    sync_override_if_changed(
+        &mut overrides,
         OVERRIDE_HEADER_RULES,
         &existing_endpoint.header_rules,
         &updated_endpoint.header_rules,
@@ -249,8 +265,12 @@ fn reconcile_fixed_provider_endpoint(
     updated.api_format = defaults.api_format.clone();
     updated.api_family = Some(defaults.api_family.clone());
     updated.endpoint_kind = Some(defaults.endpoint_kind.clone());
-    updated.base_url = defaults.base_url;
-    updated.custom_path = defaults.custom_path;
+    if !metadata.overrides.contains(OVERRIDE_BASE_URL) {
+        updated.base_url = defaults.base_url;
+    }
+    if !metadata.overrides.contains(OVERRIDE_CUSTOM_PATH) {
+        updated.custom_path = defaults.custom_path;
+    }
 
     if !metadata.overrides.contains(OVERRIDE_HEADER_RULES) {
         updated.header_rules = defaults.header_rules;

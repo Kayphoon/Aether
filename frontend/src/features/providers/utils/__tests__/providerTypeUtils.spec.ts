@@ -21,6 +21,11 @@ describe('providerTypeUtils', () => {
     expect(isOAuthAccountProviderType('Windsurf')).toBe(true)
     expect(isKeyManagedProviderType('windsurf')).toBe(false)
   })
+
+  it('treats GLM Coding Plan as a key-managed provider', () => {
+    expect(isOAuthAccountProviderType('glm_coding_plan')).toBe(false)
+    expect(isKeyManagedProviderType('GLM_Coding_Plan')).toBe(true)
+  })
 })
 
 describe('normalizeBatchImportCredentials', () => {

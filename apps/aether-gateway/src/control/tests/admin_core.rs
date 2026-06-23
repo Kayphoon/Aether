@@ -176,6 +176,25 @@ fn classifies_admin_system_data_export_as_admin_proxy_route() {
 }
 
 #[test]
+fn classifies_admin_system_backup_runs_as_admin_proxy_route() {
+    let headers = headers(&[]);
+    let uri: Uri = "/api/admin/system/backup-runs"
+        .parse()
+        .expect("uri should parse");
+    let decision =
+        classify_control_route(&http::Method::GET, &uri, &headers).expect("route should classify");
+
+    assert_eq!(decision.route_class.as_deref(), Some("admin_proxy"));
+    assert_eq!(decision.route_family.as_deref(), Some("system_manage"));
+    assert_eq!(decision.route_kind.as_deref(), Some("backup_runs"));
+    assert_eq!(
+        decision.auth_endpoint_signature.as_deref(),
+        Some("admin:system")
+    );
+    assert!(!decision.is_execution_runtime_candidate());
+}
+
+#[test]
 fn classifies_admin_system_maintenance_write_routes_as_admin_proxy_route() {
     let headers = headers(&[]);
     let cases = [

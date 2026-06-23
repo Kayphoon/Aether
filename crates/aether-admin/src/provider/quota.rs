@@ -629,6 +629,137 @@ pub fn parse_codex_usage_headers(
     Some(serde_json::Value::Object(result))
 }
 
+fn normalize_glm_limit_type(value: &str) -> String {
+    value.trim().to_ascii_uppercase()
+}
+
+fn glm_usage_data(value: &serde_json::Value) -> &serde_json::Value {
+    value.get("data").unwrap_or(value)
+}
+
+fn glm_usage_business_error_message(value: &serde_json::Value) -> Option<String> {
+    let object = value.as_object()?;
+    let success = object
+        .get("success")
+        .and_then(coerce_json_bool)
+        .unwrap_or(true);
+    let code = object.get("code").and_then(coerce_json_i64);
+    if success && code.is_none_or(|value| value == 0 || value == 200) {
+        return None;
+    }
+    ["msg", "message", "error"]
+        .iter()
+        .find_map(|key| {
+            object
+                .get(*key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| code.map(|value| format!("GLM Coding Plan returned code {value}")))
+}
+
+fn coerce_json_i64(value: &serde_json::Value) -> Option<i64> {
+    if let Some(value) = value.as_i64() {
+        return Some(value);
+    }
+    value.as_str()?.trim().parse::<i64>().ok()
+}
+
+pub fn glm_coding_plan_business_error_message(value: &serde_json::Value) -> Option<String> {
+    glm_usage_business_error_message(value)
+}
+
+pub fn parse_glm_coding_plan_usage_response(
+    value: &serde_json::Value,
+    usage_kind: &str,
+    updated_at_unix_secs: u64,
+) -> Option<serde_json::Value> {
+    if glm_usage_business_error_message(value).is_some() {
+        return None;
+    }
+    let data = glm_usage_data(value);
+    if data.is_null() {
+        return None;
+    }
+
+    let mut result = serde_json::Map::new();
+    result.insert("updated_at".to_string(), json!(updated_at_unix_secs));
+    result.insert(format!("{usage_kind}_usage").to_string(), data.clone());
+    Some(serde_json::Value::Object(result))
+}
+
+pub fn parse_glm_coding_plan_quota_limit_response(
+    value: &serde_json::Value,
+    updated_at_unix_secs: u64,
+) -> Option<serde_json::Value> {
+    if glm_usage_business_error_message(value).is_some() {
+        return None;
+    }
+    let data = glm_usage_data(value);
+    let limits = data.get("limits").and_then(serde_json::Value::as_array)?;
+    let mut result = serde_json::Map::new();
+
+    for item in limits.iter().filter_map(serde_json::Value::as_object) {
+        let limit_type = item
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .map(normalize_glm_limit_type)
+            .unwrap_or_default();
+        if limit_type.is_empty() {
+            continue;
+        }
+
+        let percentage = item.get("percentage").and_then(coerce_json_f64);
+        let current_value = item
+            .get("currentValue")
+            .or_else(|| item.get("current_value"))
+            .and_then(coerce_json_f64);
+        let usage = item.get("usage").and_then(coerce_json_f64);
+        let usage_details = item
+            .get("usageDetails")
+            .or_else(|| item.get("usage_details"))
+            .cloned();
+
+        match limit_type.as_str() {
+            "TOKENS_LIMIT" => {
+                if let Some(percentage) = percentage {
+                    result.insert("token_used_percent".to_string(), json!(percentage));
+                }
+                if let Some(current_value) = current_value {
+                    result.insert("token_current_usage".to_string(), json!(current_value));
+                }
+                if let Some(usage) = usage {
+                    result.insert("token_usage_limit".to_string(), json!(usage));
+                }
+            }
+            "TIME_LIMIT" => {
+                if let Some(percentage) = percentage {
+                    result.insert("mcp_used_percent".to_string(), json!(percentage));
+                }
+                if let Some(current_value) = current_value {
+                    result.insert("mcp_current_usage".to_string(), json!(current_value));
+                }
+                if let Some(usage) = usage {
+                    result.insert("mcp_usage_limit".to_string(), json!(usage));
+                }
+                if let Some(usage_details) = usage_details {
+                    result.insert("mcp_usage_details".to_string(), usage_details);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if result.is_empty() {
+        return None;
+    }
+    result.insert("updated_at".to_string(), json!(updated_at_unix_secs));
+    result.insert("quota_limit".to_string(), data.clone());
+    Some(serde_json::Value::Object(result))
+}
+
 fn codex_current_invalid_reason(key: &StoredProviderCatalogKey) -> String {
     key.oauth_invalid_reason
         .as_deref()
@@ -1452,7 +1583,8 @@ mod tests {
     use super::{
         codex_build_invalid_state, codex_runtime_invalid_reason,
         parse_chatgpt_web_conversation_init_response, parse_codex_backend_me_response,
-        parse_codex_wham_usage_response, parse_windsurf_model_configs_response,
+        parse_codex_wham_usage_response, parse_glm_coding_plan_quota_limit_response,
+        parse_glm_coding_plan_usage_response, parse_windsurf_model_configs_response,
         parse_windsurf_rate_limit_response, parse_windsurf_user_status_response,
         quota_refresh_success_invalid_state, should_auto_remove_structured_reason,
         OAUTH_ACCOUNT_BLOCK_PREFIX, OAUTH_EXPIRED_PREFIX, OAUTH_REFRESH_FAILED_PREFIX,
@@ -1849,6 +1981,79 @@ mod tests {
         assert_eq!(parsed.get("updated_at"), Some(&json!(1_777_000_000u64)));
         assert!(parsed.get("primary_used_percent").is_none());
         assert!(parsed.get("secondary_used_percent").is_none());
+    }
+
+    #[test]
+    fn parses_glm_coding_plan_quota_limit_response() {
+        let parsed = parse_glm_coding_plan_quota_limit_response(
+            &json!({
+                "data": {
+                    "limits": [
+                        {
+                            "type": "TOKENS_LIMIT",
+                            "percentage": 72.5,
+                            "currentValue": 725,
+                            "usage": 1000
+                        },
+                        {
+                            "type": "TIME_LIMIT",
+                            "percentage": 40,
+                            "currentValue": 4,
+                            "usage": 10,
+                            "usageDetails": [{"name": "mcp", "count": 4}]
+                        }
+                    ]
+                }
+            }),
+            1_234,
+        )
+        .expect("glm coding plan quota limit should parse");
+
+        assert_eq!(parsed.get("updated_at"), Some(&json!(1_234)));
+        assert_eq!(parsed.get("token_used_percent"), Some(&json!(72.5)));
+        assert_eq!(parsed.get("token_current_usage"), Some(&json!(725.0)));
+        assert_eq!(parsed.get("token_usage_limit"), Some(&json!(1000.0)));
+        assert_eq!(parsed.get("mcp_used_percent"), Some(&json!(40.0)));
+        assert_eq!(parsed.get("mcp_current_usage"), Some(&json!(4.0)));
+        assert_eq!(parsed.get("mcp_usage_limit"), Some(&json!(10.0)));
+        assert!(parsed.get("mcp_usage_details").is_some());
+    }
+
+    #[test]
+    fn parses_glm_coding_plan_model_and_tool_usage_payloads() {
+        let parsed = parse_glm_coding_plan_usage_response(
+            &json!({
+                "data": {
+                    "totalTokens": 123,
+                    "items": [{"model": "glm-4.5"}]
+                }
+            }),
+            "model",
+            1_234,
+        )
+        .expect("glm coding plan usage should parse");
+
+        assert_eq!(parsed.get("updated_at"), Some(&json!(1_234)));
+        assert_eq!(parsed["model_usage"]["totalTokens"], json!(123));
+        assert_eq!(parsed["model_usage"]["items"][0]["model"], json!("glm-4.5"));
+    }
+
+    #[test]
+    fn rejects_glm_coding_plan_business_error_payloads() {
+        let payload = json!({
+            "code": 401,
+            "msg": "token expired or incorrect",
+            "success": false
+        });
+
+        assert_eq!(
+            parse_glm_coding_plan_usage_response(&payload, "model", 1_234),
+            None
+        );
+        assert_eq!(
+            parse_glm_coding_plan_quota_limit_response(&payload, 1_234),
+            None
+        );
     }
 
     #[test]

@@ -63,6 +63,9 @@
                   <SelectItem value="grok">
                     Grok
                   </SelectItem>
+                  <SelectItem value="glm_coding_plan">
+                    GLM Coding Plan
+                  </SelectItem>
                   <SelectItem value="kiro">
                     Kiro
                   </SelectItem>
@@ -95,6 +98,9 @@
                   </SelectItem>
                   <SelectItem value="grok">
                     Grok
+                  </SelectItem>
+                  <SelectItem value="glm_coding_plan">
+                    GLM Coding Plan
                   </SelectItem>
                   <SelectItem value="kiro">
                     Kiro

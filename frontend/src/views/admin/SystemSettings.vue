@@ -46,6 +46,19 @@
             @file-select="handleDataFileSelect"
           />
 
+          <!-- 备份记录 -->
+          <BackupRecordsSection
+            id="section-backup-records"
+            :runs="backupRuns"
+            :total="totalBackupRuns"
+            :latest-run="latestBackupRun"
+            :latest-status-text="latestBackupStatusText"
+            :latest-time-text="latestBackupTimeText"
+            :loading="backupRecordsLoading"
+            :error="backupRecordsError"
+            @refresh="loadBackupRecords"
+          />
+
           <!-- 网络代理 -->
           <ProxyConfigSection
             id="section-proxy"
@@ -263,10 +276,12 @@ import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import { useSystemConfig } from './system-settings/composables/useSystemConfig'
 import { useConfigExportImport } from './system-settings/composables/useConfigExportImport'
 import { useScheduledTasks } from './system-settings/composables/useScheduledTasks'
+import { useBackupRecords } from './system-settings/composables/useBackupRecords'
 
 // Section components
 import SiteInfoSection from './system-settings/SiteInfoSection.vue'
 import DataManagementSection from './system-settings/DataManagementSection.vue'
+import BackupRecordsSection from './system-settings/BackupRecordsSection.vue'
 import ProxyConfigSection from './system-settings/ProxyConfigSection.vue'
 import BasicConfigSection from './system-settings/BasicConfigSection.vue'
 import RequestLogSection from './system-settings/RequestLogSection.vue'
@@ -285,6 +300,7 @@ const proxyNodesStore = useProxyNodesStore()
 const tocItems = [
   { id: 'section-site-info', label: '站点信息' },
   { id: 'section-data-mgmt', label: '数据管理' },
+  { id: 'section-backup-records', label: '备份记录' },
   { id: 'section-proxy', label: '网络代理' },
   { id: 'section-basic', label: '基础配置' },
   { id: 'section-request-log', label: '请求记录' },
@@ -410,15 +426,29 @@ const {
   confirmImportAggregate,
 } = useConfigExportImport(systemConfig)
 
+const {
+  backupRuns,
+  totalBackupRuns,
+  backupRecordsLoading,
+  backupRecordsError,
+  latestBackupRun,
+  latestBackupStatusText,
+  latestBackupTimeText,
+  loadBackupRecords,
+} = useBackupRecords()
+
 type DataManagementKind = 'config' | 'users' | 'aggregate'
 
-function handleDataExport(kind: DataManagementKind) {
+async function handleDataExport(kind: DataManagementKind) {
   if (kind === 'config') {
-    handleExportConfig()
+    await handleExportConfig()
   } else if (kind === 'users') {
-    handleExportUsers()
+    await handleExportUsers()
   } else {
-    handleExportAggregate()
+    const exported = await handleExportAggregate()
+    if (exported) {
+      await loadBackupRecords()
+    }
   }
 }
 
@@ -442,6 +472,7 @@ onMounted(async () => {
   await Promise.all([
     loadSystemConfig(),
     loadSystemVersion(),
+    loadBackupRecords(),
     proxyNodesStore.ensureLoaded(),
   ])
   // 配置加载完成后初始化定时任务的原始值

@@ -1,0 +1,22 @@
+# G001-C002 failure path: complete backup export records a failed backup run
+
+command (gateway focused test, binds loopback listener):
+  rtk proxy env CARGO_TARGET_DIR=/root/Aether/target-codex-clean RUSTC_WRAPPER= cargo test -p aether-gateway backup_run -- --nocapture
+
+module path: tests::control::admin::backup_runs::gateway_records_failed_admin_system_data_export_backup_run
+
+fixture: FailingAdminGlobalModelReadRepository returns DataLayerError::Sql("complete backup export fixture failure")
+from list_admin_global_models, while background task repository stays writable. This makes the real export call chain fail.
+
+GET /api/admin/system/data/export -> 5xx server error, error.message == "sql error: complete backup export fixture failure".
+GET /api/admin/system/backup-runs then returns one failed run (verbatim JSON excerpt):
+{"items":[{"id":"0907c68d-866c-45fc-8d59-f895d52e84ce","task_key":"admin.system.data_export","kind":"on_demand","trigger":"manual","status":"failed","attempt":1,"max_attempts":1,"owner_instance":"gateway-543883","progress_percent":100,"progress_message":"完整备份导出失败","payload":{"scope":"complete_backup"},"result":null,"error_message":"sql error: complete backup export fixture failure","cancel_requested":false,"created_by":"admin-user-123","created_at":"2026-06-23T10:02:58Z","started_at":"2026-06-23T10:02:58Z","finished_at":"2026-06-23T10:02:58Z","updated_at":"2026-06-23T10:02:58Z"}],"total":1,"page":1,"page_size":20,"pages":1}
+
+assertions: total=1, status=failed, progress_percent=100, progress_message=完整备份导出失败,
+payload.scope=complete_backup, result=null (no success payload on failure),
+error_message=sql error: complete backup export fixture failure, started_at and finished_at present.
+upstream_hits=0.
+
+adversarial class: export failure must still leave a visible failed record (not silently vanish).
+safety: no S3 credentials or backup body content recorded or surfaced.
+cleanup: no persistent server; test aborts local test handles; target-codex-clean is a local build dir.

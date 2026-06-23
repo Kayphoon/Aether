@@ -12,8 +12,8 @@ use crate::presets::normalize_provider_scheduling_presets;
 use crate::provider::{ProviderPoolAdapter, ProviderPoolMemberInput};
 use crate::providers::{
     AntigravityProviderPoolAdapter, ChatGptWebProviderPoolAdapter, CodexProviderPoolAdapter,
-    DefaultProviderPoolAdapter, GrokProviderPoolAdapter, KiroProviderPoolAdapter,
-    WindsurfProviderPoolAdapter, CLAUDE_CODE_PROVIDER_POOL_ADAPTER,
+    DefaultProviderPoolAdapter, GlmCodingPlanProviderPoolAdapter, GrokProviderPoolAdapter,
+    KiroProviderPoolAdapter, WindsurfProviderPoolAdapter, CLAUDE_CODE_PROVIDER_POOL_ADAPTER,
     GEMINI_CLI_PROVIDER_POOL_ADAPTER, VERTEX_AI_PROVIDER_POOL_ADAPTER,
 };
 
@@ -51,6 +51,7 @@ impl ProviderPoolService {
             .with_adapter(Arc::new(CLAUDE_CODE_PROVIDER_POOL_ADAPTER))
             .with_adapter(Arc::new(CodexProviderPoolAdapter))
             .with_adapter(Arc::new(GEMINI_CLI_PROVIDER_POOL_ADAPTER))
+            .with_adapter(Arc::new(GlmCodingPlanProviderPoolAdapter))
             .with_adapter(Arc::new(GrokProviderPoolAdapter))
             .with_adapter(Arc::new(KiroProviderPoolAdapter))
             .with_adapter(Arc::new(ChatGptWebProviderPoolAdapter))

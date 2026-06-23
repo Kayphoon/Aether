@@ -130,6 +130,14 @@ pub(super) fn classify_admin_system_family_route(
             "admin:system",
             false,
         ))
+    } else if method == http::Method::GET && normalized_path == "/api/admin/system/backup-runs" {
+        Some(classified(
+            "admin_proxy",
+            "system_manage",
+            "backup_runs",
+            "admin:system",
+            false,
+        ))
     } else if method == http::Method::POST && normalized_path == "/api/admin/system/config/import" {
         Some(classified(
             "admin_proxy",

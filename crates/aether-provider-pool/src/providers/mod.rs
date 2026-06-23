@@ -2,6 +2,7 @@ pub mod antigravity;
 pub mod chatgpt_web;
 pub mod codex;
 pub mod default;
+pub mod glm_coding_plan;
 pub mod grok;
 pub mod kiro;
 pub mod unsupported;
@@ -20,6 +21,12 @@ pub use chatgpt_web::{
 pub use codex::CodexProviderPoolAdapter;
 pub use codex::{build_codex_pool_quota_request, CODEX_WHAM_USAGE_URL};
 pub use default::DefaultProviderPoolAdapter;
+pub use glm_coding_plan::{
+    build_glm_coding_plan_pool_quota_request_with_base_url, GlmCodingPlanProviderPoolAdapter,
+    GLM_CODING_PLAN_DEFAULT_ZAI_BASE_URL, GLM_CODING_PLAN_DEFAULT_ZHIPU_BASE_URL,
+    GLM_CODING_PLAN_MODEL_USAGE_PATH, GLM_CODING_PLAN_QUOTA_LIMIT_PATH,
+    GLM_CODING_PLAN_TOOL_USAGE_PATH,
+};
 pub use grok::{
     grok_mode_id_for_model, grok_pool_tier_from_quota_bucket, grok_quota_window_key_for_model,
     grok_supported_quota_windows_for_tier, GrokProviderPoolAdapter,

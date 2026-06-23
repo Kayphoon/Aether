@@ -75,6 +75,9 @@ impl SqliteBackgroundTaskRepository {
                 trigger.to_string(),
             );
         }
+        if let Some(task_key) = query.task_key.as_deref() {
+            push_eq(builder, &mut where_clause, "task_key", task_key.to_string());
+        }
         if let Some(task_key_substring) = query.task_key_substring.as_deref() {
             push_ci_contains(
                 builder,

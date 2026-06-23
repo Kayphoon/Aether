@@ -1,0 +1,18 @@
+# G001-C001: complete backup export records a succeeded backup run
+
+command (gateway focused test, binds loopback listener):
+  rtk proxy env CARGO_TARGET_DIR=/root/Aether/target-codex-clean RUSTC_WRAPPER= cargo test -p aether-gateway backup_run -- --nocapture
+
+module path: tests::control::admin::backup_runs::gateway_handles_admin_system_data_export_records_backup_run
+
+test: GET /api/admin/system/data/export then GET /api/admin/system/backup-runs
+backup-runs after export response (verbatim JSON excerpt):
+{"items":[{"id":"c613f023-ad0b-444c-a216-f95dca565aa1","task_key":"admin.system.data_export","kind":"on_demand","trigger":"manual","status":"succeeded","attempt":1,"max_attempts":1,"owner_instance":"gateway-543883","progress_percent":100,"progress_message":"完整备份导出完成","payload":{"scope":"complete_backup"},"result":{"exported_bytes":480},"error_message":null,"cancel_requested":false,"created_by":"admin-user-123","created_at":"2026-06-23T10:02:58Z","started_at":"2026-06-23T10:02:58Z","finished_at":"2026-06-23T10:02:58Z","updated_at":"2026-06-23T10:02:58Z"}],"total":1,"page":1,"page_size":20,"pages":1}
+
+assertions: total=1, task_key=admin.system.data_export, status=succeeded, progress_percent=100,
+progress_message=完整备份导出完成, payload.scope=complete_backup, result.exported_bytes>0,
+result.config_data absent, result.user_data absent, created_by=admin-user-123, timestamps present.
+upstream_hits=0 (handled locally).
+
+safety: only payload.scope and result.exported_bytes are surfaced; no S3 credentials or backup body content.
+cleanup: no persistent server; test aborts local test handles; no active session; target-codex-clean is a local build dir.
