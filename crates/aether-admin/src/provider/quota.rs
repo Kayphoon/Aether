@@ -390,6 +390,7 @@ pub fn parse_codex_wham_usage_response(
         }
     }
 
+
     if result.is_empty() {
         return None;
     }
@@ -700,6 +701,7 @@ pub fn parse_glm_coding_plan_quota_limit_response(
     let data = glm_usage_data(value);
     let limits = data.get("limits").and_then(serde_json::Value::as_array)?;
     let mut result = serde_json::Map::new();
+    let mut max_token_percent: Option<f64> = None;
 
     for item in limits.iter().filter_map(serde_json::Value::as_object) {
         let limit_type = item
@@ -721,11 +723,31 @@ pub fn parse_glm_coding_plan_quota_limit_response(
             .get("usageDetails")
             .or_else(|| item.get("usage_details"))
             .cloned();
+        let unit = item.get("unit").and_then(coerce_json_u64).unwrap_or(0);
+        let number = item
+            .get("number")
+            .and_then(coerce_json_u64)
+            .unwrap_or(0);
+        let next_reset_ms = item
+            .get("nextResetTime")
+            .or_else(|| item.get("next_reset_time"))
+            .and_then(coerce_json_u64);
 
         match limit_type.as_str() {
             "TOKENS_LIMIT" => {
+                let window = match (unit, number) {
+                    (3, 5) => "5h",
+                    (6, 1) => "weekly",
+                    _ => "other",
+                };
                 if let Some(percentage) = percentage {
-                    result.insert("token_used_percent".to_string(), json!(percentage));
+                    max_token_percent = Some(
+                        max_token_percent.map_or(percentage, |m| m.max(percentage)),
+                    );
+                    result.insert(format!("token_{window}_used_percent"), json!(percentage));
+                }
+                if let Some(reset_ms) = next_reset_ms {
+                    result.insert(format!("token_{window}_reset_at"), json!(reset_ms / 1000));
                 }
                 if let Some(current_value) = current_value {
                     result.insert("token_current_usage".to_string(), json!(current_value));
@@ -747,9 +769,16 @@ pub fn parse_glm_coding_plan_quota_limit_response(
                 if let Some(usage_details) = usage_details {
                     result.insert("mcp_usage_details".to_string(), usage_details);
                 }
+                if let Some(reset_ms) = next_reset_ms {
+                    result.insert("mcp_reset_at".to_string(), json!(reset_ms / 1000));
+                }
             }
             _ => {}
         }
+    }
+
+    if let Some(max_pct) = max_token_percent {
+        result.insert("token_used_percent".to_string(), json!(max_pct));
     }
 
     if result.is_empty() {
