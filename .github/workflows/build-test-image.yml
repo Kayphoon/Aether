@@ -43,29 +43,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-musl
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test-x86_64-unknown-linux-musl-v2
+          shared-key: test-musl-direct-v3
           workspaces: . -> target
-      - name: Install cross
-        uses: taiki-e/install-action@cross
       - name: Build
         env:
           AETHER_BUILD_TYPE: release
           CARGO_TERM_COLOR: always
-        run: cargo clean && cross build --release --locked -p aether-gateway --target x86_64-unknown-linux-musl
-      - name: Verify binary freshness
-        run: |
-          BIN=target/x86_64-unknown-linux-musl/release/aether-gateway
-          echo "Binary size: $(wc -c < "$BIN")"
-          COUNT=$(strings "$BIN" | grep -c "mcp_reset_at" || true)
-          echo "mcp_reset_at occurrences: $COUNT"
-          if [ "$COUNT" -eq 0 ]; then
-            echo "ERROR: Binary does not contain new parser code!"
-            # Dump aether-admin source hash for debugging
-            md5sum crates/aether-admin/src/provider/quota.rs
-            exit 1
-          fi
+        run: cargo build --release --locked -p aether-gateway --target x86_64-unknown-linux-musl
       - name: Upload binary artifact
         uses: actions/upload-artifact@v5
         with:
