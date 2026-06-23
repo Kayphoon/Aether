@@ -45,6 +45,4 @@ jobs:
             AETHER_BUILD_TYPE=release
             NODE_BASE_IMAGE=node:22-slim
             RUST_BASE_IMAGE=rust:1.95.0-slim
-          cache-from: type=gha
           no-cache: true
-          cache-to: type=gha,mode=max
