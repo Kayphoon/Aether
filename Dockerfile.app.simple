@@ -49,7 +49,7 @@ ENV AETHER_BUILD_VERSION=${AETHER_BUILD_VERSION} \
 COPY Cargo.toml Cargo.lock ./
 COPY apps/ ./apps/
 COPY crates/ ./crates/
-RUN grep -c __PARSER_V2_DEBUG__ crates/aether-admin/src/provider/quota.rs && \
+RUN grep -c mcp_reset_at crates/aether-admin/src/provider/quota.rs && \
     cargo build --release --locked -p aether-gateway && \
     cp target/release/aether-gateway /tmp/aether-gateway
 
