@@ -1488,6 +1488,7 @@ fn glm_coding_plan_quota_window_snapshot(
     percent_key: &str,
     used_key: &str,
     limit_key: &str,
+    reset_at_key: &str,
     window_minutes: u64,
 ) -> Option<Value> {
     let used_percent = metadata
@@ -1515,6 +1516,13 @@ fn glm_coding_plan_quota_window_snapshot(
             .zip(limit_value)
             .map(|(remaining, limit)| (remaining / limit).clamp(0.0, 1.0))
     });
+    let reset_at = provider_quota_timestamp_unix_secs(metadata.get(reset_at_key));
+    let reset_seconds = reset_at.and_then(|reset| {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?;
+        Some(reset.saturating_sub(now.as_secs()))
+    });
 
     if used_ratio.is_none()
         && remaining_ratio.is_none()
@@ -1535,6 +1543,8 @@ fn glm_coding_plan_quota_window_snapshot(
         "used_value": used_value,
         "remaining_value": remaining_value,
         "limit_value": limit_value,
+        "reset_at": reset_at,
+        "reset_seconds": reset_seconds,
         "window_minutes": window_minutes,
         "is_exhausted": used_ratio.is_some_and(|value| value >= 1.0 - 1e-6)
             || remaining_value.is_some_and(|value| value <= 0.0),
@@ -1556,6 +1566,7 @@ fn build_glm_coding_plan_quota_status_snapshot(
             "token_used_percent",
             "token_current_usage",
             "token_usage_limit",
+            "token_5h_reset_at",
             300,
         ),
         glm_coding_plan_quota_window_snapshot(
@@ -1566,6 +1577,7 @@ fn build_glm_coding_plan_quota_status_snapshot(
             "mcp_used_percent",
             "mcp_current_usage",
             "mcp_usage_limit",
+            "mcp_reset_at",
             43_200,
         ),
     ]

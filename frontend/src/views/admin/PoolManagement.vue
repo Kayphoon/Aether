@@ -3700,7 +3700,7 @@ function getQuotaProgressLabel(label: string): string {
 }
 
 function getQuotaProgressCountdown(item: QuotaProgressItem) {
-  if (!['日', '5H', '周', 'Spark5H', 'Spark周', 'Auto', 'Fast', 'Expert', 'Heavy', 'Grok 4.3', '生图'].includes(item.label)) return null
+  if (!['日', '5H', '周', 'Spark5H', 'Spark周', 'Auto', 'Fast', 'Expert', 'Heavy', 'Grok 4.3', '生图', 'Token 5H', 'MCP 月'].includes(item.label)) return null
   if (item.resetAtSeconds == null && item.resetSeconds == null) return null
   return getCodexResetCountdown(
     item.resetAtSeconds,
@@ -3766,6 +3766,8 @@ function getQuotaLabelOrder(label: string): number {
   if (label === '生图') return 14
   if (label === '速率') return 15
   if (label === '模型') return 16
+  if (label === 'Token 5H') return 17
+  if (label === 'MCP 月') return 18
   return 20
 }
 
@@ -4097,6 +4099,25 @@ function buildQuotaProgressItemsFromSnapshot(key: PoolKeyDetail): QuotaProgressI
       resetSeconds: null,
       updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
     }]
+  }
+
+  if (providerType === 'glm_coding_plan') {
+    const windows = getQuotaSnapshotWindowsByScope(quota, 'account')
+    if (windows.length === 0) return []
+    return windows
+      .map((window): QuotaProgressItem | null => {
+        const remainingPercent = getQuotaWindowRemainingPercent(window)
+        if (remainingPercent == null) return null
+        return {
+          label: String(window.label || window.code || '').trim() || '额度',
+          remainingPercent,
+          detail: getQuotaWindowValueText(window),
+          resetAtSeconds: normalizeUnixSeconds(window?.reset_at ?? null),
+          resetSeconds: normalizeRemainingSeconds(window?.reset_seconds ?? null),
+          updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+        }
+      })
+      .filter((item): item is QuotaProgressItem => item != null)
   }
 
   if (providerType === 'chatgpt_web') {
