@@ -2080,6 +2080,7 @@ const showAccountQuotaColumn = computed(() => {
     || selectedProviderType.value === 'antigravity'
     || selectedProviderType.value === 'grok'
     || selectedProviderType.value === 'chatgpt_web'
+    || selectedProviderType.value === 'glm_coding_plan'
 })
 
 const desktopColumnWidths = computed(() => {
@@ -2480,6 +2481,7 @@ const quotaRefreshSupported = computed(() => {
     || selectedProviderType.value === 'antigravity'
     || selectedProviderType.value === 'grok'
     || selectedProviderType.value === 'chatgpt_web'
+    || selectedProviderType.value === 'glm_coding_plan'
 })
 
 function canResetCycleStats(_key: PoolKeyDetail): boolean {
