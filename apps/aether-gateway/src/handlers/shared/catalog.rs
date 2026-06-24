@@ -1563,7 +1563,7 @@ fn build_glm_coding_plan_quota_status_snapshot(
             "tokens_5h",
             "Token 5H",
             "tokens",
-            "token_used_percent",
+            "token_5h_used_percent",
             "token_current_usage",
             "token_usage_limit",
             "token_5h_reset_at",
@@ -1571,14 +1571,14 @@ fn build_glm_coding_plan_quota_status_snapshot(
         ),
         glm_coding_plan_quota_window_snapshot(
             metadata,
-            "mcp_monthly",
-            "MCP 月",
-            "count",
-            "mcp_used_percent",
-            "mcp_current_usage",
-            "mcp_usage_limit",
-            "mcp_reset_at",
-            43_200,
+            "tokens_weekly",
+            "周",
+            "tokens",
+            "token_weekly_used_percent",
+            "token_current_usage",
+            "token_usage_limit",
+            "token_weekly_reset_at",
+            10_080,
         ),
     ]
     .into_iter()
@@ -2750,12 +2750,10 @@ mod tests {
         key.upstream_metadata = Some(json!({
             "glm_coding_plan": {
                 "updated_at": 1_778_067_246u64,
-                "token_used_percent": 25.0,
+                "token_5h_used_percent": 25.0,
                 "token_current_usage": 2500.0,
                 "token_usage_limit": 10000.0,
-                "mcp_used_percent": 50.0,
-                "mcp_current_usage": 5.0,
-                "mcp_usage_limit": 10.0
+                "token_weekly_used_percent": 50.0
             }
         }));
 
@@ -2773,11 +2771,11 @@ mod tests {
             .filter_map(Value::as_object)
             .find(|window| window.get("code") == Some(&json!("tokens_5h")))
             .expect("token quota window should exist");
-        let mcp_window = windows
+        let weekly_window = windows
             .iter()
             .filter_map(Value::as_object)
-            .find(|window| window.get("code") == Some(&json!("mcp_monthly")))
-            .expect("MCP quota window should exist");
+            .find(|window| window.get("code") == Some(&json!("tokens_weekly")))
+            .expect("weekly token quota window should exist");
 
         assert_eq!(quota.get("provider_type"), Some(&json!("glm_coding_plan")));
         assert_eq!(quota.get("code"), Some(&json!("ok")));
@@ -2787,10 +2785,9 @@ mod tests {
         assert_eq!(token_window.get("limit_value"), Some(&json!(10000.0)));
         assert_eq!(token_window.get("unit"), Some(&json!("tokens")));
         assert_eq!(token_window.get("window_minutes"), Some(&json!(300u64)));
-        assert_eq!(mcp_window.get("remaining_ratio"), Some(&json!(0.5)));
-        assert_eq!(mcp_window.get("remaining_value"), Some(&json!(5.0)));
-        assert_eq!(mcp_window.get("limit_value"), Some(&json!(10.0)));
-        assert_eq!(mcp_window.get("window_minutes"), Some(&json!(43_200u64)));
+        assert_eq!(weekly_window.get("remaining_ratio"), Some(&json!(0.5)));
+        assert_eq!(weekly_window.get("unit"), Some(&json!("tokens")));
+        assert_eq!(weekly_window.get("window_minutes"), Some(&json!(10_080u64)));
     }
 
     #[test]
@@ -2800,12 +2797,10 @@ mod tests {
         key.upstream_metadata = Some(json!({
             "glm_coding_plan": {
                 "updated_at": 1_778_067_246u64,
-                "token_used_percent": 100.0,
+                "token_5h_used_percent": 100.0,
                 "token_current_usage": 10000.0,
                 "token_usage_limit": 10000.0,
-                "mcp_used_percent": 50.0,
-                "mcp_current_usage": 5.0,
-                "mcp_usage_limit": 10.0
+                "token_weekly_used_percent": 50.0
             }
         }));
 

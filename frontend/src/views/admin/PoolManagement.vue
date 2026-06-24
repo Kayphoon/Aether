@@ -3702,7 +3702,7 @@ function getQuotaProgressLabel(label: string): string {
 }
 
 function getQuotaProgressCountdown(item: QuotaProgressItem) {
-  if (!['日', '5H', '周', 'Spark5H', 'Spark周', 'Auto', 'Fast', 'Expert', 'Heavy', 'Grok 4.3', '生图', 'Token 5H', 'MCP 月'].includes(item.label)) return null
+  if (!['日', '5H', '周', 'Spark5H', 'Spark周', 'Auto', 'Fast', 'Expert', 'Heavy', 'Grok 4.3', '生图', 'Token 5H', '周'].includes(item.label)) return null
   if (item.resetAtSeconds == null && item.resetSeconds == null) return null
   return getCodexResetCountdown(
     item.resetAtSeconds,
@@ -3768,8 +3768,7 @@ function getQuotaLabelOrder(label: string): number {
   if (label === '生图') return 14
   if (label === '速率') return 15
   if (label === '模型') return 16
-  if (label === 'Token 5H') return 17
-  if (label === 'MCP 月') return 18
+  if (label === 'Token 5H') return 6
   return 20
 }
 

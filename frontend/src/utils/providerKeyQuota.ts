@@ -309,7 +309,7 @@ function getGlmCodingPlanQuotaText(quota: QuotaStatusSnapshot): string | null {
   const parts: string[] = []
   for (const [label, code] of [
     ['Token5H', 'tokens_5h'],
-    ['MCP月', 'mcp_monthly'],
+    ['周', 'tokens_weekly'],
   ] as const) {
     const window = getQuotaWindow(quota, code)
     if (!window) continue
