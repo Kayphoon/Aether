@@ -32,10 +32,22 @@ jobs:
           tags: |
             type=raw,value=test
             type=sha,prefix=,format=short
-      - name: Patch Dockerfile to force aether-admin recompile
+      - name: Create CI Dockerfile with forced clean rebuild
         run: |
-          sed 's/cargo build --release --locked -p aether-gateway/cargo clean -p aether-admin \&\& cargo build --release --locked -p aether-gateway/' \
-            Dockerfile.app.release-local > Dockerfile.app.ci
+          python3 -c "
+          with open('Dockerfile.app.release-local') as f:
+              c = f.read()
+          old_cmd = 'cargo build --release --locked -p aether-gateway'
+          new_cmd = 'grep -c mcp_reset_at crates/aether-admin/src/provider/quota.rs && cargo clean -p aether-admin && rm -rf target/release/.fingerprint/aether_admin* target/release/deps/libaether_admin* target/release/build/aether_admin* && cargo build --release --locked -p aether-gateway'
+          c = c.replace(old_cmd, new_cmd)
+          with open('Dockerfile.app.ci', 'w') as f:
+              f.write(c)
+          print('Patched Dockerfile created')
+          if 'mcp_reset_at' in c:
+              print('Source has per-window code: OK')
+          else:
+              print('WARNING: per-window code missing from source!')
+          
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
