@@ -785,6 +785,7 @@ pub fn parse_glm_coding_plan_quota_limit_response(
         return None;
     }
     result.insert("updated_at".to_string(), json!(updated_at_unix_secs));
+    result.insert("__PARSER_V2_DEBUG__".to_string(), json!(true));
     result.insert("quota_limit".to_string(), data.clone());
     Some(serde_json::Value::Object(result))
 }
