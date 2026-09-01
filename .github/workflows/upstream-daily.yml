@@ -18,6 +18,7 @@ on:
 permissions:
   contents: write
   packages: write
+  workflows: write
 
 concurrency:
   group: upstream-daily-build
