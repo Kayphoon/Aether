@@ -1,0 +1,148 @@
+name: Upstream Daily Build
+
+# 每天定时同步上游 fawney19/Aether 的 main 到 upstream-main 分支，
+# 若有新提交（或手动触发）则构建 linux/amd64 Docker 镜像推送到 GHCR。
+# 注意：本文件放在默认分支 master 上（GitHub schedule 只在默认分支生效），
+# 构建代码统一 checkout upstream-main，upstream-main 保持纯镜像、零额外提交。
+
+on:
+  schedule:
+    - cron: '10 20 * * *' # 每天 04:10 北京时间 (UTC+8)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '强制重新构建（即使上游无新提交）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: upstream-daily-build
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/kayphoon/aether
+
+jobs:
+  sync:
+    name: Sync upstream main
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      sha: ${{ steps.sync.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: upstream-main
+          fetch-depth: 0
+
+      - name: Fast-forward upstream-main to upstream/main
+        id: sync
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/fawney19/Aether.git
+          git fetch upstream main
+          before="$(git rev-parse HEAD)"
+          git merge --ff-only upstream/main
+          after="$(git rev-parse HEAD)"
+          echo "sha=${after}" >> "$GITHUB_OUTPUT"
+          if [[ "${before}" == "${after}" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "upstream-main 已是最新: ${after}"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "同步 ${before} -> ${after}"
+            git push origin upstream-main
+          fi
+
+  build:
+    name: Build & push linux/amd64 image
+    needs: sync
+    if: needs.sync.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: upstream-main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: daily-x86_64-unknown-linux-musl
+          workspaces: . -> target
+
+      - name: Install cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build aether-gateway (x86_64 musl)
+        run: cross build --release --locked -p aether-gateway --target x86_64-unknown-linux-musl
+
+      - name: Prepare dist layout
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/aether-gateway dist/aether-gateway-amd64
+          chmod +x dist/aether-gateway-amd64
+          cp -r frontend/dist dist/frontend
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          short_sha="$(git rev-parse --short HEAD)"
+          full_sha="$(git rev-parse HEAD)"
+          today="$(date -u +%Y%m%d)"
+          {
+            echo "tags<<EOF"
+            echo "${{ env.IMAGE_NAME }}:latest"
+            echo "${{ env.IMAGE_NAME }}:main-${short_sha}"
+            echo "${{ env.IMAGE_NAME }}:main-${today}"
+            echo "EOF"
+            echo "revision=${full_sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.app
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.tags.outputs.revision }}
