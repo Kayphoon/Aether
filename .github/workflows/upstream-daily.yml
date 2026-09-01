@@ -38,6 +38,8 @@ jobs:
         with:
           ref: upstream-main
           fetch-depth: 0
+          # GITHUB_TOKEN 无法推送含 workflow 文件改动的提交，这里用带 workflow scope 的 PAT
+          token: ${{ secrets.AETHER_SYNC_PAT }}
 
       - name: Fast-forward upstream-main to upstream/main
         id: sync
