@@ -1,6 +1,8 @@
 import apiClient from './client'
 import { cachedRequest, buildCacheKey } from '@/utils/cache'
 
+const REQUEST_DETAIL_PREFETCH_TTL_MS = 5_000
+
 export interface DashboardStat {
   name: string
   value: string
@@ -55,6 +57,7 @@ export interface CacheStats {
 export interface UserStats {
   total: number
   active: number
+  online?: number
 }
 
 // Token 详细分类
@@ -113,6 +116,90 @@ export interface VideoBilling {
   status?: string            // 计费状态
 }
 
+export interface RequestErrorDomain {
+  source?: string | null
+  status_code?: number | null
+  type?: string | null
+  message?: string | null
+  code?: string | number | null
+  content_type?: string | null
+  body?: unknown
+  category?: string | null
+}
+
+export interface RequestErrorDomains {
+  request_error?: RequestErrorDomain | null
+  upstream_error?: RequestErrorDomain | null
+  client_error?: RequestErrorDomain | null
+  failure_summary?: RequestErrorDomain | null
+}
+
+export interface RequestErrorFlow {
+  source?: string | null
+  status_code?: number | null
+  propagation?: string | null
+  client_response_source?: string | null
+  safe_to_expose_upstream?: boolean | null
+  summary_source?: string | null
+}
+
+export interface RequestSchedulingFailure {
+  source?: string | null
+  reason?: string | null
+  reason_label?: string | null
+  title?: string | null
+  message?: string | null
+  reason_summary?: string | null
+  status_code?: number | null
+  no_upstream_attempt?: boolean | null
+}
+
+export interface RequestPricingTier {
+  up_to?: number | null
+  input_price_per_1m?: number | null
+  output_price_per_1m?: number | null
+  cache_creation_price_per_1m?: number | null
+  cache_read_price_per_1m?: number | null
+  cache_ttl_pricing?: Array<{
+    ttl_minutes?: number | null
+    cache_creation_price_per_1m?: number | null
+    cache_read_price_per_1m?: number | null
+  }> | null
+  [key: string]: unknown
+}
+
+export interface RequestSettlementTieredPricing {
+  tiers?: RequestPricingTier[] | null
+  [key: string]: unknown
+}
+
+export interface RequestSettlementPricingSnapshot {
+  requested_processing_tier?: string | null
+  actual_processing_tier?: string | null
+  billing_processing_tier?: string | null
+  processing_tier_price_multiplier?: number | null
+  pricing_source?: string | null
+  tiered_pricing_source?: string | null
+  price_per_request_source?: string | null
+  tiered_pricing?: RequestSettlementTieredPricing | null
+  [key: string]: unknown
+}
+
+export interface RequestSettlementSnapshot {
+  pricing_snapshot?: RequestSettlementPricingSnapshot | null
+  [key: string]: unknown
+}
+
+export type RequestBodyField = 'request_body' | 'provider_request_body' | 'response_body' | 'client_response_body'
+export type RequestBodyLoadErrorCode = 'too_large' | 'decode_failed' | 'missing' | 'storage_unavailable'
+
+export class RequestBodyProtocolError extends Error {
+  constructor() {
+    super('Invalid body response')
+    this.name = 'RequestBodyProtocolError'
+  }
+}
+
 export interface RequestDetail {
   id: string // UUID
   request_id: string
@@ -128,8 +215,14 @@ export interface RequestDetail {
   }
   provider: string
   api_format?: string
+  endpoint_api_format?: string
+  has_format_conversion?: boolean | null
   model: string
   target_model?: string | null  // 映射后的目标模型名
+  requested_reasoning_effort?: string | null
+  reasoning_effort?: string | null
+  service_tier?: string | null
+  actual_service_tier?: string | null
   tokens: {
     input: number
     output: number
@@ -142,18 +235,23 @@ export interface RequestDetail {
   }
   // Additional token fields
   input_tokens?: number
+  effective_input_tokens?: number
   output_tokens?: number
   total_tokens?: number
   cache_creation_input_tokens?: number
   cache_creation_input_tokens_5m?: number
   cache_creation_input_tokens_1h?: number
+  cache_creation_ephemeral_5m_input_tokens?: number
+  cache_creation_ephemeral_1h_input_tokens?: number
   cache_read_input_tokens?: number
   // Additional cost fields
   input_cost?: number
   output_cost?: number
   total_cost?: number
+  actual_cost?: number
   cache_creation_cost?: number
   cache_read_cost?: number
+  image_output_cost?: number
   request_cost?: number  // 按次计费费用
   // Historical pricing fields (per 1M tokens)
   input_price_per_1m?: number
@@ -163,54 +261,77 @@ export interface RequestDetail {
   price_per_request?: number  // 按次计费价格
   request_type: string
   is_stream: boolean
+  is_websocket?: boolean
+  websocket_transport?: string | null
+  usage_available?: boolean
+  usage_pricing_available?: boolean
+  input_audio_tokens?: number | null
+  output_audio_tokens?: number | null
+  live_session?: Record<string, unknown> | null
+  realtime_session?: Record<string, unknown> | null
+  upstream_is_stream?: boolean
+  client_requested_stream?: boolean
+  client_is_stream?: boolean
   status_code: number
   status?: string  // pending, streaming, completed, failed, cancelled
   error_message?: string
+  request_error?: RequestErrorDomain | null
+  upstream_error?: RequestErrorDomain | null
+  client_error?: RequestErrorDomain | null
+  failure_summary?: RequestErrorDomain | null
+  errors?: RequestErrorDomains | null
+  error_flow?: RequestErrorFlow | null
+  scheduling_failure?: RequestSchedulingFailure | null
   response_time_ms: number
+  first_byte_time_ms?: number | null
+  end_to_end_time_ms?: number | null
+  end_to_end_first_byte_time_ms?: number | null
   created_at: string
-  request_headers?: Record<string, unknown>
-  request_body?: Record<string, unknown>
-  provider_request_headers?: Record<string, unknown>
-  provider_request_body?: Record<string, unknown>
-  response_headers?: Record<string, unknown>
-  client_response_headers?: Record<string, unknown>
-  response_body?: Record<string, unknown>
-  client_response_body?: Record<string, unknown>
+  updated_at?: string | null
+  request_headers?: Record<string, unknown> | null
+  request_body?: Record<string, unknown> | null
+  provider_request_headers?: Record<string, unknown> | null
+  provider_request_body?: Record<string, unknown> | null
+  response_headers?: Record<string, unknown> | null
+  client_response_headers?: Record<string, unknown> | null
+  response_body?: Record<string, unknown> | null
+  client_response_body?: Record<string, unknown> | null
   has_request_body?: boolean
   has_provider_request_body?: boolean
   has_response_body?: boolean
   has_client_response_body?: boolean
+  body_load_errors?: {
+    request_body?: boolean
+    provider_request_body?: boolean
+    response_body?: boolean
+    client_response_body?: boolean
+  } | null
+  body_load_error_codes?: Partial<Record<RequestBodyField, RequestBodyLoadErrorCode>> | null
   metadata?: Record<string, unknown>
+  routing?: Record<string, unknown>
+  body_capture?: Record<string, unknown>
+  trace?: Record<string, unknown>
+  settlement?: {
+    billing_snapshot?: Record<string, unknown>
+    billing_snapshot_schema_version?: string
+    billing_snapshot_status?: string
+    rate_multiplier?: number
+    is_free_tier?: boolean
+    input_price_per_1m?: number
+    output_price_per_1m?: number
+    cache_creation_price_per_1m?: number
+    cache_read_price_per_1m?: number
+    price_per_request?: number
+    settlement_snapshot?: RequestSettlementSnapshot | null
+  } | null
   // 阶梯计费信息
   tiered_pricing?: {
     total_input_context: number  // 总输入上下文 (input + cache_read)
     tier_index: number  // 命中的阶梯索引 (0-based)
     tier_count: number  // 阶梯总数
     source?: 'provider' | 'global'  // 定价来源: 提供商或全局
-    current_tier: {  // 当前命中的阶梯配置
-      up_to?: number | null
-      input_price_per_1m: number
-      output_price_per_1m: number
-      cache_creation_price_per_1m?: number
-      cache_read_price_per_1m?: number
-      cache_ttl_pricing?: Array<{
-        ttl_minutes: number
-        cache_creation_price_per_1m?: number
-        cache_read_price_per_1m?: number
-      }>
-    }
-    tiers: Array<{  // 完整阶梯配置列表
-      up_to?: number | null
-      input_price_per_1m: number
-      output_price_per_1m: number
-      cache_creation_price_per_1m?: number
-      cache_read_price_per_1m?: number
-      cache_ttl_pricing?: Array<{
-        ttl_minutes: number
-        cache_creation_price_per_1m?: number
-        cache_read_price_per_1m?: number
-      }>
-    }>
+    current_tier: RequestPricingTier  // 当前命中的阶梯配置
+    tiers: RequestPricingTier[]  // 完整阶梯配置列表
   } | null
   // 视频/图像/音频计费信息
   video_billing?: VideoBilling | null
@@ -238,6 +359,18 @@ export interface ReplayResponse {
   response_headers: Record<string, string>
   response_body: Record<string, unknown>
   response_time_ms: number
+  mapping?: {
+    source_model: string
+    original_target_model?: string | null
+    resolved_model: string
+    target_provider_id: string
+    target_provider: string
+    target_endpoint_id: string
+    target_api_format: string
+    replay_mode: string
+    mapping_applied: boolean
+    mapping_source: string
+  }
 }
 
 export interface ModelBreakdown {
@@ -298,14 +431,14 @@ export interface TimeRangeParams {
 export const dashboardApi = {
   // 获取仪表盘统计数据
   async getStats(params?: TimeRangeParams): Promise<DashboardStatsResponse> {
-    const cacheKey = buildCacheKey('dashboard:stats', params)
+    const cacheKey = buildCacheKey('dashboard:stats', params as Record<string, unknown> | undefined)
     return cachedRequest(
       cacheKey,
       async () => {
         const response = await apiClient.get<DashboardStatsResponse>('/api/dashboard/stats', { params })
         return response.data
       },
-      10 * 1000
+      30 * 1000
     )
   },
 
@@ -331,16 +464,47 @@ export const dashboardApi = {
 
   // 获取请求详情
   // NOTE: This method now calls the new RESTful API at /api/admin/usage/{id}
-  async getRequestDetail(requestId: string, options: { includeBodies?: boolean } = {}): Promise<RequestDetail> {
-    const response = await apiClient.get<RequestDetail>(`/api/admin/usage/${requestId}`, {
-      params: { include_bodies: options.includeBodies ?? true },
+  async getRequestDetail(
+    requestId: string,
+    options: { includeBodies?: boolean, cacheTtlMs?: number, signal?: AbortSignal } = {}
+  ): Promise<RequestDetail> {
+    const includeBodies = options.includeBodies ?? false
+    const cacheTtlMs = options.cacheTtlMs ?? 0
+    const cacheKey = buildCacheKey('dashboard:request-detail', { requestId, includeBodies })
+    const fetchDetail = async () => {
+      const response = await apiClient.get<RequestDetail>(`/api/admin/usage/${requestId}`, {
+        params: { include_bodies: includeBodies },
+        ...(options.signal ? { signal: options.signal } : {}),
+      })
+      return response.data
+    }
+    return options.signal ? fetchDetail() : cachedRequest(cacheKey, fetchDetail, cacheTtlMs)
+  },
+
+  async getRequestBody(requestId: string, field: RequestBodyField, signal?: AbortSignal, onProgress?: (loaded: number) => void) {
+    const response = await apiClient.get<ArrayBuffer>(`/api/admin/usage/${requestId}`, {
+      params: { include_bodies: true, body_field: field, body_format: 'raw' },
+      responseType: 'arraybuffer',
+      signal,
+      ...(onProgress ? { onDownloadProgress: (event: { loaded: number }) => onProgress(event.loaded) } : {}),
     })
-    return response.data
+    const encoding = response.headers['x-aether-body-encoding']
+    if ((encoding !== 'gzip' && encoding !== 'json') || response.headers['x-aether-usage-id'] !== requestId || response.headers['x-aether-body-field'] !== field) {
+      throw new RequestBodyProtocolError()
+    }
+    return { bytes: response.data, encoding: encoding as 'gzip' | 'json' }
+  },
+
+  async prefetchRequestDetail(requestId: string): Promise<void> {
+    await dashboardApi.getRequestDetail(requestId, {
+      includeBodies: false,
+      cacheTtlMs: REQUEST_DETAIL_PREFETCH_TTL_MS
+    })
   },
 
   // 获取每日统计数据
   async getDailyStats(params?: TimeRangeParams & { days?: number }): Promise<DailyStatsResponse> {
-    const cacheKey = buildCacheKey('dashboard:daily-stats', params)
+    const cacheKey = buildCacheKey('dashboard:daily-stats', params as Record<string, unknown> | undefined)
     return cachedRequest(
       cacheKey,
       async () => {
@@ -349,7 +513,7 @@ export const dashboardApi = {
         })
         return response.data
       },
-      20 * 1000
+      60 * 1000
     )
   },
 

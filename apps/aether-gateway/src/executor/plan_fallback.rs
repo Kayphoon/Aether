@@ -1,0 +1,120 @@
+use crate::ai_serving::api::{
+    maybe_build_stream_plan_payload, maybe_build_sync_plan_payload, AiStreamAttempt, AiSyncAttempt,
+};
+use crate::control::GatewayControlDecision;
+use crate::executor::{
+    execute_stream_plan_and_reports_with_transfer_tracker,
+    execute_sync_plan_and_reports_with_transfer_tracker, LocalExecutionRequestOutcome,
+    ProviderTransferTracker,
+};
+use crate::{AiExecutionPlanPayload, AppState, GatewayError, GatewayFallbackReason};
+
+pub(crate) async fn maybe_execute_sync_via_plan_fallback(
+    state: &AppState,
+    parts: &http::request::Parts,
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    body_json: &serde_json::Value,
+    body_base64: Option<String>,
+    _plan_kind: &str,
+    _bypass_cache_key: String,
+    _fallback_reason: GatewayFallbackReason,
+    transfer_tracker: &ProviderTransferTracker,
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
+    let body_is_empty =
+        body_base64.is_none() && body_json.as_object().is_some_and(|value| value.is_empty());
+    let Some(payload) = maybe_build_sync_plan_payload(
+        state,
+        parts,
+        trace_id,
+        decision,
+        body_json,
+        body_base64.as_deref(),
+        body_is_empty,
+    )
+    .await?
+    else {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    };
+
+    let AiExecutionPlanPayload {
+        action: _,
+        plan_kind,
+        plan,
+        report_kind,
+        report_context,
+        auth_context: _,
+    } = payload;
+
+    let (Some(plan_kind), Some(plan)) = (plan_kind, plan) else {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    };
+
+    execute_sync_plan_and_reports_with_transfer_tracker(
+        state,
+        parts,
+        trace_id,
+        decision,
+        plan_kind.as_str(),
+        vec![AiSyncAttempt {
+            plan,
+            report_kind,
+            report_context,
+        }],
+        transfer_tracker,
+    )
+    .await
+}
+
+pub(crate) async fn maybe_execute_stream_via_plan_fallback(
+    state: &AppState,
+    parts: &http::request::Parts,
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    body_json: &serde_json::Value,
+    body_base64: Option<String>,
+    _plan_kind: &str,
+    _bypass_cache_key: String,
+    _fallback_reason: GatewayFallbackReason,
+    transfer_tracker: &ProviderTransferTracker,
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
+    let Some(payload) = maybe_build_stream_plan_payload(
+        state,
+        parts,
+        trace_id,
+        decision,
+        body_json,
+        body_base64.as_deref(),
+    )
+    .await?
+    else {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    };
+
+    let AiExecutionPlanPayload {
+        action: _,
+        plan_kind,
+        plan,
+        report_kind,
+        report_context,
+        auth_context: _,
+    } = payload;
+
+    let (Some(plan_kind), Some(plan)) = (plan_kind, plan) else {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    };
+
+    execute_stream_plan_and_reports_with_transfer_tracker(
+        state,
+        trace_id,
+        decision,
+        plan_kind.as_str(),
+        vec![AiStreamAttempt {
+            plan,
+            report_kind,
+            report_context,
+        }],
+        transfer_tracker,
+    )
+    .await
+}

@@ -35,9 +35,10 @@
           :has-error="heatmapError"
         />
         <IntervalTimelineCard
-          :title="isAdminPage ? '请求间隔时间线' : '我的请求间隔'"
+          :title="intervalTimelineTitle"
           :is-admin="isAdminPage"
-          :hours="24"
+          :hours="intervalTimelineHours"
+          :refresh-interval-ms="0"
         />
       </div>
 
@@ -49,15 +50,15 @@
       >
         <UsageModelTable
           :data="enhancedModelStats"
-          :is-admin="authStore.isAdmin"
+          :is-admin="authStore.canAccessAdmin"
         />
         <UsageProviderTable
           :data="providerStats"
-          :is-admin="authStore.isAdmin"
+          :is-admin="authStore.canAccessAdmin"
         />
         <UsageApiFormatTable
           :data="apiFormatStats"
-          :is-admin="authStore.isAdmin"
+          :is-admin="authStore.canAccessAdmin"
         />
       </div>
       <!-- 用户：模型 + API格式（2列） -->
@@ -67,7 +68,7 @@
       >
         <UsageModelTable
           :data="enhancedModelStats"
-          :is-admin="authStore.isAdmin"
+          :is-admin="authStore.canAccessAdmin"
         />
         <UsageApiFormatTable
           :data="apiFormatStats"
@@ -80,7 +81,7 @@
     <UsageRecordsTable
       :records="displayRecords"
       :is-admin="isAdminPage"
-      :show-actual-cost="authStore.isAdmin"
+      :show-actual-cost="authStore.canAccessAdmin"
       :loading="isLoadingRecords"
       :time-range="timeRange"
       :filter-search="filterSearch"
@@ -89,14 +90,17 @@
       :filter-provider="filterProvider"
       :filter-api-format="filterApiFormat"
       :filter-status="filterStatus"
+      :filter-client-family="filterClientFamily"
       :available-users="availableUsers"
       :available-models="availableModels"
       :available-providers="availableProviders"
+      :available-client-families="availableClientFamilies"
       :current-page="currentPage"
       :page-size="pageSize"
       :total-records="effectiveTotalRecords"
       :page-size-options="pageSizeOptions"
       :auto-refresh="globalAutoRefresh"
+      :hide-unknown-records="hideUnknownRecords"
       @update:time-range="handleTimeRangeChange"
       @update:filter-search="handleFilterSearchChange"
       @update:filter-user="handleFilterUserChange"
@@ -104,10 +108,13 @@
       @update:filter-provider="handleFilterProviderChange"
       @update:filter-api-format="handleFilterApiFormatChange"
       @update:filter-status="handleFilterStatusChange"
+      @update:filter-client-family="handleFilterClientFamilyChange"
       @update:current-page="handlePageChange"
       @update:page-size="handlePageSizeChange"
       @update:auto-refresh="handleAutoRefreshChange"
-      @refresh="refreshData"
+      @update:hide-unknown-records="handleHideUnknownRecordsChange"
+      @refresh="handleManualRefresh"
+      @prefetch-detail="prefetchRequestDetail"
       @show-detail="showRequestDetail"
     />
 
@@ -116,7 +123,9 @@
       v-if="isAdminPage"
       :is-open="detailModalOpen"
       :request-id="selectedRequestId"
+      :summary-record="selectedRequestSummary"
       @close="detailModalOpen = false"
+      @request-state="handleDetailRequestState"
     />
   </div>
 </template>
@@ -127,8 +136,10 @@ import { useRoute } from 'vue-router'
 import { useLocalStorage } from '@vueuse/core'
 import { useAuthStore } from '@/stores/auth'
 import { usageApi } from '@/api/usage'
+import type { ImageProgress } from '@/api/requestTrace'
 import { usersApi } from '@/api/users'
 import { meApi } from '@/api/me'
+import { dashboardApi } from '@/api/dashboard'
 import { PanelTopClose, PanelTopOpen } from 'lucide-vue-next'
 import {
   UsageModelTable,
@@ -143,7 +154,28 @@ import {
   useUsageData,
   getDateRangeFromPeriod
 } from '@/features/usage/composables'
-import type { DateRangeParams, FilterStatusValue } from '@/features/usage/types'
+import { reconcileActiveRequestDiscovery } from '@/features/usage/utils/activeRequestDiscovery'
+import {
+  mergeUsageRecordErrorMessage,
+  mergeUsageRecordFirstByteTimeMs,
+  mergeUsageRecordLifecycleSnapshot,
+  mergeUsageRecordResponseTiming,
+  parseUsageTimestampMs,
+} from '@/features/usage/utils/recordSync'
+import {
+  hasUsageFallback,
+  isUsageRecordFailed,
+  isUsageUpstreamStream,
+  isUsageWebSocket,
+  normalizeRequestStatus,
+  resolveDisplayRequestStatus,
+} from '@/features/usage/utils/status'
+import { matchesUsageRecordSearch } from '@/features/usage/utils/recordSearch'
+import {
+  isUserLocalOnlyRecordStatus,
+  shouldUseServerUserRecordFilters,
+} from '@/features/usage/utils/recordFilterPolicy'
+import type { DateRangeParams, FilterStatusValue, RequestStatus, UsageRecord } from '@/features/usage/types'
 import type { UserOption } from '@/features/usage/components/UsageRecordsTable.vue'
 import { log } from '@/utils/logger'
 import type { ActivityHeatmap } from '@/types/activity'
@@ -158,14 +190,55 @@ const isAdminPage = computed(() => route.path.startsWith('/admin'))
 
 // 用量分析面板折叠状态（默认展开，持久化到 localStorage）
 const statsExpanded = useLocalStorage('usage-stats-expanded', true)
+const hideUnknownRecords = useLocalStorage('usage-hide-unknown-records', false)
 
 // 时间范围选择
-const timeRange = ref<DateRangeParams>(getDateRangeFromPeriod('today'))
+const timeRange = ref<DateRangeParams>(
+  getDateRangeFromPeriod('today')
+)
 
 // 分页状态
 const currentPage = ref(1)
 const pageSize = ref(20)
 const pageSizeOptions = [10, 20, 50, 100]
+
+function clampIntervalTimelineHours(hours: number): number {
+  return Math.min(720, Math.max(1, Math.ceil(hours)))
+}
+
+function getIntervalTimelineHours(dateRange: DateRangeParams): number {
+  switch (dateRange.preset) {
+    case 'yesterday':
+      return 48
+    case 'last7days':
+      return 24 * 7
+    case 'last30days':
+      return 24 * 30
+    case 'last90days':
+      return 24 * 30
+    case 'today':
+      return 24
+    default:
+      break
+  }
+
+  if (dateRange.start_date && dateRange.end_date) {
+    const start = new Date(`${dateRange.start_date}T00:00:00`)
+    const end = new Date(`${dateRange.end_date}T23:59:59`)
+    const diffMs = end.getTime() - start.getTime()
+    if (!Number.isNaN(diffMs) && diffMs >= 0) {
+      return clampIntervalTimelineHours(diffMs / (1000 * 60 * 60))
+    }
+  }
+
+  return 24
+}
+
+function formatIntervalTimelineWindow(hours: number): string {
+  if (hours === 24) return '最近24小时'
+  if (hours % 24 === 0) return `最近${hours / 24}天`
+  return `最近${hours}小时`
+}
 
 // 筛选状态
 const filterSearch = ref('')
@@ -174,6 +247,7 @@ const filterModel = ref('__all__')
 const filterProvider = ref('__all__')
 const filterApiFormat = ref('__all__')
 const filterStatus = ref<FilterStatusValue>('__all__')
+const filterClientFamily = ref('__all__')
 
 // 用户列表（仅管理员页面使用）
 const availableUsers = ref<UserOption[]>([])
@@ -196,9 +270,15 @@ const {
 const activityHeatmapData = ref<ActivityHeatmap | null>(null)
 const isLoadingHeatmap = ref(false)
 const heatmapError = ref(false)
+const intervalTimelineHours = computed(() => getIntervalTimelineHours(timeRange.value))
+const intervalTimelineTitle = computed(() => {
+  const baseTitle = isAdminPage.value ? '请求间隔时间线' : '我的请求间隔'
+  return `${baseTitle}（${formatIntervalTimelineWindow(intervalTimelineHours.value)}）`
+})
 const ADMIN_ANALYTICS_REFRESH_INTERVAL = 60000
 let adminAnalyticsRefreshInFlight: Promise<void> | null = null
 let lastAdminAnalyticsRefreshAt = 0
+let adminAnalyticsRefreshGeneration = 0
 
 // 加载热力图数据
 async function loadHeatmapData() {
@@ -227,7 +307,7 @@ async function loadAdminUsers() {
   }
 }
 
-async function refreshAdminAnalytics(options: { force?: boolean } = {}) {
+async function refreshAdminAnalytics(options: { force?: boolean; preserveOnFailure?: boolean } = {}) {
   if (!isAdminPage.value) return
   if (!options.force && !isPageVisible.value) return
 
@@ -235,44 +315,89 @@ async function refreshAdminAnalytics(options: { force?: boolean } = {}) {
   if (!options.force && now - lastAdminAnalyticsRefreshAt < ADMIN_ANALYTICS_REFRESH_INTERVAL) {
     return
   }
-  if (adminAnalyticsRefreshInFlight) {
+  if (!options.force && adminAnalyticsRefreshInFlight) {
     return adminAnalyticsRefreshInFlight
   }
+  if (!options.force) {
+    lastAdminAnalyticsRefreshAt = now
+  }
 
-  adminAnalyticsRefreshInFlight = (async () => {
+  const refreshGeneration = ++adminAnalyticsRefreshGeneration
+  const refreshPromise = (async () => {
     let hasSuccessfulRefresh = false
 
     try {
-      await loadStats(timeRange.value)
-      hasSuccessfulRefresh = true
+      const hadFailure = await loadStats(getCurrentStatsFilters(), {
+        force: options.force,
+        preserveOnFailure: options.preserveOnFailure,
+      })
+      if (refreshGeneration !== adminAnalyticsRefreshGeneration) {
+        return
+      }
+      hasSuccessfulRefresh = !hadFailure
+      if (hadFailure) {
+        warning('统计数据加载失败，请刷新重试')
+      }
     } catch (error) {
+      if (refreshGeneration !== adminAnalyticsRefreshGeneration) {
+        return
+      }
       log.error('加载统计数据失败:', error)
       warning('统计数据加载失败，请刷新重试')
     }
 
-    try {
-      await loadHeatmapData()
-      hasSuccessfulRefresh = true
-    } catch (error) {
-      log.error('加载热力图数据失败:', error)
-    }
-
-    if (hasSuccessfulRefresh) {
+    if (hasSuccessfulRefresh && refreshGeneration === adminAnalyticsRefreshGeneration) {
       lastAdminAnalyticsRefreshAt = Date.now()
     }
   })()
+  adminAnalyticsRefreshInFlight = refreshPromise
 
   try {
-    await adminAnalyticsRefreshInFlight
+    await refreshPromise
   } finally {
-    adminAnalyticsRefreshInFlight = null
+    if (adminAnalyticsRefreshInFlight === refreshPromise) {
+      adminAnalyticsRefreshInFlight = null
+    }
   }
 }
 
-// 用户页面需要前端筛选
+function getCurrentStatsFilters() {
+  const filters = getCurrentFilters()
+  return {
+    ...timeRange.value,
+    user_id: filters.user_id,
+    model: filters.model,
+    provider: filters.provider,
+  }
+}
+
+async function refreshAdminAnalyticsForSelectionChange() {
+  if (!isAdminPage.value) return
+  await refreshAdminAnalytics({ force: true, preserveOnFailure: false })
+}
+
+function isUnknownUsageLabel(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  const normalized = value.trim().toLowerCase()
+  return normalized === 'unknown' || normalized === 'unknow'
+}
+
+function hasUnknownModelOrProvider(record: UsageRecord): boolean {
+  if (isUnknownUsageLabel(record.model)) return true
+  if (isUnknownUsageLabel(record.provider)) return true
+  return false
+}
+
+// 用户页面需要前端筛选；隐藏 unknown 的开关对管理员当前页也生效。
 const filteredRecords = computed(() => {
+  let records = hideUnknownRecords.value
+    ? currentRecords.value.filter(record => !hasUnknownModelOrProvider(record))
+    : [...currentRecords.value]
+
   if (!isAdminPage.value) {
-    let records = [...currentRecords.value]
+    if (isUserLocalOnlyRecordStatus(filterStatus.value) && filterSearch.value.trim()) {
+      records = records.filter(record => matchesUsageRecordSearch(record, filterSearch.value))
+    }
 
     if (filterModel.value !== '__all__') {
       records = records.filter(record => record.model === filterModel.value)
@@ -289,41 +414,52 @@ const filteredRecords = computed(() => {
     }
 
     if (filterStatus.value !== '__all__') {
-      if (filterStatus.value === 'stream') {
+      if (filterStatus.value === 'websocket') {
+        records = records.filter(record => isUsageWebSocket(record))
+      } else if (filterStatus.value === 'stream') {
         records = records.filter(record =>
-          record.is_stream && !record.error_message && (!record.status_code || record.status_code === 200)
+          isUsageUpstreamStream(record)
+          && !isUsageWebSocket(record)
+          && !isUsageRecordFailed(record)
         )
       } else if (filterStatus.value === 'standard') {
         records = records.filter(record =>
-          !record.is_stream && !record.error_message && (!record.status_code || record.status_code === 200)
+          !isUsageUpstreamStream(record)
+          && !isUsageWebSocket(record)
+          && !isUsageRecordFailed(record)
         )
       } else if (filterStatus.value === 'active') {
         records = records.filter(record =>
-          record.status === 'pending' || record.status === 'streaming'
+          resolveDisplayRequestStatus(record) === 'pending' ||
+          resolveDisplayRequestStatus(record) === 'streaming'
         )
       } else if (filterStatus.value === 'failed') {
-        // 失败请求需要同时考虑新旧两种判断方式：
-        // 1. 新方式：status = "failed"
-        // 2. 旧方式：status_code >= 400 或 error_message 不为空
-        records = records.filter(record =>
-          record.status === 'failed' ||
-          (record.status_code && record.status_code >= 400) ||
-          record.error_message
-        )
+        records = records.filter(record => isUsageRecordFailed(record))
       } else if (filterStatus.value === 'cancelled') {
         records = records.filter(record => record.status === 'cancelled')
+      } else if (filterStatus.value === 'has_fallback') {
+        records = records.filter(record => hasUsageFallback(record))
+      } else if (filterStatus.value === 'has_retry') {
+        records = records.filter(record => record.has_retry === true)
       }
+    }
+
+    if (filterClientFamily.value !== '__all__') {
+      records = records.filter(record => record.client_family === filterClientFamily.value)
     }
 
     return records
   }
-  return currentRecords.value
+  return records
 })
 
 // 获取活跃请求的 ID 列表
 const activeRequestIds = computed(() => {
   return currentRecords.value
-    .filter(record => record.status === 'pending' || record.status === 'streaming')
+    .filter((record) => {
+      const displayStatus = resolveDisplayRequestStatus(record)
+      return displayStatus === 'pending' || displayStatus === 'streaming'
+    })
     .map(record => record.id)
 })
 
@@ -332,9 +468,12 @@ const hasActiveRequests = computed(() => activeRequestIds.value.length > 0)
 
 // 自动刷新定时器
 let autoRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let activeDiscoveryTimer: ReturnType<typeof setTimeout> | null = null
 let globalAutoRefreshTimer: ReturnType<typeof setInterval> | null = null
 let refreshInFlight: Promise<void> | null = null
 const AUTO_REFRESH_INTERVAL = 1000 // 1秒刷新一次（用于活跃请求）
+const ACTIVE_DISCOVERY_HOT_INTERVAL = 1000 // 有活跃请求时 1 秒扫描一次
+const ACTIVE_DISCOVERY_IDLE_INTERVAL = 5000 // 空闲时降频，避免后台持续刷日志
 const GLOBAL_AUTO_REFRESH_INTERVAL = 3000 // 3秒刷新一次（全局自动刷新）
 const globalAutoRefresh = ref(false) // 全局自动刷新开关（默认关闭）
 const isPageVisible = ref(typeof document === 'undefined' ? true : !document.hidden)
@@ -342,6 +481,17 @@ const isPageVisible = ref(typeof document === 'undefined' ? true : !document.hid
 // 轮询活跃请求状态（轻量级，只更新状态变化的记录）
 
 let pollInFlight = false
+let activeDiscoveryInFlight = false
+const discoveredActiveRequestIds = new Set<string>()
+
+async function loadActiveRequestUpdates(ids?: string[]) {
+  if (isAdminPage.value) {
+    return usageApi.getActiveRequests(ids, timeRange.value)
+  }
+  const idsParam = ids?.length ? ids.join(',') : undefined
+  return meApi.getActiveRequests(idsParam)
+}
+
 async function pollActiveRequests() {
   if (!isPageVisible.value) return
   if (!hasActiveRequests.value) return
@@ -349,23 +499,13 @@ async function pollActiveRequests() {
   pollInFlight = true
 
   try {
-    // 根据页面类型选择不同的 API
-    const idsParam = activeRequestIds.value.join(',')
-    const { requests } = isAdminPage.value
-      ? await usageApi.getActiveRequests(activeRequestIds.value)
-      : await meApi.getActiveRequests(idsParam)
-
-    let shouldRefresh = false
+    const { requests } = await loadActiveRequestUpdates(activeRequestIds.value)
 
     const recordMap = new Map(currentRecords.value.map(record => [record.id, record]))
 
     for (const update of requests) {
       const record = recordMap.get(update.id)
-      if (!record) {
-        // 后端返回了未知的活跃请求，触发刷新以获取完整数据
-        shouldRefresh = true
-        continue
-      }
+      if (!record) continue
 
       // 状态只允许单向推进，避免异步响应回退（pending -> streaming -> completed/failed/cancelled）
       const statusPriority: Record<string, number> = {
@@ -377,53 +517,203 @@ async function pollActiveRequests() {
       }
       const currentRank = record.status ? (statusPriority[record.status] ?? 0) : 0
       const newRank = update.status ? (statusPriority[update.status] ?? 0) : 0
-      const shouldApply = newRank >= currentRank
+      const currentUpdatedAtMs = parseUsageTimestampMs(record.updated_at)
+      const updateUpdatedAtMs = parseUsageTimestampMs(update.updated_at)
+      const updateSnapshotIsOlder = currentUpdatedAtMs != null &&
+        updateUpdatedAtMs != null &&
+        updateUpdatedAtMs < currentUpdatedAtMs
+      const shouldApply = !updateSnapshotIsOlder && newRank >= currentRank
+      const updateHasFailureSignal =
+        (typeof update.status_code === 'number' && update.status_code >= 400) ||
+        (typeof update.error_message === 'string' && update.error_message.trim().length > 0) ||
+        update.image_progress?.phase === 'failed'
+      const shouldApplyData = shouldApply || (
+        !updateSnapshotIsOlder && currentRank < 2 && updateHasFailureSignal
+      )
 
       if (shouldApply && record.status !== update.status) {
         record.status = update.status
       }
-      if (shouldApply && ['completed', 'failed', 'cancelled'].includes(update.status)) {
-        shouldRefresh = true
-      }
-
-      if (shouldApply) {
+      if (shouldApplyData) {
+        if ('image_progress' in update) {
+          record.image_progress = update.image_progress ?? null
+        }
         // 进行中状态也需要持续更新（provider/key/TTFB 可能在 streaming 后才落库）
         record.input_tokens = update.input_tokens
+        record.effective_input_tokens = update.effective_input_tokens ?? record.effective_input_tokens
         record.output_tokens = update.output_tokens
         record.cache_creation_input_tokens = update.cache_creation_input_tokens ?? undefined
+        record.cache_creation_ephemeral_5m_input_tokens =
+          update.cache_creation_ephemeral_5m_input_tokens ?? undefined
+        record.cache_creation_ephemeral_1h_input_tokens =
+          update.cache_creation_ephemeral_1h_input_tokens ?? undefined
         record.cache_read_input_tokens = update.cache_read_input_tokens ?? undefined
         record.cost = update.cost
         record.actual_cost = update.actual_cost ?? undefined
         record.rate_multiplier = update.rate_multiplier ?? undefined
-        record.response_time_ms = update.response_time_ms ?? undefined
-        record.first_byte_time_ms = update.first_byte_time_ms ?? undefined
+        const responseTiming = mergeUsageRecordResponseTiming(
+          {
+            response_time_ms: record.response_time_ms,
+            response_time_updated_at: record.response_time_updated_at,
+          },
+          {
+            response_time_ms: update.response_time_ms,
+            response_time_updated_at: update.response_time_updated_at,
+          },
+          {
+            preferNext: update.status === 'completed' ||
+              update.status === 'failed' ||
+              update.status === 'cancelled',
+          },
+        )
+        record.response_time_ms = responseTiming.response_time_ms
+        record.response_time_updated_at = responseTiming.response_time_updated_at
+        record.first_byte_time_ms = mergeUsageRecordFirstByteTimeMs(
+          record.first_byte_time_ms,
+          update.first_byte_time_ms
+        )
+        if ('updated_at' in update) {
+          if (typeof update.updated_at === 'string') {
+            record.updated_at = update.updated_at
+          }
+        }
+        record.status_code = update.status_code ?? undefined
+        record.error_message = mergeUsageRecordErrorMessage(
+          record.error_message,
+          update.error_message,
+          { authoritative: shouldApply },
+        )
+        if (typeof update.upstream_is_stream === 'boolean') {
+          record.upstream_is_stream = update.upstream_is_stream
+          record.is_stream = update.upstream_is_stream
+        } else if (typeof update.is_stream === 'boolean') {
+          record.is_stream = update.is_stream
+          record.upstream_is_stream = update.is_stream
+        }
+        if (typeof update.is_websocket === 'boolean') {
+          record.is_websocket = record.is_websocket === true || update.is_websocket
+        }
+        if (typeof update.websocket_transport === 'string' && update.websocket_transport.trim()) {
+          record.websocket_transport = update.websocket_transport
+        }
+        if (typeof update.usage_available === 'boolean') {
+          record.usage_available = record.usage_available === false || update.usage_available === false
+            ? false
+            : true
+        }
+        if (typeof update.usage_pricing_available === 'boolean') {
+          record.usage_pricing_available = record.usage_pricing_available === false
+            || update.usage_pricing_available === false
+            ? false
+            : true
+        }
+        if (typeof update.input_audio_tokens === 'number') {
+          record.input_audio_tokens = update.input_audio_tokens
+        }
+        if (typeof update.output_audio_tokens === 'number') {
+          record.output_audio_tokens = update.output_audio_tokens
+        }
+        if (typeof update.client_is_stream === 'boolean') {
+          record.client_is_stream = update.client_is_stream
+          record.client_requested_stream = update.client_is_stream
+        } else if (typeof update.client_requested_stream === 'boolean') {
+          record.client_requested_stream = update.client_requested_stream
+          record.client_is_stream = update.client_requested_stream
+        }
         // API 格式/格式转换：streaming 时已可确定，轮询时同步更新
         if (update.api_format != null) record.api_format = update.api_format
         if (update.endpoint_api_format != null) record.endpoint_api_format = update.endpoint_api_format
         if (update.has_format_conversion != null) record.has_format_conversion = update.has_format_conversion
-        // 模型映射：streaming 时已可确定
-        if ('target_model' in update && (typeof update.target_model === 'string' || update.target_model === null)) {
-          record.target_model = update.target_model
+        if (typeof update.has_fallback === 'boolean') {
+          record.has_fallback = record.has_fallback === true || update.has_fallback
         }
+        // Active responses are complete final-provider snapshots. Absence clears facts left by
+        // a previous candidate, while requested reasoning remains tied to the client request.
+        record.target_model = typeof update.target_model === 'string' && update.target_model.trim()
+          ? update.target_model
+          : null
+        record.reasoning_effort = typeof update.reasoning_effort === 'string' && update.reasoning_effort.trim()
+          ? update.reasoning_effort
+          : null
+        if (typeof update.request_type === 'string' && update.request_type.trim()) {
+          record.request_type = update.request_type
+        }
+        if (typeof update.requested_reasoning_effort === 'string' && update.requested_reasoning_effort.trim()) {
+          record.requested_reasoning_effort = update.requested_reasoning_effort
+        }
+        // Active responses describe the current final provider request. Clear an old Fast fact
+        // when the refreshed snapshot has no request-side tier instead of retaining it forever.
+        record.service_tier = typeof update.service_tier === 'string' && update.service_tier.trim()
+          ? update.service_tier
+          : null
+        record.actual_service_tier = typeof update.actual_service_tier === 'string' && update.actual_service_tier.trim()
+          ? update.actual_service_tier
+          : null
         // 管理员接口返回额外字段
-        // 只有当返回的 provider 不是 pending/unknown 时才更新，避免覆盖已有的正确值
-        if ('provider' in update && typeof update.provider === 'string' &&
-            update.provider !== 'pending' && update.provider !== 'unknown') {
-          record.provider = update.provider
+        // 只有当返回的 provider 不是 pending/unknown/unknow 时才更新，避免覆盖已有的正确值
+        if ('provider' in update && typeof update.provider === 'string') {
+          const updateProviderLabel = update.provider.trim().toLowerCase()
+          if (updateProviderLabel && !['pending', 'unknown', 'unknow'].includes(updateProviderLabel)) {
+            record.provider = update.provider
+          }
         }
         if ('api_key_name' in update) {
           record.api_key_name = typeof update.api_key_name === 'string' ? update.api_key_name : undefined
         }
+        if ('provider_key_name' in update) {
+          record.provider_key_name = typeof update.provider_key_name === 'string'
+            ? update.provider_key_name
+            : undefined
+        }
+        if ('client_family' in update) {
+          record.client_family = typeof update.client_family === 'string' ? update.client_family : null
+        }
+        if ('client_ip' in update) {
+          record.client_ip = typeof update.client_ip === 'string' ? update.client_ip : null
+        }
+        if ('user_agent' in update) {
+          record.user_agent = typeof update.user_agent === 'string' ? update.user_agent : null
+        }
       }
     }
 
-    if (shouldRefresh) {
-      await refreshData()
-    }
+    // 不再因活跃请求完成而全表刷新，字段已在上方就地更新
+    // 未知请求（shouldRefresh 由 !record 触发）理论上不应出现在已知 ID 轮询中，忽略即可
   } catch (error) {
     log.error('轮询活跃请求状态失败:', error)
   } finally {
     pollInFlight = false
+  }
+}
+
+async function discoverActiveRequests() {
+  if (!isPageVisible.value) return
+  if (activeDiscoveryInFlight) return
+  if (refreshInFlight || isLoadingRecords.value) return
+  activeDiscoveryInFlight = true
+
+  try {
+    const { requests } = await loadActiveRequestUpdates()
+    const {
+      retainedDiscoveredActiveRequestIds,
+      unseenActiveRequestIds
+    } = reconcileActiveRequestDiscovery({
+      activeRequestIds: requests.map(request => request.id),
+      knownRecordIds: currentRecords.value.map(record => record.id),
+      discoveredActiveRequestIds
+    })
+
+    discoveredActiveRequestIds.clear()
+    retainedDiscoveredActiveRequestIds.forEach(id => discoveredActiveRequestIds.add(id))
+
+    if (unseenActiveRequestIds.length > 0) {
+      unseenActiveRequestIds.forEach(id => discoveredActiveRequestIds.add(id))
+      await refreshData()
+    }
+  } catch (error) {
+    log.error('发现新活跃请求失败:', error)
+  } finally {
+    activeDiscoveryInFlight = false
   }
 }
 
@@ -437,10 +727,34 @@ function scheduleNextAutoRefresh() {
   }, AUTO_REFRESH_INTERVAL)
 }
 
+function scheduleNextActiveDiscovery() {
+  if (activeDiscoveryTimer) return
+  if (!isPageVisible.value) return
+  if (!globalAutoRefresh.value) return
+  const interval = hasActiveRequests.value || discoveredActiveRequestIds.size > 0
+    ? ACTIVE_DISCOVERY_HOT_INTERVAL
+    : ACTIVE_DISCOVERY_IDLE_INTERVAL
+  activeDiscoveryTimer = setTimeout(async () => {
+    activeDiscoveryTimer = null
+    await discoverActiveRequests()
+    scheduleNextActiveDiscovery()
+  }, interval)
+}
+
 // 启动自动刷新
 function startAutoRefresh() {
   if (!isPageVisible.value) return
   scheduleNextAutoRefresh()
+}
+
+function startActiveDiscovery() {
+  if (!isPageVisible.value) return
+  if (!globalAutoRefresh.value) return
+  if (activeDiscoveryTimer || activeDiscoveryInFlight) return
+  void (async () => {
+    await discoverActiveRequests()
+    scheduleNextActiveDiscovery()
+  })()
 }
 
 // 停止自动刷新
@@ -451,8 +765,15 @@ function stopAutoRefresh() {
   }
 }
 
-// 监听活跃请求状态，自动启动/停止刷新
-// 1秒轮询始终用于活跃请求的实时更新，不受全局刷新影响
+function stopActiveDiscovery() {
+  if (activeDiscoveryTimer) {
+    clearTimeout(activeDiscoveryTimer)
+    activeDiscoveryTimer = null
+  }
+}
+
+// 监听活跃请求状态，已显示的活跃行始终自刷新到终态。
+// “自动刷新”开关只控制全局 3 秒刷新和新活跃请求发现。
 watch(hasActiveRequests, (hasActive) => {
   if (hasActive && isPageVisible.value) {
     startAutoRefresh()
@@ -482,10 +803,23 @@ function handleAutoRefreshChange(value: boolean) {
   if (value) {
     if (isPageVisible.value) {
       refreshData() // 立即刷新一次
+      startActiveDiscovery()
+      if (hasActiveRequests.value) {
+        startAutoRefresh()
+      }
     }
     startGlobalAutoRefresh()
   } else {
+    stopActiveDiscovery()
     stopGlobalAutoRefresh()
+  }
+}
+
+async function handleHideUnknownRecordsChange(value: boolean) {
+  hideUnknownRecords.value = value
+  currentPage.value = 1
+  if (isAdminPage.value) {
+    await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
   }
 }
 
@@ -493,6 +827,7 @@ function handleVisibilityChange() {
   isPageVisible.value = !document.hidden
   if (!isPageVisible.value) {
     stopAutoRefresh()
+    stopActiveDiscovery()
     stopGlobalAutoRefresh()
     return
   }
@@ -500,6 +835,7 @@ function handleVisibilityChange() {
     startAutoRefresh()
   }
   if (globalAutoRefresh.value) {
+    startActiveDiscovery()
     refreshData()
     startGlobalAutoRefresh()
   }
@@ -509,22 +845,35 @@ function handleVisibilityChange() {
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   stopAutoRefresh()
+  stopActiveDiscovery()
   stopGlobalAutoRefresh()
 })
 
-// 用户页面的前端分页（后端一次性返回所有记录，前端分页+筛选）
+// Retry/fallback are derived from the locally loaded records and are not accepted by the
+// normal-user records API. Keep those statuses entirely local, including when combined with
+// search/API-format filters, so an unsupported status never produces a misleading server total.
+// 普通用户的 API 格式/传输类型/搜索筛选由后端执行，避免只筛选当前已加载页。
+// 模型及后端不支持的 retry/fallback 筛选仍保持现有的本地分页语义。
+const userUsesServerRecordFilters = computed(() => !isAdminPage.value && (
+  shouldUseServerUserRecordFilters({
+    search: filterSearch.value,
+    apiFormat: filterApiFormat.value,
+    status: filterStatus.value,
+  })
+))
+
 const paginatedRecords = computed(() => {
-  if (!isAdminPage.value) {
+  if (!isAdminPage.value && !userUsesServerRecordFilters.value) {
     const start = (currentPage.value - 1) * pageSize.value
     const end = start + pageSize.value
     return filteredRecords.value.slice(start, end)
   }
-  return currentRecords.value
+  return filteredRecords.value
 })
 
 // 用户页面使用前端筛选后的总数，管理员页面使用后端返回的总数
 const effectiveTotalRecords = computed(() => {
-  if (!isAdminPage.value) {
+  if (!isAdminPage.value && !userUsesServerRecordFilters.value) {
     return filteredRecords.value.length
   }
   return totalRecords.value
@@ -533,25 +882,42 @@ const effectiveTotalRecords = computed(() => {
 // 显示的记录
 const displayRecords = computed(() => paginatedRecords.value)
 
+const availableClientFamilies = computed(() => {
+  const families = new Set<string>()
+  currentRecords.value.forEach((record) => {
+    const family = record.client_family?.trim()
+    if (family) families.add(family)
+  })
+  return Array.from(families).sort()
+})
+
 
 // 详情弹窗状态
 const detailModalOpen = ref(false)
 const selectedRequestId = ref<string | null>(null)
+const selectedRequestSummary = computed(() => (
+  currentRecords.value.find(record => record.id === selectedRequestId.value) ?? null
+))
 
 // 初始化加载
 onMounted(async () => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
 
   if (isAdminPage.value) {
-    // 管理员页面优先加载记录，统计面板在后台顺序刷新，避免瞬时并发打满后端。
+    // 管理员页面优先启动热力图加载，避免被统计聚合链路阻塞。
+    const heatmapPromise = loadHeatmapData().catch(err => {
+      log.error('加载热力图数据失败:', err)
+    })
+    const adminUsersPromise = loadAdminUsers()
+
     await loadRecords(
       { page: currentPage.value, pageSize: pageSize.value },
       getCurrentFilters(),
       timeRange.value
     )
     void (async () => {
-      await refreshAdminAnalytics({ force: true })
-      await loadAdminUsers()
+      await refreshAdminAnalytics({ force: true, preserveOnFailure: false })
+      await Promise.all([heatmapPromise, adminUsersPromise])
     })()
   } else {
     // 用户页面：loadStats 已包含记录加载，不需要单独调用 loadRecords
@@ -567,6 +933,10 @@ onMounted(async () => {
   }
 
   if (globalAutoRefresh.value && isPageVisible.value) {
+    startActiveDiscovery()
+  }
+
+  if (globalAutoRefresh.value && isPageVisible.value) {
     startGlobalAutoRefresh()
   }
 })
@@ -577,30 +947,30 @@ async function handleTimeRangeChange(value: DateRangeParams) {
   currentPage.value = 1 // 重置到第一页
   if (isAdminPage.value) {
     await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
-    await refreshAdminAnalytics({ force: true })
+    await refreshAdminAnalyticsForSelectionChange()
     return
   }
   await loadStats(timeRange.value)
-  // 用户页面：loadStats 已包含记录加载
+  if (userUsesServerRecordFilters.value) {
+    await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
+  }
 }
 
 // 处理分页变化
 async function handlePageChange(page: number) {
   currentPage.value = page
-  if (isAdminPage.value) {
+  if (isAdminPage.value || userUsesServerRecordFilters.value) {
     await loadRecords({ page, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
   }
-  // 用户页面使用前端分页，无需重新请求
 }
 
 // 处理每页大小变化
 async function handlePageSizeChange(size: number) {
   pageSize.value = size
   currentPage.value = 1  // 重置到第一页
-  if (isAdminPage.value) {
+  if (isAdminPage.value || userUsesServerRecordFilters.value) {
     await loadRecords({ page: 1, pageSize: size }, getCurrentFilters(), timeRange.value)
   }
-  // 用户页面使用前端分页，无需重新请求
 }
 
 // 获取当前筛选参数
@@ -611,7 +981,9 @@ function getCurrentFilters() {
     model: filterModel.value !== '__all__' ? filterModel.value : undefined,
     provider: filterProvider.value !== '__all__' ? filterProvider.value : undefined,
     api_format: filterApiFormat.value !== '__all__' ? filterApiFormat.value : undefined,
-    status: filterStatus.value !== '__all__' ? filterStatus.value : undefined
+    status: filterStatus.value !== '__all__' ? filterStatus.value : undefined,
+    client_family: filterClientFamily.value !== '__all__' ? filterClientFamily.value : undefined,
+    hideUnknownRecords: hideUnknownRecords.value || undefined
   }
 }
 
@@ -622,9 +994,11 @@ async function handleFilterSearchChange(value: string) {
 
   if (isAdminPage.value) {
     await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
+  } else if (userUsesServerRecordFilters.value) {
+    await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
+  } else {
+    await loadStats(timeRange.value)
   }
-  // 用户页面：search 需要重新从后端拉取数据（后端支持 search 参数）
-  // 但通过 filteredRecords 做前端过滤已覆盖，无需额外请求
 }
 
 async function handleFilterUserChange(value: string) {
@@ -633,6 +1007,7 @@ async function handleFilterUserChange(value: string) {
 
   if (isAdminPage.value) {
     await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
+    await refreshAdminAnalyticsForSelectionChange()
   }
 }
 
@@ -642,6 +1017,7 @@ async function handleFilterModelChange(value: string) {
 
   if (isAdminPage.value) {
     await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
+    await refreshAdminAnalyticsForSelectionChange()
   }
 }
 
@@ -651,6 +1027,7 @@ async function handleFilterProviderChange(value: string) {
 
   if (isAdminPage.value) {
     await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
+    await refreshAdminAnalyticsForSelectionChange()
   }
 }
 
@@ -658,13 +1035,26 @@ async function handleFilterApiFormatChange(value: string) {
   filterApiFormat.value = value
   currentPage.value = 1
 
-  if (isAdminPage.value) {
+  if (isAdminPage.value || userUsesServerRecordFilters.value) {
     await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
+  } else {
+    await loadStats(timeRange.value)
   }
 }
 
 async function handleFilterStatusChange(value: string) {
   filterStatus.value = value as FilterStatusValue
+  currentPage.value = 1
+
+  if (isAdminPage.value || userUsesServerRecordFilters.value) {
+    await loadRecords({ page: 1, pageSize: pageSize.value }, getCurrentFilters(), timeRange.value)
+  } else {
+    await loadStats(timeRange.value)
+  }
+}
+
+async function handleFilterClientFamilyChange(value: string) {
+  filterClientFamily.value = value
   currentPage.value = 1
 
   if (isAdminPage.value) {
@@ -678,18 +1068,16 @@ async function refreshData() {
   if (refreshInFlight) return refreshInFlight
 
   refreshInFlight = (async () => {
-    if (isAdminPage.value) {
+    if (isAdminPage.value || userUsesServerRecordFilters.value) {
       await loadRecords(
         { page: currentPage.value, pageSize: pageSize.value },
         getCurrentFilters(),
         timeRange.value
       )
-      void refreshAdminAnalytics()
       return
     }
 
     await loadStats(timeRange.value)
-    // 用户页面：loadStats 已包含记录加载
   })()
 
   try {
@@ -699,11 +1087,240 @@ async function refreshData() {
   }
 }
 
+async function handleManualRefresh() {
+  if (!isPageVisible.value) return
+  await refreshData()
+}
+
 // 显示请求详情
 function showRequestDetail(id: string) {
   if (!isAdminPage.value) return
   selectedRequestId.value = id
   detailModalOpen.value = true
+}
+
+function sameImageProgress(left?: ImageProgress | null, right?: ImageProgress | null): boolean {
+  if (!left && !right) return true
+  if (!left || !right) return false
+  return left.phase === right.phase &&
+    left.upstream_ttfb_ms === right.upstream_ttfb_ms &&
+    left.upstream_sse_frame_count === right.upstream_sse_frame_count &&
+    left.last_upstream_event === right.last_upstream_event &&
+    left.last_upstream_frame_at_unix_ms === right.last_upstream_frame_at_unix_ms &&
+    left.partial_image_count === right.partial_image_count &&
+    left.last_client_visible_event === right.last_client_visible_event &&
+    left.downstream_heartbeat_count === right.downstream_heartbeat_count &&
+    left.last_downstream_heartbeat_at_unix_ms === right.last_downstream_heartbeat_at_unix_ms &&
+    left.downstream_heartbeat_interval_ms === right.downstream_heartbeat_interval_ms
+}
+
+function handleDetailRequestState(update: {
+  id: string
+  status?: RequestStatus
+  statusCode?: number | null
+  inputTokens?: number | null
+  effectiveInputTokens?: number | null
+  outputTokens?: number | null
+  totalTokens?: number | null
+  cacheCreationInputTokens?: number | null
+  cacheCreationEphemeral5mInputTokens?: number | null
+  cacheCreationEphemeral1hInputTokens?: number | null
+  cacheReadInputTokens?: number | null
+  cost?: number | null
+  actualCost?: number | null
+  responseTimeMs?: number | null
+  firstByteTimeMs?: number | null
+  isStream?: boolean | null
+  isWebSocket?: boolean | null
+  websocketTransport?: string | null
+  usageAvailable?: boolean | null
+  usagePricingAvailable?: boolean | null
+  inputAudioTokens?: number | null
+  outputAudioTokens?: number | null
+  upstreamIsStream?: boolean | null
+  clientRequestedStream?: boolean | null
+  clientIsStream?: boolean | null
+  apiFormat?: string | null
+  endpointApiFormat?: string | null
+  hasFormatConversion?: boolean | null
+  targetModel?: string | null
+  requestedReasoningEffort?: string | null
+  reasoningEffort?: string | null
+  serviceTier?: string | null
+  actualServiceTier?: string | null
+  imageProgress?: ImageProgress | null
+  errorMessage?: string | null
+  updatedAt?: string | null
+}) {
+  const record = currentRecords.value.find(record => record.id === update.id)
+  if (!record) return
+
+  const nextStatus = resolveDetailUpdateStatus(update)
+  const lifecycle = mergeUsageRecordLifecycleSnapshot(record, {
+    ...(nextStatus ? { status: nextStatus } : {}),
+    ...('statusCode' in update ? { statusCode: update.statusCode } : {}),
+    ...('errorMessage' in update ? { errorMessage: update.errorMessage } : {}),
+    ...('updatedAt' in update ? { updatedAt: update.updatedAt } : {}),
+  })
+  record.status = lifecycle.status
+  record.status_code = lifecycle.status_code
+  record.error_message = lifecycle.error_message
+  record.updated_at = lifecycle.updated_at
+  if (!lifecycle.accepted) return
+
+  if ('inputTokens' in update && update.inputTokens != null) {
+    record.input_tokens = update.inputTokens
+  }
+  if ('effectiveInputTokens' in update && update.effectiveInputTokens != null) {
+    record.effective_input_tokens = update.effectiveInputTokens
+  }
+  if ('outputTokens' in update && update.outputTokens != null) {
+    record.output_tokens = update.outputTokens
+  }
+  if ('totalTokens' in update && update.totalTokens != null) {
+    record.total_tokens = update.totalTokens
+  }
+  if ('cacheCreationInputTokens' in update && update.cacheCreationInputTokens != null) {
+    record.cache_creation_input_tokens = update.cacheCreationInputTokens
+  }
+  if ('cacheCreationEphemeral5mInputTokens' in update && update.cacheCreationEphemeral5mInputTokens != null) {
+    record.cache_creation_ephemeral_5m_input_tokens = update.cacheCreationEphemeral5mInputTokens
+  }
+  if ('cacheCreationEphemeral1hInputTokens' in update && update.cacheCreationEphemeral1hInputTokens != null) {
+    record.cache_creation_ephemeral_1h_input_tokens = update.cacheCreationEphemeral1hInputTokens
+  }
+  if ('cacheReadInputTokens' in update && update.cacheReadInputTokens != null) {
+    record.cache_read_input_tokens = update.cacheReadInputTokens
+  }
+  if ('cost' in update && update.cost != null) {
+    record.cost = update.cost
+  }
+  if ('actualCost' in update && update.actualCost != null) {
+    record.actual_cost = update.actualCost
+  }
+  if ('responseTimeMs' in update) {
+    const responseTiming = mergeUsageRecordResponseTiming(
+      {
+        response_time_ms: record.response_time_ms,
+        response_time_updated_at: record.response_time_updated_at,
+      },
+      {
+        response_time_ms: update.responseTimeMs,
+        response_time_updated_at: null,
+      },
+      {
+        preferNext: lifecycle.accepted && (
+          nextStatus === 'completed' ||
+          nextStatus === 'failed' ||
+          nextStatus === 'cancelled'
+        ),
+      },
+    )
+    record.response_time_ms = responseTiming.response_time_ms
+    record.response_time_updated_at = responseTiming.response_time_updated_at
+  }
+  if ('firstByteTimeMs' in update) {
+    record.first_byte_time_ms = mergeUsageRecordFirstByteTimeMs(
+      record.first_byte_time_ms,
+      update.firstByteTimeMs
+    )
+  }
+  if ('isStream' in update && typeof update.isStream === 'boolean') {
+    record.is_stream = update.isStream
+  }
+  if ('isWebSocket' in update && typeof update.isWebSocket === 'boolean') {
+    record.is_websocket = record.is_websocket === true || update.isWebSocket
+  }
+  if (
+    'websocketTransport' in update
+    && typeof update.websocketTransport === 'string'
+    && update.websocketTransport.trim()
+  ) {
+    record.websocket_transport = update.websocketTransport
+  }
+  if ('usageAvailable' in update && typeof update.usageAvailable === 'boolean') {
+    record.usage_available = update.usageAvailable
+  }
+  if (
+    'usagePricingAvailable' in update
+    && typeof update.usagePricingAvailable === 'boolean'
+  ) {
+    record.usage_pricing_available = update.usagePricingAvailable
+  }
+  if ('inputAudioTokens' in update && typeof update.inputAudioTokens === 'number') {
+    record.input_audio_tokens = update.inputAudioTokens
+  }
+  if ('outputAudioTokens' in update && typeof update.outputAudioTokens === 'number') {
+    record.output_audio_tokens = update.outputAudioTokens
+  }
+  if ('upstreamIsStream' in update && typeof update.upstreamIsStream === 'boolean') {
+    record.upstream_is_stream = update.upstreamIsStream
+  }
+  if ('clientRequestedStream' in update && typeof update.clientRequestedStream === 'boolean') {
+    record.client_requested_stream = update.clientRequestedStream
+  }
+  if ('clientIsStream' in update && typeof update.clientIsStream === 'boolean') {
+    record.client_is_stream = update.clientIsStream
+  }
+  if ('apiFormat' in update && typeof update.apiFormat === 'string') {
+    record.api_format = update.apiFormat
+  }
+  if ('endpointApiFormat' in update && typeof update.endpointApiFormat === 'string') {
+    record.endpoint_api_format = update.endpointApiFormat
+  }
+  if ('hasFormatConversion' in update && typeof update.hasFormatConversion === 'boolean') {
+    record.has_format_conversion = update.hasFormatConversion
+  }
+  if ('targetModel' in update) {
+    record.target_model = typeof update.targetModel === 'string' ? update.targetModel : update.targetModel ?? undefined
+  }
+  if ('reasoningEffort' in update) {
+    record.reasoning_effort = typeof update.reasoningEffort === 'string' ? update.reasoningEffort : null
+  }
+  if ('requestedReasoningEffort' in update) {
+    record.requested_reasoning_effort = typeof update.requestedReasoningEffort === 'string'
+      ? update.requestedReasoningEffort
+      : null
+  }
+  if ('serviceTier' in update) {
+    record.service_tier = typeof update.serviceTier === 'string' ? update.serviceTier : null
+  }
+  if ('actualServiceTier' in update) {
+    record.actual_service_tier = typeof update.actualServiceTier === 'string'
+      ? update.actualServiceTier
+      : null
+  }
+  if ('imageProgress' in update) {
+    const nextProgress = update.imageProgress ?? null
+    if (!sameImageProgress(record.image_progress, nextProgress)) {
+      record.image_progress = nextProgress
+    }
+  }
+}
+
+function resolveDetailUpdateStatus(update: {
+  status?: RequestStatus
+  statusCode?: number | null
+  imageProgress?: ImageProgress | null
+  errorMessage?: string | null
+}): RequestStatus | undefined {
+  const status = normalizeRequestStatus(update.status)
+  const hasFailureSignal =
+    (typeof update.statusCode === 'number' && update.statusCode >= 400) ||
+    (typeof update.errorMessage === 'string' && update.errorMessage.trim().length > 0) ||
+    update.imageProgress?.phase === 'failed'
+
+  if ((status == null || status === 'pending' || status === 'streaming') && hasFailureSignal) {
+    return 'failed'
+  }
+  return status
+}
+
+function prefetchRequestDetail(id: string) {
+  if (!isAdminPage.value) return
+  void dashboardApi.prefetchRequestDetail(id).catch(error => {
+    log.debug('预取请求详情失败', error)
+  })
 }
 
 </script>

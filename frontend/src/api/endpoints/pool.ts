@@ -1,6 +1,13 @@
 import client from '../client'
-import { dedupedRequest } from '@/utils/cache'
-import type { AllowedModels, OAuthOrganizationInfo, ProxyConfig } from './types/provider'
+import { buildCacheKey, cachedRequest } from '@/utils/cache'
+import type {
+  AllowedModels,
+  ProviderType,
+  OAuthOrganizationInfo,
+  ProxyConfig,
+  UpstreamMetadata,
+} from './types/provider'
+import type { ProviderKeyStatusSnapshot } from './types/statusSnapshot'
 
 const POOL_BATCH_ACTION_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -22,6 +29,11 @@ export interface PoolStatusResponse {
   pool_enabled: boolean
   total_keys: number
   total_sticky_sessions: number
+  provider_hot_count: number
+  provider_desired_hot: number
+  provider_in_flight: number
+  provider_ema_in_flight: number
+  provider_burst_pending: boolean
   keys: PoolKeyStatus[]
 }
 
@@ -66,11 +78,16 @@ export async function resetPoolCost(
 export interface PoolOverviewItem {
   provider_id: string
   provider_name: string
-  provider_type: string
+  provider_type: ProviderType
   total_keys: number
   active_keys: number
   cooldown_count: number
   pool_enabled: boolean
+  provider_hot_count?: number
+  provider_desired_hot?: number
+  provider_in_flight?: number
+  provider_ema_in_flight?: number
+  provider_burst_pending?: boolean
 }
 
 export interface PoolOverviewResponse {
@@ -87,6 +104,8 @@ export interface PoolPresetMeta {
   label: string
   description: string
   providers: string[]
+  default_enabled?: boolean
+  default_enabled_providers?: string[]
   modes?: PoolPresetModeMeta[] | null
   default_mode?: string | null
   mutex_group?: string | null
@@ -96,22 +115,45 @@ export interface PoolPresetMeta {
 export interface PoolKeyDetail {
   key_id: string
   key_name: string
+  provider_type?: string | null
   is_active: boolean
   auth_type: string
+  auth_type_by_format?: Record<string, 'api_key' | 'bearer'> | null
+  allow_auth_channel_mismatch_formats?: string[] | null
+  credential_kind?: 'raw_secret' | 'oauth_session' | 'service_account' | string | null
+  runtime_auth_kind?: 'api_key' | 'bearer' | 'service_account' | 'mixed' | 'unknown' | string | null
+  oauth_managed?: boolean
+  agent_identity?: boolean
+  oauth_header_auth?: boolean
+  can_refresh_oauth?: boolean
+  can_export_oauth?: boolean
+  can_edit_oauth?: boolean
   oauth_expires_at?: number | null
-  oauth_invalid_at?: number | null
-  oauth_invalid_reason?: string | null
+  oauth_invalid_at?: number | null  // 兼容字段；优先使用 status_snapshot.oauth
+  oauth_invalid_reason?: string | null  // 兼容字段；优先使用 status_snapshot.oauth
   oauth_plan_type?: string | null
   oauth_account_id?: string | null
   oauth_account_user_id?: string | null
+  oauth_account_name?: string | null
   oauth_organizations?: OAuthOrganizationInfo[] | null
+  oauth_temporary?: boolean | null
+  account_status_code?: string | null  // 兼容字段；优先使用 status_snapshot.account
+  account_status_label?: string | null  // 兼容字段；优先使用 status_snapshot.account
+  account_status_reason?: string | null  // 兼容字段；优先使用 status_snapshot.account
+  account_status_blocked?: boolean  // 兼容字段；优先使用 status_snapshot.account
+  account_status_recoverable?: boolean  // 兼容字段；优先使用 status_snapshot.account
+  account_status_source?: string | null  // 兼容字段；优先使用 status_snapshot.account
+  status_snapshot?: ProviderKeyStatusSnapshot | null
+  upstream_metadata?: UpstreamMetadata | null
   quota_updated_at?: number | null
   health_score?: number
   circuit_breaker_open?: boolean
+  pool_score?: PoolKeyScoreDetail | null
   api_formats?: string[]
   rate_multipliers?: Record<string, number> | null
   internal_priority?: number
   rpm_limit?: number | null
+  concurrent_limit?: number | null
   cache_ttl_minutes?: number
   max_probe_interval_minutes?: number
   note?: string | null
@@ -122,7 +164,7 @@ export interface PoolKeyDetail {
   model_include_patterns?: string[] | null
   model_exclude_patterns?: string[] | null
   proxy?: ProxyConfig | null
-  account_quota: string | null
+  account_quota: string | null  // compatibility only; UI should prefer status_snapshot.quota
   cooldown_reason: string | null
   cooldown_ttl_seconds: number | null
   cost_window_usage: number
@@ -133,6 +175,7 @@ export interface PoolKeyDetail {
   sticky_sessions: number
   lru_score: number | null
   created_at: string | null
+  imported_at?: string | null
   last_used_at: string | null
   scheduling_status?: 'available' | 'degraded' | 'blocked'
   scheduling_reason?:
@@ -167,17 +210,108 @@ export interface PoolKeysPageResponse {
   keys: PoolKeyDetail[]
 }
 
+export interface PoolKeyScoreDetail {
+  id: string
+  capability: string
+  scope_kind: string
+  scope_id: string | null
+  score: number
+  hard_state: PoolScoreHardState
+  score_version: number
+  score_reason: Record<string, unknown> | null
+  last_ranked_at: number | null
+  last_scheduled_at: number | null
+  last_success_at: number | null
+  last_failure_at: number | null
+  failure_count: number
+  last_probe_attempt_at: number | null
+  last_probe_success_at: number | null
+  last_probe_failure_at: number | null
+  probe_failure_count: number
+  probe_status: PoolScoreProbeStatus
+  updated_at: number
+}
+
+export type PoolScoreHardState =
+  | 'available'
+  | 'unknown'
+  | 'cooldown'
+  | 'quota_exhausted'
+  | 'auth_invalid'
+  | 'banned'
+  | 'inactive'
+
+export type PoolScoreProbeStatus = 'never' | 'ok' | 'failed' | 'stale' | 'in_progress'
+
+export interface PoolScoreKeySummary {
+  id: string
+  name: string
+  auth_type: string
+  is_active: boolean
+  internal_priority: number
+  last_used_at: number | null
+}
+
+export interface PoolMemberScoreItem extends PoolKeyScoreDetail {
+  pool_kind: string
+  pool_id: string
+  member_kind: string
+  member_id: string
+  key?: PoolScoreKeySummary | null
+}
+
+export interface PoolScoresResponse {
+  provider_id: string
+  page: number
+  page_size: number
+  filters: {
+    api_format?: string | null
+    model_id?: string | null
+    hard_state?: string | null
+    probe_status?: string | null
+  }
+  items: PoolMemberScoreItem[]
+}
+
 export interface PoolKeysQuery {
   page?: number
   page_size?: number
   search?: string
-  status?: 'all' | 'active' | 'cooldown' | 'inactive'
+  status?:
+    | 'all'
+    | 'available'
+    | 'cooldown'
+    | 'inactive'
+    | 'invalid'
+    | 'expired'
+    | 'account_banned'
+    | 'quota_exhausted'
+    | 'account_forbidden'
+    | 'account_disabled'
+    | 'workspace_deactivated'
+    | 'account_verification'
+    | 'account_quarantined'
+    | 'account_blocked'
+    | 'rate_limited'
+    | 'cost_exhausted'
   quick_selectors?: string[]
   search_scope?: 'name' | 'full'
+  sort_by?: 'imported_at' | 'last_used_at' | 'score'
+  sort_order?: 'asc' | 'desc'
+}
+
+export interface PoolScoresQuery {
+  page?: number
+  page_size?: number
+  api_format?: string
+  model_id?: string
+  hard_state?: string
+  probe_status?: string
 }
 
 export interface PoolKeySelectionRequest {
   search?: string
+  status?: PoolKeysQuery['status']
   quick_selectors?: string[]
 }
 
@@ -185,6 +319,16 @@ export interface PoolKeySelectionItem {
   key_id: string
   key_name: string
   auth_type: string
+  auth_type_by_format?: Record<string, 'api_key' | 'bearer'> | null
+  allow_auth_channel_mismatch_formats?: string[] | null
+  credential_kind?: 'raw_secret' | 'oauth_session' | 'service_account' | string | null
+  runtime_auth_kind?: 'api_key' | 'bearer' | 'service_account' | 'mixed' | 'unknown' | string | null
+  oauth_managed?: boolean
+  agent_identity?: boolean
+  oauth_header_auth?: boolean
+  can_refresh_oauth?: boolean
+  can_export_oauth?: boolean
+  can_edit_oauth?: boolean
 }
 
 export interface PoolKeySelectionResponse {
@@ -198,41 +342,155 @@ export interface PoolBatchAction {
     | 'enable'
     | 'disable'
     | 'delete'
-    | 'clear_cooldown'
-    | 'reset_cost'
-    | 'regenerate_fingerprint'
     | 'clear_proxy'
     | 'set_proxy'
+    | 'update_settings'
   payload?: Record<string, unknown> | null
 }
 
-export async function getPoolOverview(): Promise<PoolOverviewResponse> {
-  return dedupedRequest('pool:overview', async () => {
-    const response = await client.get<PoolOverviewResponse>('/api/admin/pool/overview')
-    return response.data
-  })
+export interface PoolKeySharedSettingsPatch {
+  internal_priority?: number
+  rpm_limit?: number | null
+  concurrent_limit?: number | null
+  cache_ttl_minutes?: number
+  max_probe_interval_minutes?: number
+  is_active?: boolean
+  note?: string | null
 }
 
-export async function getPoolSchedulingPresets(): Promise<PoolPresetMeta[]> {
-  return dedupedRequest('pool:scheduling-presets', async () => {
-    const response = await client.get<PoolPresetMeta[]>('/api/admin/pool/scheduling-presets')
-    return response.data
-  })
+export interface PoolKeyBatchUpdatePatch extends PoolKeySharedSettingsPatch {
+  api_formats?: string[]
+  auth_type_by_format?: Record<string, 'api_key' | 'bearer'> | null
+  allow_auth_channel_mismatch_formats?: string[] | null
+  rate_multipliers?: Record<string, number> | null
+  global_priority_by_format?: Record<string, number> | null
+  allowed_models?: AllowedModels
+  capabilities?: Record<string, boolean> | null
+  auto_fetch_models?: boolean
+  locked_models?: string[]
+  model_include_patterns?: string[]
+  model_exclude_patterns?: string[]
+  proxy?: ProxyConfig | null
+}
+
+export interface PoolKeyBatchUpdateRequest {
+  key_ids: string[]
+  patch: PoolKeyBatchUpdatePatch
+}
+
+export interface PoolKeyBatchModelSyncResult {
+  requested: number
+  attempted: number
+  succeeded: number
+  failed: number
+  skipped: number
+  error?: string
+}
+
+export interface PoolKeyBatchUpdateResponse {
+  affected: number
+  message: string
+  model_sync: PoolKeyBatchModelSyncResult | null
+}
+
+export interface PoolKeySettingsPatch extends PoolKeySharedSettingsPatch {
+  proxy_node_id?: string | null
+}
+
+export interface PoolBatchImportRequest {
+  keys: Array<{
+    name: string
+    api_key: string
+    auth_type: 'api_key' | 'bearer'
+    api_formats?: string[]
+    settings?: PoolKeySettingsPatch
+  }>
+  api_formats?: string[]
+  settings?: PoolKeySettingsPatch
+}
+
+export interface PoolBatchImportResult {
+  imported: number
+  skipped: number
+  errors: Array<{ index: number; reason: string }>
+}
+
+interface PoolReadOptions {
+  cacheTtlMs?: number
+}
+
+export async function getPoolOverview(
+  options: PoolReadOptions = {},
+): Promise<PoolOverviewResponse> {
+  const cacheTtlMs = options.cacheTtlMs ?? 0
+  return cachedRequest(
+    'pool:overview',
+    async () => {
+      const response = await client.get<PoolOverviewResponse>('/api/admin/pool/overview')
+      return response.data
+    },
+    cacheTtlMs,
+  )
+}
+
+export async function getPoolSchedulingPresets(
+  options: PoolReadOptions = {},
+): Promise<PoolPresetMeta[]> {
+  const cacheTtlMs = options.cacheTtlMs ?? 0
+  return cachedRequest(
+    'pool:scheduling-presets',
+    async () => {
+      const response = await client.get<PoolPresetMeta[]>('/api/admin/pool/scheduling-presets')
+      return response.data
+    },
+    cacheTtlMs,
+  )
 }
 
 export async function listPoolKeys(
   providerId: string,
   params: PoolKeysQuery = {},
+  options: PoolReadOptions = {},
 ): Promise<PoolKeysPageResponse> {
   const normalizedParams = {
     ...params,
     quick_selectors: params.quick_selectors?.length ? params.quick_selectors.join(',') : undefined,
   }
-  const key = `pool:keys:${providerId}|${normalizedParams.page ?? ''}|${normalizedParams.page_size ?? ''}|${normalizedParams.search ?? ''}|${normalizedParams.status ?? ''}|${normalizedParams.quick_selectors ?? ''}|${normalizedParams.search_scope ?? ''}`
-  return dedupedRequest(key, async () => {
-    const response = await client.get<PoolKeysPageResponse>(`/api/admin/pool/${providerId}/keys`, { params: normalizedParams })
-    return response.data
-  })
+  const cacheKey = buildCacheKey(
+    `pool:keys:${providerId}`,
+    normalizedParams as Record<string, unknown>,
+  )
+  return cachedRequest(
+    cacheKey,
+    async () => {
+      const response = await client.get<PoolKeysPageResponse>(`/api/admin/pool/${providerId}/keys`, { params: normalizedParams })
+      return response.data
+    },
+    options.cacheTtlMs ?? 0,
+  )
+}
+
+export async function listPoolScores(
+  providerId: string,
+  params: PoolScoresQuery = {},
+  options: PoolReadOptions = {},
+): Promise<PoolScoresResponse> {
+  const normalizedParams = { ...params }
+  const cacheKey = buildCacheKey(
+    `pool:scores:${providerId}`,
+    normalizedParams as Record<string, unknown>,
+  )
+  return cachedRequest(
+    cacheKey,
+    async () => {
+      const response = await client.get<PoolScoresResponse>(
+        `/api/admin/pool/${providerId}/scores`,
+        { params: normalizedParams },
+      )
+      return response.data
+    },
+    options.cacheTtlMs ?? 0,
+  )
 }
 
 export async function resolvePoolKeySelection(
@@ -251,8 +509,32 @@ export async function batchActionPoolKeys(
   providerId: string,
   body: PoolBatchAction,
 ): Promise<{ affected: number; message: string; task_id?: string }> {
-  const response = await client.post(
+  const response = await client.post<{ affected: number; message: string; task_id?: string }>(
     `/api/admin/pool/${providerId}/keys/batch-action`,
+    body,
+    { timeout: POOL_BATCH_ACTION_TIMEOUT_MS },
+  )
+  return response.data
+}
+
+export async function batchUpdatePoolKeys(
+  providerId: string,
+  body: PoolKeyBatchUpdateRequest,
+): Promise<PoolKeyBatchUpdateResponse> {
+  const response = await client.patch<PoolKeyBatchUpdateResponse>(
+    `/api/admin/pool/${providerId}/keys/batch-update`,
+    body,
+    { timeout: POOL_BATCH_ACTION_TIMEOUT_MS },
+  )
+  return response.data
+}
+
+export async function batchImportPoolKeys(
+  providerId: string,
+  body: PoolBatchImportRequest,
+): Promise<PoolBatchImportResult> {
+  const response = await client.post<PoolBatchImportResult>(
+    `/api/admin/pool/${providerId}/keys/batch-import`,
     body,
     { timeout: POOL_BATCH_ACTION_TIMEOUT_MS },
   )
@@ -280,7 +562,7 @@ export async function getPoolBatchDeleteTask(
 export async function cleanupBannedPoolKeys(
   providerId: string,
 ): Promise<{ affected: number; message: string }> {
-  const response = await client.post(
+  const response = await client.post<{ affected: number; message: string }>(
     `/api/admin/pool/${providerId}/keys/cleanup-banned`,
     undefined,
     { timeout: POOL_BATCH_ACTION_TIMEOUT_MS },

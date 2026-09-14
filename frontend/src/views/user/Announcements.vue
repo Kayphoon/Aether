@@ -131,13 +131,26 @@
               <TableCell class="py-4">
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2 mb-1">
-                    <span class="text-sm font-medium text-foreground">{{ announcement.title }}</span>
+                    <span
+                      translate="no"
+                      class="text-sm font-medium text-foreground"
+                    >{{ announcement.title }}</span>
+                    <Badge
+                      v-if="announcement.requires_ack"
+                      variant="outline"
+                      class="text-[10px] px-1.5 py-0"
+                    >
+                      必读
+                    </Badge>
                     <Pin
                       v-if="announcement.is_pinned"
                       class="w-3.5 h-3.5 text-muted-foreground flex-shrink-0"
                     />
                   </div>
-                  <p class="text-xs text-muted-foreground line-clamp-1">
+                  <p
+                    translate="no"
+                    class="text-xs text-muted-foreground line-clamp-1"
+                  >
                     {{ getPlainText(announcement.content) }}
                   </p>
                 </div>
@@ -239,7 +252,17 @@
                   class="w-4 h-4 shrink-0"
                   :class="getIconColor(announcement.type)"
                 />
-                <span class="font-medium text-sm">{{ announcement.title }}</span>
+                <span
+                  translate="no"
+                  class="font-medium text-sm"
+                >{{ announcement.title }}</span>
+                <Badge
+                  v-if="announcement.requires_ack"
+                  variant="outline"
+                  class="text-[10px] shrink-0"
+                >
+                  必读
+                </Badge>
                 <Pin
                   v-if="announcement.is_pinned"
                   class="w-3.5 h-3.5 text-muted-foreground shrink-0"
@@ -252,7 +275,10 @@
                 {{ announcement.is_read ? '已读' : '未读' }}
               </Badge>
             </div>
-            <p class="text-xs text-muted-foreground line-clamp-2">
+            <p
+              translate="no"
+              class="text-xs text-muted-foreground line-clamp-2"
+            >
               {{ getPlainText(announcement.content) }}
             </p>
             <div class="flex items-center gap-2 text-xs text-muted-foreground">
@@ -433,6 +459,18 @@
               class="cursor-pointer text-sm"
             >置顶公告</Label>
           </div>
+          <div class="flex items-center gap-2">
+            <input
+              id="requires-ack"
+              v-model="formData.requires_ack"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300 cursor-pointer"
+            >
+            <Label
+              for="requires-ack"
+              class="cursor-pointer text-sm"
+            >必读确认</Label>
+          </div>
           <div
             v-if="editingAnnouncement"
             class="flex items-center gap-2"
@@ -529,6 +567,7 @@
 
         <!-- eslint-disable vue/no-v-html -->
         <div
+          translate="no"
           class="prose prose-sm dark:prose-invert max-w-none"
           v-html="renderMarkdown(viewingAnnouncement.content)"
         />
@@ -550,6 +589,8 @@
 </template>
 
 <script setup lang="ts">
+import { getI18nLocale } from '@/i18n'
+import { formatRelativeTime } from '@/utils/format'
 import { ref, onMounted, computed } from 'vue'
 import { announcementApi, type Announcement } from '@/api/announcements'
 import { useAuthStore } from '@/stores/auth'
@@ -611,7 +652,8 @@ const formData = ref({
   type: 'info' as 'info' | 'warning' | 'maintenance' | 'important',
   priority: 0,
   is_pinned: false,
-  is_active: true
+  is_active: true,
+  requires_ack: false
 })
 
 onMounted(() => {
@@ -623,7 +665,7 @@ async function loadAnnouncements(page = 1) {
   currentPage.value = page
   try {
     const response = await announcementApi.getAnnouncements({
-      active_only: !isAdmin.value, // 管理员可以看到所有公告
+      active_only: !authStore.canAccessAdmin, // 管理员和审计管理员可以看到所有公告
       limit: pageSize.value,
       offset: (page - 1) * pageSize.value
     })
@@ -663,7 +705,8 @@ function openCreateDialog() {
     type: 'info',
     priority: 0,
     is_pinned: false,
-    is_active: true
+    is_active: true,
+    requires_ack: false
   }
   dialogOpen.value = true
 }
@@ -676,7 +719,8 @@ function openEditDialog(announcement: Announcement) {
     type: announcement.type,
     priority: announcement.priority,
     is_pinned: announcement.is_pinned,
-    is_active: announcement.is_active
+    is_active: announcement.is_active,
+    requires_ack: !!announcement.requires_ack
   }
   dialogOpen.value = true
 }
@@ -823,7 +867,7 @@ function getDialogIconClass(type?: string) {
 
 function formatFullDate(dateString: string): string {
   const date = new Date(dateString)
-  return date.toLocaleDateString('zh-CN', {
+  return date.toLocaleDateString(getI18nLocale(), {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -855,13 +899,13 @@ function formatDate(dateString: string): string {
   const minutes = Math.floor(diff / (1000 * 60))
 
   if (minutes < 60) {
-    return `${minutes} 分钟前`
+    return minutes < 1 ? formatRelativeTime(0, 'second') : formatRelativeTime(-minutes, 'minute')
   } else if (hours < 24) {
-    return `${hours} 小时前`
+    return formatRelativeTime(-hours, 'hour')
   } else if (days < 7) {
-    return `${days} 天前`
+    return formatRelativeTime(-days, 'day')
   } else {
-    return date.toLocaleDateString('zh-CN', {
+    return date.toLocaleDateString(getI18nLocale(), {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit'

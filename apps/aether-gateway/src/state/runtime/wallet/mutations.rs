@@ -1,0 +1,281 @@
+use aether_data::repository::wallet::{
+    AdjustWalletBalanceInput, CompareAndSwapPaymentOrderStripeClientSecretInput,
+    CompleteAdminWalletRefundInput, CreateManualWalletRechargeInput, CreatePlanPurchaseOrderInput,
+    CreatePlanPurchaseOrderOutcome, CreateWalletRechargeOrderInput,
+    CreateWalletRechargeOrderOutcome, CreateWalletRefundRequestInput,
+    CreateWalletRefundRequestOutcome, CreditAdminPaymentOrderInput, FailAdminWalletRefundInput,
+    FailWalletRechargeCheckoutInput, ProcessAdminWalletRefundInput, ProcessPaymentCallbackInput,
+    ProcessPaymentCallbackOutcome, ReclaimWalletRechargeCheckoutInput,
+    UpdateAdminWalletRefundGatewayInput, UpdateWalletRechargeCheckoutInput, WalletMutationOutcome,
+};
+
+use crate::{AppState, GatewayError};
+
+impl AppState {
+    pub(crate) async fn create_wallet_recharge_order(
+        &self,
+        input: CreateWalletRechargeOrderInput,
+    ) -> Result<Option<CreateWalletRechargeOrderOutcome>, GatewayError> {
+        self.data
+            .create_wallet_recharge_order(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn update_wallet_recharge_checkout(
+        &self,
+        input: UpdateWalletRechargeCheckoutInput,
+    ) -> Result<
+        Option<WalletMutationOutcome<aether_data::repository::wallet::StoredAdminPaymentOrder>>,
+        GatewayError,
+    > {
+        self.data
+            .update_wallet_recharge_checkout(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn compare_and_swap_payment_order_stripe_client_secret(
+        &self,
+        input: CompareAndSwapPaymentOrderStripeClientSecretInput,
+    ) -> Result<Option<bool>, GatewayError> {
+        self.data
+            .compare_and_swap_payment_order_stripe_client_secret(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn fail_wallet_recharge_checkout(
+        &self,
+        input: FailWalletRechargeCheckoutInput,
+    ) -> Result<
+        Option<WalletMutationOutcome<aether_data::repository::wallet::StoredAdminPaymentOrder>>,
+        GatewayError,
+    > {
+        self.data
+            .fail_wallet_recharge_checkout(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn reclaim_wallet_recharge_checkout(
+        &self,
+        input: ReclaimWalletRechargeCheckoutInput,
+    ) -> Result<
+        Option<WalletMutationOutcome<aether_data::repository::wallet::StoredAdminPaymentOrder>>,
+        GatewayError,
+    > {
+        self.data
+            .reclaim_wallet_recharge_checkout(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn create_plan_purchase_order(
+        &self,
+        input: CreatePlanPurchaseOrderInput,
+    ) -> Result<Option<CreatePlanPurchaseOrderOutcome>, GatewayError> {
+        self.data
+            .create_plan_purchase_order(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn create_wallet_refund_request(
+        &self,
+        input: CreateWalletRefundRequestInput,
+    ) -> Result<Option<CreateWalletRefundRequestOutcome>, GatewayError> {
+        self.data
+            .create_wallet_refund_request(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn process_payment_callback(
+        &self,
+        input: ProcessPaymentCallbackInput,
+    ) -> Result<Option<ProcessPaymentCallbackOutcome>, GatewayError> {
+        let outcome = self
+            .data
+            .process_payment_callback(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if matches!(outcome, Some(ProcessPaymentCallbackOutcome::Applied { .. })) {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) async fn adjust_wallet_balance(
+        &self,
+        input: AdjustWalletBalanceInput,
+    ) -> Result<
+        Option<(
+            aether_data::repository::wallet::StoredWalletSnapshot,
+            aether_data::repository::wallet::StoredAdminWalletTransaction,
+        )>,
+        GatewayError,
+    > {
+        let result = self
+            .data
+            .adjust_wallet_balance(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if result.is_some() {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(result)
+    }
+
+    pub(crate) async fn create_manual_wallet_recharge(
+        &self,
+        input: CreateManualWalletRechargeInput,
+    ) -> Result<
+        Option<(
+            aether_data::repository::wallet::StoredWalletSnapshot,
+            aether_data::repository::wallet::StoredAdminPaymentOrder,
+        )>,
+        GatewayError,
+    > {
+        let result = self
+            .data
+            .create_manual_wallet_recharge(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if result.is_some() {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(result)
+    }
+
+    pub(crate) async fn process_admin_wallet_refund(
+        &self,
+        input: ProcessAdminWalletRefundInput,
+    ) -> Result<
+        Option<
+            WalletMutationOutcome<(
+                aether_data::repository::wallet::StoredWalletSnapshot,
+                aether_data::repository::wallet::StoredAdminWalletRefund,
+                aether_data::repository::wallet::StoredAdminWalletTransaction,
+            )>,
+        >,
+        GatewayError,
+    > {
+        let outcome = self
+            .data
+            .process_admin_wallet_refund(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if matches!(outcome, Some(WalletMutationOutcome::Applied(_))) {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) async fn complete_admin_wallet_refund(
+        &self,
+        input: CompleteAdminWalletRefundInput,
+    ) -> Result<
+        Option<WalletMutationOutcome<aether_data::repository::wallet::StoredAdminWalletRefund>>,
+        GatewayError,
+    > {
+        self.data
+            .complete_admin_wallet_refund(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn update_admin_wallet_refund_gateway(
+        &self,
+        input: UpdateAdminWalletRefundGatewayInput,
+    ) -> Result<
+        Option<WalletMutationOutcome<aether_data::repository::wallet::StoredAdminWalletRefund>>,
+        GatewayError,
+    > {
+        self.data
+            .update_admin_wallet_refund_gateway(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn fail_admin_wallet_refund(
+        &self,
+        input: FailAdminWalletRefundInput,
+    ) -> Result<
+        Option<
+            WalletMutationOutcome<(
+                aether_data::repository::wallet::StoredWalletSnapshot,
+                aether_data::repository::wallet::StoredAdminWalletRefund,
+                Option<aether_data::repository::wallet::StoredAdminWalletTransaction>,
+            )>,
+        >,
+        GatewayError,
+    > {
+        let outcome = self
+            .data
+            .fail_admin_wallet_refund(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if matches!(
+            outcome,
+            Some(WalletMutationOutcome::Applied((_, _, Some(_))))
+        ) {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) async fn expire_admin_payment_order(
+        &self,
+        order_id: &str,
+    ) -> Result<
+        Option<
+            WalletMutationOutcome<(
+                aether_data::repository::wallet::StoredAdminPaymentOrder,
+                bool,
+            )>,
+        >,
+        GatewayError,
+    > {
+        self.data
+            .expire_admin_payment_order(order_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn fail_admin_payment_order(
+        &self,
+        order_id: &str,
+    ) -> Result<
+        Option<WalletMutationOutcome<aether_data::repository::wallet::StoredAdminPaymentOrder>>,
+        GatewayError,
+    > {
+        self.data
+            .fail_admin_payment_order(order_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn credit_admin_payment_order(
+        &self,
+        input: CreditAdminPaymentOrderInput,
+    ) -> Result<
+        Option<
+            WalletMutationOutcome<(
+                aether_data::repository::wallet::StoredAdminPaymentOrder,
+                bool,
+            )>,
+        >,
+        GatewayError,
+    > {
+        let outcome = self
+            .data
+            .credit_admin_payment_order(input)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if matches!(outcome, Some(WalletMutationOutcome::Applied((_, true)))) {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(outcome)
+    }
+}

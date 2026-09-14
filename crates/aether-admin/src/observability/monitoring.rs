@@ -1,0 +1,1248 @@
+use aether_data_contracts::repository::{
+    candidates::{
+        sanitize_request_candidate_api_formats, sanitize_request_candidate_error_type,
+        sanitize_request_candidate_extra_data_for_persistence,
+        sanitize_request_candidate_required_capabilities, sanitize_request_candidate_skip_reason,
+        DecisionTrace, DecisionTraceCandidate, RequestCandidateStatus,
+    },
+    provider_catalog::StoredProviderCatalogKey,
+    usage::StoredRequestUsageAudit,
+};
+use axum::{
+    body::Body,
+    http,
+    response::{IntoResponse, Response},
+    Json,
+};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AdminMonitoringKeyAccountDisplay {
+    pub label: Option<String>,
+    pub oauth_plan_type: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdminMonitoringRoute {
+    AuditLogs,
+    SystemStatus,
+    SuspiciousActivities,
+    UserBehavior,
+    ResilienceStatus,
+    ResilienceErrorStats,
+    ResilienceCircuitHistory,
+    TraceRequest,
+    TraceProviderStats,
+    CacheStats,
+    CacheAffinity,
+    CacheAffinities,
+    CacheUsersDelete,
+    CacheAffinityDelete,
+    CacheFlush,
+    CacheProviderDelete,
+    CacheConfig,
+    CacheMetrics,
+    CacheModelMappingStats,
+    CacheModelMappingDelete,
+    CacheModelMappingDeleteModel,
+    CacheModelMappingDeleteProvider,
+    CacheRedisKeys,
+    CacheRedisKeysDelete,
+}
+
+pub fn admin_monitoring_bad_request_response(detail: impl Into<String>) -> Response<Body> {
+    (
+        http::StatusCode::BAD_REQUEST,
+        Json(json!({ "detail": detail.into() })),
+    )
+        .into_response()
+}
+
+pub fn admin_monitoring_not_found_response(detail: &'static str) -> Response<Body> {
+    (
+        http::StatusCode::NOT_FOUND,
+        Json(json!({ "detail": detail })),
+    )
+        .into_response()
+}
+
+pub fn build_admin_monitoring_audit_logs_payload_response(
+    items: Vec<Value>,
+    total: usize,
+    limit: usize,
+    offset: usize,
+    username: Option<String>,
+    event_type: Option<String>,
+    days: i64,
+) -> Response<Body> {
+    let count = items.len();
+    Json(json!({
+        "items": items,
+        "meta": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "count": count,
+        },
+        "filters": {
+            "username": username,
+            "event_type": event_type,
+            "days": days,
+        },
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_suspicious_activities_payload_response(
+    activities: Vec<Value>,
+    hours: i64,
+) -> Response<Body> {
+    let count = activities.len();
+    Json(json!({
+        "activities": activities,
+        "count": count,
+        "time_range_hours": hours,
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_user_behavior_payload_response(
+    user_id: String,
+    days: i64,
+    event_counts: BTreeMap<String, u64>,
+    failed_requests: u64,
+    success_requests: u64,
+    suspicious_activities: u64,
+) -> Response<Body> {
+    let total_requests = success_requests.saturating_add(failed_requests);
+    let success_rate = if total_requests == 0 {
+        0.0
+    } else {
+        success_requests as f64 / total_requests as f64
+    };
+
+    Json(json!({
+        "user_id": user_id,
+        "period_days": days,
+        "event_counts": event_counts,
+        "failed_requests": failed_requests,
+        "success_requests": success_requests,
+        "success_rate": success_rate,
+        "suspicious_activities": suspicious_activities,
+        "analysis_time": chrono::Utc::now().to_rfc3339(),
+    }))
+    .into_response()
+}
+
+pub fn admin_monitoring_user_behavior_user_id_from_path(request_path: &str) -> Option<String> {
+    path_identifier_from_path(request_path, "/api/admin/monitoring/user-behavior/")
+}
+
+pub fn admin_monitoring_trace_request_id_from_path(request_path: &str) -> Option<String> {
+    path_identifier_from_path(request_path, "/api/admin/monitoring/trace/")
+}
+
+pub fn admin_monitoring_trace_provider_id_from_path(request_path: &str) -> Option<String> {
+    path_identifier_from_path(request_path, "/api/admin/monitoring/trace/stats/provider/")
+}
+
+pub fn parse_admin_monitoring_attempted_only(query: Option<&str>) -> Result<bool, String> {
+    match query_param_value(query, "attempted_only") {
+        None => Ok(false),
+        Some(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => Ok(true),
+            "false" | "0" | "no" => Ok(false),
+            _ => Err("attempted_only must be a boolean".to_string()),
+        },
+    }
+}
+
+pub fn admin_monitoring_trace_not_found_response(
+    request_id: &str,
+    attempted_only: bool,
+) -> Response<Body> {
+    (
+        http::StatusCode::NOT_FOUND,
+        Json(json!({
+            "detail": "Request trace not found",
+            "request_id": request_id,
+            "attempted_only": attempted_only,
+        })),
+    )
+        .into_response()
+}
+
+pub fn build_admin_monitoring_cache_affinity_delete_success_response(
+    affinity_key: String,
+    endpoint_id: String,
+    model_id: String,
+    message_name: String,
+) -> Response<Body> {
+    Json(json!({
+        "status": "ok",
+        "message": format!("已清除缓存亲和性: {message_name}"),
+        "affinity_key": affinity_key,
+        "endpoint_id": endpoint_id,
+        "model_id": model_id,
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_cache_users_delete_api_key_success_response(
+    user_id: String,
+    username: Option<String>,
+    email: Option<String>,
+    api_key_id: String,
+    api_key_name: Option<String>,
+) -> Response<Body> {
+    let display_name = api_key_name.clone().unwrap_or_else(|| api_key_id.clone());
+    Json(json!({
+        "status": "ok",
+        "message": format!("已清除 API Key {display_name} 的缓存亲和性"),
+        "user_info": {
+            "user_id": Some(user_id),
+            "username": username,
+            "email": email,
+            "api_key_id": api_key_id,
+            "api_key_name": api_key_name,
+        },
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_cache_users_delete_user_success_response(
+    user_id: String,
+    username: String,
+    email: Option<String>,
+) -> Response<Body> {
+    Json(json!({
+        "status": "ok",
+        "message": format!("已清除用户 {username} 的所有缓存亲和性"),
+        "user_info": {
+            "user_id": user_id,
+            "username": username,
+            "email": email,
+        },
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_cache_provider_delete_success_response(
+    provider_id: String,
+    deleted_affinities: usize,
+) -> Response<Body> {
+    Json(json!({
+        "status": "ok",
+        "message": format!("已清除 provider {provider_id} 的缓存亲和性"),
+        "provider_id": provider_id,
+        "deleted_affinities": deleted_affinities,
+    }))
+    .into_response()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_admin_monitoring_trace_provider_stats_payload_response(
+    provider_id: String,
+    total_attempts: usize,
+    success_count: usize,
+    failed_count: usize,
+    cancelled_count: usize,
+    skipped_count: usize,
+    pending_count: usize,
+    available_count: usize,
+    unused_count: usize,
+    failure_rate: f64,
+    avg_latency_ms: f64,
+) -> Response<Body> {
+    Json(json!({
+        "provider_id": provider_id,
+        "total_attempts": total_attempts,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "cancelled_count": cancelled_count,
+        "skipped_count": skipped_count,
+        "pending_count": pending_count,
+        "available_count": available_count,
+        "unused_count": unused_count,
+        "failure_rate": failure_rate,
+        "avg_latency_ms": avg_latency_ms,
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_trace_request_payload_response(
+    trace: &DecisionTrace,
+    usage: Option<&StoredRequestUsageAudit>,
+) -> Response<Body> {
+    build_admin_monitoring_trace_request_payload_response_with_key_accounts(
+        trace,
+        usage,
+        &BTreeMap::new(),
+    )
+}
+
+pub fn build_admin_monitoring_trace_request_payload_response_with_key_accounts(
+    trace: &DecisionTrace,
+    usage: Option<&StoredRequestUsageAudit>,
+    key_accounts: &BTreeMap<String, AdminMonitoringKeyAccountDisplay>,
+) -> Response<Body> {
+    let usage_candidate_id =
+        usage.and_then(|item| resolve_admin_monitoring_usage_candidate_id(trace, item));
+    let candidates = trace
+        .candidates
+        .iter()
+        .map(|item| {
+            let matched_usage = usage_candidate_id
+                .as_deref()
+                .filter(|candidate_id| *candidate_id == item.candidate.id.as_str())
+                .and(usage);
+            build_admin_monitoring_trace_request_candidate_payload_with_key_accounts(
+                item,
+                matched_usage,
+                key_accounts,
+            )
+        })
+        .collect::<Vec<_>>();
+    Json(json!({
+        "request_id": trace.request_id,
+        "request_path": admin_monitoring_trace_request_path(usage),
+        "request_query_string": admin_monitoring_trace_request_query_string(usage),
+        "request_path_and_query": admin_monitoring_trace_request_path_and_query(usage),
+        "total_candidates": trace.total_candidates,
+        "final_status": trace.final_status,
+        "total_latency_ms": trace.total_latency_ms,
+        "diagnostic_request": usage.filter(|usage| admin_monitoring_usage_matches_trace(usage, &trace.request_id)).map(|usage| json!({
+            "usage_id": usage.id,
+            "body_state": usage.request_body_state.map(|state| state.as_str()),
+        })),
+        "candidates": candidates,
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_trace_request_candidate_payload(
+    item: &DecisionTraceCandidate,
+    usage: Option<&StoredRequestUsageAudit>,
+) -> Value {
+    build_admin_monitoring_trace_request_candidate_payload_with_key_accounts(
+        item,
+        usage,
+        &BTreeMap::new(),
+    )
+}
+
+pub fn build_admin_monitoring_trace_request_candidate_payload_with_key_accounts(
+    item: &DecisionTraceCandidate,
+    usage: Option<&StoredRequestUsageAudit>,
+    key_accounts: &BTreeMap<String, AdminMonitoringKeyAccountDisplay>,
+) -> Value {
+    let mut item = item.clone();
+    item.sanitize_for_admin();
+    let candidate = &item.candidate;
+    let sanitized_extra_data = build_admin_monitoring_trace_candidate_extra_data(
+        &candidate.id,
+        candidate.extra_data.as_ref(),
+        candidate.status_code,
+        usage,
+    );
+    let sanitized_extra_data_ref =
+        (!sanitized_extra_data.is_null()).then_some(&sanitized_extra_data);
+    let sanitized_key_api_formats =
+        sanitize_request_candidate_api_formats(item.provider_key_api_formats.clone());
+    let sanitized_key_capabilities =
+        sanitize_request_candidate_required_capabilities(item.provider_key_capabilities.clone());
+    let sanitized_required_capabilities =
+        sanitize_request_candidate_required_capabilities(candidate.required_capabilities.clone());
+    let key_account = candidate
+        .key_id
+        .as_deref()
+        .and_then(|key_id| key_accounts.get(key_id));
+    json!({
+        "id": candidate.id,
+        "request_id": candidate.request_id,
+        "candidate_index": candidate.candidate_index,
+        "retry_index": candidate.retry_index,
+        "provider_id": candidate.provider_id,
+        "provider_name": item.provider_name,
+        "provider_website": item.provider_website,
+        "provider_priority": item.provider_priority,
+        "provider_keep_priority_on_conversion": item.provider_keep_priority_on_conversion,
+        "provider_enable_format_conversion": item.provider_enable_format_conversion,
+        "endpoint_id": candidate.endpoint_id,
+        "endpoint_name": item.endpoint_api_format,
+        "endpoint_api_family": item.endpoint_api_family,
+        "endpoint_kind": item.endpoint_kind,
+        "endpoint_format_acceptance_config": serde_json::Value::Null,
+        "key_id": candidate.key_id,
+        "key_name": item.provider_key_name,
+        "key_account_label": key_account.and_then(|item| item.label.clone()),
+        "key_preview": serde_json::Value::Null,
+        "key_auth_type": item.provider_key_auth_type,
+        "key_api_formats": sanitized_key_api_formats,
+        "key_internal_priority": item.provider_key_internal_priority,
+        "key_global_priority_by_format": serde_json::Value::Null,
+        "key_oauth_plan_type": key_account.and_then(|item| item.oauth_plan_type.clone()),
+        "key_capabilities": sanitized_key_capabilities,
+        "required_capabilities": sanitized_required_capabilities,
+        "status": candidate.status,
+        "skip_reason": sanitize_request_candidate_skip_reason(candidate.skip_reason.clone()),
+        "is_cached": candidate.is_cached,
+        "status_code": candidate.status_code,
+        "error_type": sanitize_request_candidate_error_type(candidate.error_type.clone()),
+        "error_message": candidate.error_message,
+        "latency_ms": candidate.latency_ms,
+        "concurrent_requests": candidate.concurrent_requests,
+        "ranking": build_admin_monitoring_trace_candidate_ranking(sanitized_extra_data_ref),
+        "image_progress": sanitized_extra_data_ref
+            .and_then(|value| value.get("image_progress"))
+            .cloned()
+            .unwrap_or(Value::Null),
+        "extra_data": sanitized_extra_data,
+        "created_at": unix_ms_to_rfc3339(candidate.created_at_unix_ms),
+        "started_at": candidate.started_at_unix_ms.and_then(unix_ms_to_rfc3339),
+        "finished_at": candidate.finished_at_unix_ms.and_then(unix_ms_to_rfc3339),
+    })
+}
+
+fn resolve_admin_monitoring_usage_candidate_id(
+    trace: &DecisionTrace,
+    usage: &StoredRequestUsageAudit,
+) -> Option<String> {
+    if !admin_monitoring_usage_matches_trace(usage, trace.request_id.as_str()) {
+        return None;
+    }
+
+    if let Some(candidate_id) = usage
+        .routing_candidate_id()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(candidate_id.to_string());
+    }
+
+    let candidate_index = usage.routing_candidate_index()?;
+    trace
+        .candidates
+        .iter()
+        .filter(|item| u64::from(item.candidate.candidate_index) == candidate_index)
+        .max_by_key(|item| {
+            (
+                item.candidate.retry_index,
+                item.candidate.finished_at_unix_ms.unwrap_or_default(),
+                item.candidate.started_at_unix_ms.unwrap_or_default(),
+                admin_monitoring_candidate_status_rank(item.candidate.status),
+            )
+        })
+        .map(|item| item.candidate.id.clone())
+}
+
+fn admin_monitoring_usage_matches_trace(
+    usage: &StoredRequestUsageAudit,
+    trace_request_id: &str,
+) -> bool {
+    let trace_request_id = trace_request_id.trim();
+    if trace_request_id.is_empty() {
+        return false;
+    }
+    usage.request_id.trim() == trace_request_id
+        || usage
+            .trace_id()
+            .is_some_and(|value| value.trim() == trace_request_id)
+        || admin_monitoring_headers_contain_trace_id(
+            usage.request_headers.as_ref(),
+            trace_request_id,
+        )
+        || admin_monitoring_headers_contain_trace_id(
+            usage.provider_request_headers.as_ref(),
+            trace_request_id,
+        )
+}
+
+fn admin_monitoring_headers_contain_trace_id(
+    headers: Option<&Value>,
+    trace_request_id: &str,
+) -> bool {
+    headers.and_then(Value::as_object).is_some_and(|object| {
+        object.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("x-trace-id")
+                && value
+                    .as_str()
+                    .map(str::trim)
+                    .is_some_and(|value| value == trace_request_id)
+        })
+    })
+}
+
+fn admin_monitoring_candidate_status_rank(status: RequestCandidateStatus) -> u8 {
+    match status {
+        RequestCandidateStatus::Success => 7,
+        RequestCandidateStatus::Streaming => 6,
+        RequestCandidateStatus::Pending => 5,
+        RequestCandidateStatus::Failed => 4,
+        RequestCandidateStatus::Cancelled => 3,
+        RequestCandidateStatus::Skipped => 2,
+        RequestCandidateStatus::Unused => 1,
+        RequestCandidateStatus::Available => 0,
+    }
+}
+
+fn build_admin_monitoring_trace_candidate_ranking(existing: Option<&Value>) -> Value {
+    let Some(object) = existing.and_then(Value::as_object) else {
+        return Value::Null;
+    };
+
+    let mut ranking = serde_json::Map::new();
+    if let Some(ranking_mode) = json_string_field(object, "ranking_mode") {
+        ranking.insert("mode".to_string(), Value::String(ranking_mode));
+    }
+    if let Some(priority_mode) = json_string_field(object, "priority_mode") {
+        ranking.insert("priority_mode".to_string(), Value::String(priority_mode));
+    }
+    if let Some(ranking_index) = json_u64_field(object, "ranking_index") {
+        ranking.insert("index".to_string(), Value::Number(ranking_index.into()));
+    }
+    if let Some(priority_slot) = json_i64_field(object, "priority_slot") {
+        ranking.insert(
+            "priority_slot".to_string(),
+            Value::Number(priority_slot.into()),
+        );
+    }
+    if let Some(promoted_by) = json_string_field(object, "promoted_by") {
+        ranking.insert("promoted_by".to_string(), Value::String(promoted_by));
+    }
+    if let Some(demoted_by) = json_string_field(object, "demoted_by") {
+        ranking.insert("demoted_by".to_string(), Value::String(demoted_by));
+    }
+
+    if ranking.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(ranking)
+    }
+}
+
+fn build_admin_monitoring_trace_candidate_extra_data(
+    candidate_id: &str,
+    existing: Option<&Value>,
+    candidate_status_code: Option<u16>,
+    usage: Option<&StoredRequestUsageAudit>,
+) -> Value {
+    let mut extra_data = sanitize_request_candidate_extra_data_for_persistence(existing.cloned())
+        .and_then(|value| value.as_object().cloned());
+
+    if let Some(usage) = usage {
+        let extra_object = extra_data.get_or_insert_with(serde_json::Map::new);
+        if usage.routing_candidate_id() == Some(candidate_id) {
+            extra_object.insert("diagnostic_context".to_string(), json!({
+            "usage_id": usage.id,
+            "model": usage.model,
+            "target_model": usage.target_model,
+            "body_states": {
+                "request_body": usage.request_body_state.map(|state| state.as_str()),
+                "provider_request_body": usage.provider_request_body_state.map(|state| state.as_str()),
+                "response_body": usage.response_body_state.map(|state| state.as_str()),
+                "client_response_body": usage.client_response_body_state.map(|state| state.as_str()),
+            }
+            }));
+        }
+        if let Some(first_byte_time_ms) = usage.first_byte_time_ms {
+            extra_object
+                .entry("first_byte_time_ms".to_string())
+                .or_insert_with(|| json!(first_byte_time_ms));
+        }
+        if let Some(request_path) = admin_monitoring_usage_request_path(usage) {
+            extra_object
+                .entry("request_path".to_string())
+                .or_insert_with(|| json!(request_path));
+        }
+        if let Some(request_query_string) = admin_monitoring_usage_request_query_string(usage) {
+            extra_object
+                .entry("request_query_string".to_string())
+                .or_insert_with(|| json!(request_query_string));
+        }
+        if let Some(request_path_and_query) = admin_monitoring_usage_request_path_and_query(usage) {
+            extra_object
+                .entry("request_path_and_query".to_string())
+                .or_insert_with(|| json!(request_path_and_query));
+        }
+        if admin_monitoring_usage_is_error_node(usage) {
+            if let Some(response) = admin_monitoring_trace_response_data(
+                "upstream_response",
+                candidate_status_code,
+                usage.response_body_state,
+            ) {
+                merge_admin_monitoring_trace_response(extra_object, "upstream_response", response);
+            }
+        }
+
+        if let Some(proxy_value) = extra_object.get_mut("proxy") {
+            if let Some(proxy_object) = proxy_value.as_object_mut() {
+                let proxy_timing = parse_admin_monitoring_usage_proxy_timing(usage);
+                let proxy_ttfb_ms = proxy_timing
+                    .as_ref()
+                    .and_then(|timing| timing.get("ttfb_ms"))
+                    .and_then(Value::as_u64)
+                    .or(usage.first_byte_time_ms);
+                if let Some(ttfb_ms) = proxy_ttfb_ms {
+                    proxy_object
+                        .entry("ttfb_ms".to_string())
+                        .or_insert_with(|| json!(ttfb_ms));
+                }
+                if let Some(timing) = proxy_timing {
+                    proxy_object.entry("timing".to_string()).or_insert(timing);
+                }
+            }
+        }
+    }
+
+    let diagnostic_context = extra_data
+        .as_mut()
+        .and_then(|extra| extra.remove("diagnostic_context"));
+    let mut sanitized =
+        sanitize_request_candidate_extra_data_for_persistence(extra_data.map(Value::Object))
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+    if let Some(context) = diagnostic_context {
+        sanitized.insert("diagnostic_context".to_string(), context);
+    }
+    if sanitized.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(sanitized)
+    }
+}
+
+fn admin_monitoring_trace_response_data(
+    source: &str,
+    status_code: Option<u16>,
+    body_state: Option<aether_data_contracts::repository::usage::UsageBodyCaptureState>,
+) -> Option<Value> {
+    if status_code.is_none() && body_state.is_none() {
+        return None;
+    }
+
+    Some(json!({
+        "source": source,
+        "status_code": status_code,
+        "body_state": body_state.map(|state| state.as_str()),
+    }))
+}
+
+fn merge_admin_monitoring_trace_response(
+    extra_object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    response: Value,
+) {
+    let Some(response_object) = response.as_object() else {
+        extra_object.insert(key.to_string(), response);
+        return;
+    };
+    let Some(existing_object) = extra_object.get_mut(key).and_then(Value::as_object_mut) else {
+        extra_object.insert(key.to_string(), Value::Object(response_object.clone()));
+        return;
+    };
+
+    for (field, value) in response_object {
+        if field == "status_code" && existing_object.get(field).is_some_and(Value::is_number) {
+            continue;
+        }
+        if admin_monitoring_trace_response_value_empty(value)
+            && existing_object
+                .get(field)
+                .is_some_and(|existing| !admin_monitoring_trace_response_value_empty(existing))
+        {
+            continue;
+        }
+        existing_object.insert(field.clone(), value.clone());
+    }
+}
+
+fn admin_monitoring_trace_response_value_empty(value: &Value) -> bool {
+    value.is_null()
+        || value.as_str().is_some_and(str::is_empty)
+        || value.as_array().is_some_and(Vec::is_empty)
+        || value.as_object().is_some_and(serde_json::Map::is_empty)
+}
+
+fn admin_monitoring_usage_is_error_node(usage: &StoredRequestUsageAudit) -> bool {
+    !usage.status.eq_ignore_ascii_case("completed")
+        || usage
+            .status_code
+            .is_some_and(|status| !(200..300).contains(&status))
+}
+
+fn admin_monitoring_trace_request_path(usage: Option<&StoredRequestUsageAudit>) -> Option<String> {
+    usage.and_then(admin_monitoring_usage_request_path)
+}
+
+fn admin_monitoring_trace_request_query_string(
+    usage: Option<&StoredRequestUsageAudit>,
+) -> Option<String> {
+    usage.and_then(admin_monitoring_usage_request_query_string)
+}
+
+fn admin_monitoring_trace_request_path_and_query(
+    usage: Option<&StoredRequestUsageAudit>,
+) -> Option<String> {
+    usage.and_then(admin_monitoring_usage_request_path_and_query)
+}
+
+fn admin_monitoring_usage_request_path(usage: &StoredRequestUsageAudit) -> Option<String> {
+    admin_monitoring_usage_metadata_string(usage, "request_path")
+        .and_then(|value| aether_ai_formats::api::sanitize_request_path(&value))
+}
+
+fn admin_monitoring_usage_request_query_string(usage: &StoredRequestUsageAudit) -> Option<String> {
+    admin_monitoring_usage_metadata_string(usage, "request_query_string")
+        .and_then(|value| aether_ai_formats::api::sanitize_request_query_string(&value))
+}
+
+fn admin_monitoring_usage_request_path_and_query(
+    usage: &StoredRequestUsageAudit,
+) -> Option<String> {
+    admin_monitoring_usage_metadata_string(usage, "request_path_and_query")
+        .and_then(|value| aether_ai_formats::api::sanitize_request_path_and_query(&value, None))
+        .or_else(|| {
+            let path = admin_monitoring_usage_metadata_string(usage, "request_path")?;
+            let query = admin_monitoring_usage_metadata_string(usage, "request_query_string")
+                .and_then(|value| aether_ai_formats::api::sanitize_request_query_string(&value));
+            aether_ai_formats::api::sanitize_request_path_and_query(&path, query.as_deref())
+        })
+}
+
+fn admin_monitoring_usage_metadata_string(
+    usage: &StoredRequestUsageAudit,
+    key: &str,
+) -> Option<String> {
+    usage
+        .request_metadata
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn json_string_field(object: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn json_u64_field(object: &serde_json::Map<String, Value>, key: &str) -> Option<u64> {
+    match object.get(key)? {
+        Value::Number(value) => value.as_u64(),
+        Value::String(value) => value.trim().parse::<u64>().ok(),
+        _ => None,
+    }
+}
+
+fn json_i64_field(object: &serde_json::Map<String, Value>, key: &str) -> Option<i64> {
+    match object.get(key)? {
+        Value::Number(value) => value.as_i64().or_else(|| value.as_u64()?.try_into().ok()),
+        Value::String(value) => value.trim().parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn parse_admin_monitoring_usage_proxy_timing(usage: &StoredRequestUsageAudit) -> Option<Value> {
+    admin_monitoring_header_value(usage.response_headers.as_ref(), "x-proxy-timing")
+        .or_else(|| {
+            admin_monitoring_header_value(usage.client_response_headers.as_ref(), "x-proxy-timing")
+        })
+        .and_then(|raw| parse_admin_monitoring_proxy_timing_value(&raw))
+}
+
+fn admin_monitoring_header_value(headers: Option<&Value>, name: &str) -> Option<String> {
+    headers
+        .and_then(Value::as_object)
+        .and_then(|object| {
+            object
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value)
+        })
+        .and_then(|value| match value {
+            Value::String(text) => Some(text.trim().to_string()),
+            Value::Object(object) => Some(Value::Object(object.clone()).to_string()),
+            _ => None,
+        })
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_admin_monitoring_proxy_timing_value(raw: &str) -> Option<Value> {
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .filter(Value::is_object)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_admin_monitoring_system_status_payload_response(
+    timestamp: chrono::DateTime<chrono::Utc>,
+    total_users: u64,
+    active_users: u64,
+    total_providers: usize,
+    active_providers: usize,
+    total_api_keys: u64,
+    active_api_keys: u64,
+    today_requests: usize,
+    today_tokens: u64,
+    today_cost: f64,
+    proxy_connections: usize,
+    nodes: usize,
+    active_streams: usize,
+    path_prefixes: &[&str],
+    recent_errors: usize,
+    usage_counter: Value,
+) -> Response<Body> {
+    Json(json!({
+        "timestamp": timestamp.to_rfc3339(),
+        "users": {
+            "total": total_users,
+            "active": active_users,
+        },
+        "providers": {
+            "total": total_providers,
+            "active": active_providers,
+        },
+        "api_keys": {
+            "total": total_api_keys,
+            "active": active_api_keys,
+        },
+        "today_stats": {
+            "requests": today_requests,
+            "tokens": today_tokens,
+            "cost_usd": format!("${today_cost:.4}"),
+        },
+        "tunnel": {
+            "proxy_connections": proxy_connections,
+            "nodes": nodes,
+            "active_streams": active_streams,
+        },
+        "internal_gateway": {
+            "status": "rust_native_control_plane",
+            "path_prefixes": path_prefixes,
+        },
+        "recent_errors": recent_errors,
+        "usage_counter": usage_counter,
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_resilience_status_payload_response(
+    timestamp: chrono::DateTime<chrono::Utc>,
+    health_score: i64,
+    status: &'static str,
+    error_statistics: Value,
+    recent_errors: Vec<Value>,
+    recommendations: Vec<String>,
+) -> Response<Body> {
+    Json(json!({
+        "timestamp": timestamp.to_rfc3339(),
+        "health_score": health_score,
+        "status": status,
+        "error_statistics": error_statistics,
+        "recent_errors": recent_errors,
+        "recommendations": recommendations,
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_reset_error_stats_payload_response(
+    previous_stats: Value,
+    reset_by: Option<String>,
+    reset_at: chrono::DateTime<chrono::Utc>,
+) -> Response<Body> {
+    Json(json!({
+        "message": "错误统计已重置",
+        "previous_stats": previous_stats,
+        "reset_by": reset_by,
+        "reset_at": reset_at.to_rfc3339(),
+    }))
+    .into_response()
+}
+
+pub fn parse_admin_monitoring_circuit_history_limit(query: Option<&str>) -> Result<usize, String> {
+    match query_param_value(query, "limit") {
+        None => Ok(50),
+        Some(value) => {
+            let parsed = value
+                .parse::<usize>()
+                .map_err(|_| "limit must be an integer between 1 and 200".to_string())?;
+            if (1..=200).contains(&parsed) {
+                Ok(parsed)
+            } else {
+                Err("limit must be an integer between 1 and 200".to_string())
+            }
+        }
+    }
+}
+
+pub fn build_admin_monitoring_circuit_history_items(
+    keys: &[StoredProviderCatalogKey],
+    provider_name_by_id: &BTreeMap<String, String>,
+    limit: usize,
+) -> Vec<Value> {
+    let mut items = Vec::new();
+
+    for key in keys {
+        let health_by_format = key
+            .health_by_format
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let circuit_by_format = key
+            .circuit_breaker_by_format
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+
+        for (api_format, circuit_value) in circuit_by_format {
+            let Some(circuit) = circuit_value.as_object() else {
+                continue;
+            };
+            let is_open = circuit
+                .get("open")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let is_half_open = circuit
+                .get("half_open_until")
+                .and_then(serde_json::Value::as_str)
+                .is_some();
+
+            if !is_open && !is_half_open {
+                continue;
+            }
+
+            let health = health_by_format
+                .get(&api_format)
+                .and_then(serde_json::Value::as_object);
+            let timestamp = circuit
+                .get("open_at")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| {
+                    circuit
+                        .get("half_open_until")
+                        .and_then(serde_json::Value::as_str)
+                })
+                .or_else(|| {
+                    health.and_then(|value| {
+                        value
+                            .get("last_failure_at")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                })
+                .map(ToOwned::to_owned);
+            let event = if is_half_open { "half_open" } else { "opened" };
+            let reason = circuit
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    health
+                        .and_then(|value| {
+                            value
+                                .get("consecutive_failures")
+                                .and_then(serde_json::Value::as_i64)
+                        })
+                        .filter(|value| *value > 0)
+                        .map(|value| format!("连续失败 {value} 次"))
+                })
+                .or_else(|| {
+                    Some(if is_half_open {
+                        "熔断器处于半开状态".to_string()
+                    } else {
+                        "熔断器处于打开状态".to_string()
+                    })
+                });
+            let recovery_seconds = circuit
+                .get("recovery_seconds")
+                .and_then(serde_json::Value::as_i64)
+                .or_else(|| {
+                    let open_at = circuit
+                        .get("open_at")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+                    let next_probe_at = circuit
+                        .get("next_probe_at")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+                    match (open_at, next_probe_at) {
+                        (Some(open_at), Some(next_probe_at)) => {
+                            Some((next_probe_at - open_at).num_seconds().max(0))
+                        }
+                        _ => None,
+                    }
+                });
+
+            items.push(json!({
+                "event": event,
+                "key_id": key.id,
+                "provider_id": key.provider_id,
+                "provider_name": provider_name_by_id.get(&key.provider_id).cloned(),
+                "key_name": key.name,
+                "api_format": api_format,
+                "reason": reason,
+                "recovery_seconds": recovery_seconds,
+                "timestamp": timestamp,
+            }));
+        }
+    }
+
+    items.sort_by(|left, right| {
+        let left_ts = left
+            .get("timestamp")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let right_ts = right
+            .get("timestamp")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        right_ts.cmp(left_ts)
+    });
+    items.truncate(limit);
+    items
+}
+
+pub fn build_admin_monitoring_circuit_history_payload_response(
+    items: Vec<Value>,
+) -> Response<Body> {
+    let count = items.len();
+    Json(json!({
+        "items": items,
+        "count": count,
+    }))
+    .into_response()
+}
+
+pub fn admin_monitoring_unknown_cache_category_response(category: &str) -> Response<Body> {
+    (
+        http::StatusCode::NOT_FOUND,
+        Json(json!({ "detail": format!("未知的缓存分类: {category}") })),
+    )
+        .into_response()
+}
+
+pub fn build_admin_monitoring_redis_keys_delete_success_response(
+    category: &str,
+    name: &str,
+    deleted_count: usize,
+) -> Response<Body> {
+    Json(json!({
+        "status": "ok",
+        "message": format!("已清除 {name} 缓存"),
+        "category": category,
+        "deleted_count": deleted_count,
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_cache_flush_success_response(
+    deleted_affinities: usize,
+) -> Response<Body> {
+    Json(json!({
+        "status": "ok",
+        "message": "已清除全部缓存亲和性",
+        "deleted_affinities": deleted_affinities,
+    }))
+    .into_response()
+}
+
+pub fn admin_monitoring_cache_provider_not_found_response(provider_id: &str) -> Response<Body> {
+    (
+        http::StatusCode::NOT_FOUND,
+        Json(json!({
+            "detail": format!("未找到 provider {provider_id} 的缓存亲和性记录")
+        })),
+    )
+        .into_response()
+}
+
+pub fn build_admin_monitoring_model_mapping_delete_success_response(
+    deleted_count: usize,
+) -> Response<Body> {
+    Json(json!({
+        "status": "ok",
+        "message": "已清除所有模型映射缓存",
+        "deleted_count": deleted_count,
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_model_mapping_delete_model_success_response(
+    model_name: String,
+    deleted_keys: Vec<String>,
+) -> Response<Body> {
+    Json(json!({
+        "status": "ok",
+        "message": format!("已清除模型 {model_name} 的映射缓存"),
+        "model_name": model_name,
+        "deleted_keys": deleted_keys,
+    }))
+    .into_response()
+}
+
+pub fn build_admin_monitoring_model_mapping_delete_provider_success_response(
+    provider_id: String,
+    global_model_id: String,
+    deleted_keys: Vec<String>,
+) -> Response<Body> {
+    Json(json!({
+        "status": "ok",
+        "message": "已清除 Provider 模型映射缓存",
+        "provider_id": provider_id,
+        "global_model_id": global_model_id,
+        "deleted_keys": deleted_keys,
+    }))
+    .into_response()
+}
+
+pub fn match_admin_monitoring_route(
+    method: &http::Method,
+    path: &str,
+) -> Option<AdminMonitoringRoute> {
+    let path = normalize_admin_monitoring_path(path);
+
+    match *method {
+        http::Method::GET => match path {
+            "/api/admin/monitoring/audit-logs" => Some(AdminMonitoringRoute::AuditLogs),
+            "/api/admin/monitoring/system-status" => Some(AdminMonitoringRoute::SystemStatus),
+            "/api/admin/monitoring/suspicious-activities" => {
+                Some(AdminMonitoringRoute::SuspiciousActivities)
+            }
+            "/api/admin/monitoring/resilience-status" => {
+                Some(AdminMonitoringRoute::ResilienceStatus)
+            }
+            "/api/admin/monitoring/resilience/circuit-history" => {
+                Some(AdminMonitoringRoute::ResilienceCircuitHistory)
+            }
+            "/api/admin/monitoring/cache/stats" => Some(AdminMonitoringRoute::CacheStats),
+            "/api/admin/monitoring/cache/affinities" => Some(AdminMonitoringRoute::CacheAffinities),
+            "/api/admin/monitoring/cache/config" => Some(AdminMonitoringRoute::CacheConfig),
+            "/api/admin/monitoring/cache/metrics" => Some(AdminMonitoringRoute::CacheMetrics),
+            "/api/admin/monitoring/cache/model-mapping/stats" => {
+                Some(AdminMonitoringRoute::CacheModelMappingStats)
+            }
+            "/api/admin/monitoring/cache/redis-keys" => Some(AdminMonitoringRoute::CacheRedisKeys),
+            _ if matches_dynamic_segments(path, "/api/admin/monitoring/user-behavior/", 1) => {
+                Some(AdminMonitoringRoute::UserBehavior)
+            }
+            _ if matches_dynamic_segments(
+                path,
+                "/api/admin/monitoring/trace/stats/provider/",
+                1,
+            ) =>
+            {
+                Some(AdminMonitoringRoute::TraceProviderStats)
+            }
+            _ if matches_dynamic_segments(path, "/api/admin/monitoring/trace/", 1) => {
+                Some(AdminMonitoringRoute::TraceRequest)
+            }
+            _ if matches_dynamic_segments(path, "/api/admin/monitoring/cache/affinity/", 1) => {
+                Some(AdminMonitoringRoute::CacheAffinity)
+            }
+            _ => None,
+        },
+        http::Method::DELETE => match path {
+            "/api/admin/monitoring/resilience/error-stats" => {
+                Some(AdminMonitoringRoute::ResilienceErrorStats)
+            }
+            "/api/admin/monitoring/cache" => Some(AdminMonitoringRoute::CacheFlush),
+            "/api/admin/monitoring/cache/model-mapping" => {
+                Some(AdminMonitoringRoute::CacheModelMappingDelete)
+            }
+            _ if matches_dynamic_segments(path, "/api/admin/monitoring/cache/users/", 1) => {
+                Some(AdminMonitoringRoute::CacheUsersDelete)
+            }
+            _ if matches_dynamic_segments(path, "/api/admin/monitoring/cache/providers/", 1) => {
+                Some(AdminMonitoringRoute::CacheProviderDelete)
+            }
+            _ if matches_dynamic_segments(path, "/api/admin/monitoring/cache/redis-keys/", 1) => {
+                Some(AdminMonitoringRoute::CacheRedisKeysDelete)
+            }
+            _ if matches_dynamic_segments(
+                path,
+                "/api/admin/monitoring/cache/model-mapping/provider/",
+                2,
+            ) =>
+            {
+                Some(AdminMonitoringRoute::CacheModelMappingDeleteProvider)
+            }
+            _ if matches_dynamic_segments(
+                path,
+                "/api/admin/monitoring/cache/model-mapping/",
+                1,
+            ) =>
+            {
+                Some(AdminMonitoringRoute::CacheModelMappingDeleteModel)
+            }
+            _ if matches_dynamic_segments(path, "/api/admin/monitoring/cache/affinity/", 4) => {
+                Some(AdminMonitoringRoute::CacheAffinityDelete)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn normalize_admin_monitoring_path(path: &str) -> &str {
+    let normalized = path.trim_end_matches('/');
+    if normalized.is_empty() {
+        "/"
+    } else {
+        normalized
+    }
+}
+
+fn path_identifier_from_path(request_path: &str, prefix: &str) -> Option<String> {
+    let value = request_path
+        .strip_prefix(prefix)?
+        .trim()
+        .trim_matches('/')
+        .to_string();
+    if value.is_empty() || value.contains('/') {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn unix_ms_to_rfc3339(unix_ms: u64) -> Option<String> {
+    let secs = (unix_ms / 1000) as i64;
+    let nanos = ((unix_ms % 1000) * 1_000_000) as u32;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, nanos)
+        .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+}
+
+fn query_param_value(query: Option<&str>, key: &str) -> Option<String> {
+    let query = query?;
+    for (entry_key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+        if entry_key == key {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn matches_dynamic_segments(path: &str, prefix: &str, dynamic_segments: usize) -> bool {
+    let Some(suffix) = path.strip_prefix(prefix) else {
+        return false;
+    };
+
+    let segments = suffix
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    segments.len() == dynamic_segments
+}

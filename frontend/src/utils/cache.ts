@@ -12,6 +12,8 @@ interface CacheItem<T> {
 class MemoryCache {
   private cache: Map<string, CacheItem<unknown>> = new Map()
   private inFlight: Map<string, Promise<unknown>> = new Map()
+  private epoch = 0
+  private keyVersions: Map<string, number> = new Map()
   private defaultTTL = 60000 // 默认缓存60秒
 
   /**
@@ -55,14 +57,18 @@ class MemoryCache {
    */
   delete(key: string): void {
     this.cache.delete(key)
+    this.inFlight.delete(key)
+    this.keyVersions.set(key, (this.keyVersions.get(key) ?? 0) + 1)
   }
 
   /**
    * 清空所有缓存
    */
   clear(): void {
+    this.epoch += 1
     this.cache.clear()
     this.inFlight.clear()
+    this.keyVersions.clear()
   }
 
   /**
@@ -101,8 +107,21 @@ class MemoryCache {
   /**
    * 清除进行中的请求
    */
-  deleteInFlight(key: string): void {
-    this.inFlight.delete(key)
+  deleteInFlight(key: string, request?: Promise<unknown>): void {
+    if (!request || this.inFlight.get(key) === request) {
+      this.inFlight.delete(key)
+    }
+  }
+
+  /**
+   * 捕获 key 当前的失效版本，防止退出登录或写操作之后，旧请求重新回填缓存。
+   */
+  version(key: string): readonly [number, number] {
+    return [this.epoch, this.keyVersions.get(key) ?? 0]
+  }
+
+  isCurrentVersion(key: string, version: readonly [number, number]): boolean {
+    return version[0] === this.epoch && version[1] === (this.keyVersions.get(key) ?? 0)
   }
 }
 
@@ -140,17 +159,17 @@ export async function cachedRequest<T>(
   }
 
   // 缓存未命中，执行请求并登记为 in-flight
-  const request = (async () => {
-    try {
-      const data = await fetcher()
-      if (ttl !== 0) {
+  const version = cache.version(key)
+  const request = new Promise<T>((resolve) => resolve(fetcher()))
+    .then((data) => {
+      if (ttl !== 0 && cache.isCurrentVersion(key, version)) {
         cache.set(key, data, ttl)
       }
       return data
-    } finally {
-      cache.deleteInFlight(key)
-    }
-  })()
+    })
+    .finally(() => {
+      cache.deleteInFlight(key, request)
+    })
 
   cache.setInFlight(key, request)
   return request

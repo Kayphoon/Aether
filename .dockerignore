@@ -1,24 +1,18 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-.venv
-.uv/
-*.egg-info/
-dist/
-!aether-hub/dist/aether-hub
+# Build artifacts
 build/
+target/
+*.so
 *.egg
+*.egg-info/
 
 # Frontend
 frontend/node_modules/
+frontend/dist/
 frontend/.vite/
-# frontend/dist/ - 注释掉，因为我们需要预构建的dist文件
+aether-vscodex/web/node_modules/
+aether-vscodex/web/dist/
+aether-vscodex/vscode-extension/node_modules/
+aether-vscodex/vscode-extension/dist/
 
 # Development
 .git/

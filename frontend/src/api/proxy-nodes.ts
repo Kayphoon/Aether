@@ -5,8 +5,11 @@ export interface ProxyNodeRemoteConfig {
   allowed_ports?: number[]
   log_level?: string
   heartbeat_interval?: number
+  scheduling_state?: ProxyNodeSchedulingState | null
   upgrade_to?: string | null
 }
+
+export type ProxyNodeSchedulingState = 'active' | 'draining' | 'cordoned'
 
 export interface ProxyNode {
   id: string
@@ -19,14 +22,14 @@ export interface ProxyNode {
   tunnel_mode: boolean
   tunnel_connected: boolean
   tunnel_connected_at: string | null
-  // 手动节点专用字段
+  // 手动节点专用字段。密码永不通过节点接口返回，仅提供是否已配置的状态。
   proxy_url?: string
   proxy_username?: string
-  proxy_password?: string  // 脱敏后的密码
-  // 硬件信息（aether-proxy 节点）
+  has_proxy_password?: boolean
+  // 硬件信息（aether-tunnel 节点）
   hardware_info: Record<string, unknown> | null
   estimated_max_concurrency: number | null
-  // 远程配置（aether-proxy 节点）
+  // 远程配置（aether-tunnel 节点）
   remote_config: ProxyNodeRemoteConfig | null
   config_version: number
   registered_by: string | null
@@ -45,9 +48,96 @@ export interface ProxyNode {
 
 export interface ProxyNodeEvent {
   id: number
-  event_type: 'connected' | 'disconnected' | 'error'
+  event_type: string
   detail: string | null
-  created_at: string
+  event_metadata?: Record<string, unknown> | null
+  created_at: string | null
+}
+
+export type ProxyNodeMetricsStep = '1m' | '1h'
+
+export interface ProxyNodeMetricsSummary {
+  samples: number
+  uptime_samples: number
+  uptime_ratio: number | null
+  active_connections_sum: number
+  active_connections_max: number
+  active_connections_avg: number | null
+  heartbeat_rtt_ms_sum: number
+  heartbeat_rtt_ms_max: number
+  heartbeat_rtt_ms_avg: number | null
+  connect_errors_delta: number
+  disconnects_delta: number
+  error_events_delta: number
+  ws_in_bytes_delta: number
+  ws_out_bytes_delta: number
+  ws_in_frames_delta: number
+  ws_out_frames_delta: number
+}
+
+export interface ProxyNodeMetricsBucket extends ProxyNodeMetricsSummary {
+  node_id?: string
+  bucket_start_unix_secs: number
+  bucket_start: string | null
+}
+
+export interface ProxyNodeMetricsResponse {
+  step: ProxyNodeMetricsStep
+  from: number
+  to: number
+  items: ProxyNodeMetricsBucket[]
+  summary: ProxyNodeMetricsSummary
+}
+
+export interface ProxyNodeMetricsQuery {
+  from: number
+  to: number
+  step: ProxyNodeMetricsStep
+}
+
+export interface ProxyNodeEventQuery {
+  limit?: number
+  from?: number
+  to?: number
+  event_type?: string
+}
+
+export interface ProxyNodeUpgradeRolloutProbe {
+  url: string
+  timeout_secs: number
+}
+
+export type ProxyNodeUpgradeRolloutTrackedNodeState =
+  | 'awaiting_version'
+  | 'awaiting_traffic'
+  | 'cooling_down'
+  | 'unhealthy'
+  | 'ready_to_finalize'
+
+export interface ProxyNodeUpgradeRolloutTrackedNode {
+  node_id: string
+  state: ProxyNodeUpgradeRolloutTrackedNodeState
+  dispatched_at: string | null
+  version_confirmed_at: string | null
+  traffic_confirmed_at: string | null
+  cooldown_remaining_secs: number | null
+}
+
+export interface ProxyNodeUpgradeRolloutStatus {
+  version: string
+  batch_size: number
+  cooldown_secs: number
+  started_at: string | null
+  last_dispatched_at: string | null
+  updated_at: string | null
+  probe: ProxyNodeUpgradeRolloutProbe | null
+  blocked: boolean
+  online_eligible_total: number
+  completed_node_ids: string[]
+  pending_node_ids: string[]
+  conflict_node_ids: string[]
+  skipped_node_ids: string[]
+  tracked_nodes: ProxyNodeUpgradeRolloutTrackedNode[]
 }
 
 export interface ProxyNodeListResponse {
@@ -55,6 +145,7 @@ export interface ProxyNodeListResponse {
   total: number
   skip: number
   limit: number
+  rollout: ProxyNodeUpgradeRolloutStatus | null
 }
 
 export interface ManualProxyNodeCreateRequest {
@@ -73,11 +164,83 @@ export interface ManualProxyNodeUpdateRequest {
   region?: string
 }
 
+export interface ProxyNodeInstallSessionCreateRequest {
+  node_name: string
+}
+
+export interface ProxyNodeInstallSession {
+  install_code: string
+  expires_at_unix_secs: number
+  expires_in_seconds: number
+  node_name: string
+  aether_url: string
+  unix_command: string
+  powershell_command: string
+}
+
 export interface ProxyNodeTestResult {
   success: boolean
   latency_ms: number | null
   exit_ip: string | null
   error: string | null
+  probe_url: string
+  timeout_secs: number
+}
+
+export interface ProxyNodeBatchUpgradeResult {
+  version: string
+  eligible_total: number
+  updated: number
+  skipped: number
+  node_ids: string[]
+  rollout_cancelled: boolean
+}
+
+export interface ProxyNodeUpgradeRolloutCancelResult {
+  cancelled: boolean
+  rollout_active?: boolean
+  version?: string | null
+  pending_node_ids?: string[]
+  conflict_node_ids?: string[]
+  completed?: number
+  remaining?: number
+}
+
+export interface ProxyNodeUpgradeRolloutClearConflictsResult {
+  version: string | null
+  cleared: number
+  node_ids: string[]
+  updated: number
+  blocked: boolean
+  pending_node_ids: string[]
+  rollout_active: boolean
+  completed: number
+  remaining: number
+}
+
+export interface ProxyNodeUpgradeRolloutRestoreSkippedResult {
+  version: string | null
+  restored: number
+  node_ids: string[]
+  skipped_node_ids: string[]
+  updated: number
+  blocked: boolean
+  pending_node_ids: string[]
+  rollout_active: boolean
+  completed: number
+  remaining: number
+}
+
+export interface ProxyNodeUpgradeRolloutNodeActionResult {
+  version: string | null
+  node_id: string
+  skipped_node_ids: string[]
+  updated: number
+  blocked: boolean
+  pending_node_ids: string[]
+  rollout_active: boolean
+  completed: number
+  remaining: number
 }
 
 export const proxyNodesApi = {
@@ -86,8 +249,18 @@ export const proxyNodesApi = {
     return response.data
   },
 
+  async getNode(nodeId: string): Promise<{ node: ProxyNode }> {
+    const response = await apiClient.get<{ node: ProxyNode }>(`/api/admin/proxy-nodes/${nodeId}`)
+    return response.data
+  },
+
   async createManualNode(data: ManualProxyNodeCreateRequest): Promise<{ node_id: string; node: ProxyNode }> {
     const response = await apiClient.post<{ node_id: string; node: ProxyNode }>('/api/admin/proxy-nodes/manual', data)
+    return response.data
+  },
+
+  async createInstallSession(data: ProxyNodeInstallSessionCreateRequest): Promise<ProxyNodeInstallSession> {
+    const response = await apiClient.post<ProxyNodeInstallSession>('/api/admin/proxy-nodes/install-sessions', data)
     return response.data
   },
 
@@ -96,8 +269,18 @@ export const proxyNodesApi = {
     return response.data
   },
 
-  async deleteProxyNode(nodeId: string): Promise<{ message: string; node_id: string; cleared_system_proxy: boolean }> {
-    const response = await apiClient.delete<{ message: string; node_id: string; cleared_system_proxy: boolean }>(`/api/admin/proxy-nodes/${nodeId}`)
+  async deleteProxyNode(nodeId: string): Promise<{
+    message: string
+    node_id: string
+    cleared_system_proxy: boolean
+    cleared_external_models_proxy: boolean
+  }> {
+    const response = await apiClient.delete<{
+      message: string
+      node_id: string
+      cleared_system_proxy: boolean
+      cleared_external_models_proxy: boolean
+    }>(`/api/admin/proxy-nodes/${nodeId}`)
     return response.data
   },
 
@@ -111,10 +294,53 @@ export const proxyNodesApi = {
     return response.data
   },
 
-  async batchUpgrade(version: string): Promise<{ version: string; updated: number; skipped: number; node_ids: string[] }> {
-    const response = await apiClient.post<{ version: string; updated: number; skipped: number; node_ids: string[] }>(
+  async batchUpgrade(
+    version: string,
+    options?: {
+      batch_size?: number
+      cooldown_secs?: number
+      probe_url?: string | null
+      probe_timeout_secs?: number
+    },
+  ): Promise<ProxyNodeBatchUpgradeResult> {
+    const response = await apiClient.post<ProxyNodeBatchUpgradeResult>(
       '/api/admin/proxy-nodes/upgrade',
-      { version }
+      { version, ...options }
+    )
+    return response.data
+  },
+
+  async cancelUpgradeRollout(): Promise<ProxyNodeUpgradeRolloutCancelResult> {
+    const response = await apiClient.post<ProxyNodeUpgradeRolloutCancelResult>(
+      '/api/admin/proxy-nodes/upgrade/cancel'
+    )
+    return response.data
+  },
+
+  async clearUpgradeConflicts(): Promise<ProxyNodeUpgradeRolloutClearConflictsResult> {
+    const response = await apiClient.post<ProxyNodeUpgradeRolloutClearConflictsResult>(
+      '/api/admin/proxy-nodes/upgrade/clear-conflicts'
+    )
+    return response.data
+  },
+
+  async restoreSkippedUpgradeNodes(): Promise<ProxyNodeUpgradeRolloutRestoreSkippedResult> {
+    const response = await apiClient.post<ProxyNodeUpgradeRolloutRestoreSkippedResult>(
+      '/api/admin/proxy-nodes/upgrade/restore-skipped'
+    )
+    return response.data
+  },
+
+  async skipUpgradeNode(nodeId: string): Promise<ProxyNodeUpgradeRolloutNodeActionResult> {
+    const response = await apiClient.post<ProxyNodeUpgradeRolloutNodeActionResult>(
+      `/api/admin/proxy-nodes/${nodeId}/upgrade/skip`
+    )
+    return response.data
+  },
+
+  async retryUpgradeNode(nodeId: string): Promise<ProxyNodeUpgradeRolloutNodeActionResult> {
+    const response = await apiClient.post<ProxyNodeUpgradeRolloutNodeActionResult>(
+      `/api/admin/proxy-nodes/${nodeId}/upgrade/retry`
     )
     return response.data
   },
@@ -124,8 +350,19 @@ export const proxyNodesApi = {
     return response.data
   },
 
-  async listNodeEvents(nodeId: string, limit = 50): Promise<{ items: ProxyNodeEvent[] }> {
-    const response = await apiClient.get<{ items: ProxyNodeEvent[] }>(`/api/admin/proxy-nodes/${nodeId}/events`, { params: { limit } })
+  async listNodeMetrics(nodeId: string, params: ProxyNodeMetricsQuery): Promise<ProxyNodeMetricsResponse> {
+    const response = await apiClient.get<ProxyNodeMetricsResponse>(`/api/admin/proxy-nodes/${nodeId}/metrics`, { params })
+    return response.data
+  },
+
+  async listFleetMetrics(params: ProxyNodeMetricsQuery): Promise<ProxyNodeMetricsResponse> {
+    const response = await apiClient.get<ProxyNodeMetricsResponse>('/api/admin/proxy-nodes/metrics/fleet', { params })
+    return response.data
+  },
+
+  async listNodeEvents(nodeId: string, query: ProxyNodeEventQuery | number = 50): Promise<{ items: ProxyNodeEvent[] }> {
+    const params = typeof query === 'number' ? { limit: query } : query
+    const response = await apiClient.get<{ items: ProxyNodeEvent[] }>(`/api/admin/proxy-nodes/${nodeId}/events`, { params })
     return response.data
   },
 }

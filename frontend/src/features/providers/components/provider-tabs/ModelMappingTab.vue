@@ -20,7 +20,7 @@
 
     <!-- 加载状态 -->
     <div
-      v-if="loading"
+      v-if="isLoading"
       class="flex items-center justify-center py-12"
     >
       <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
@@ -39,10 +39,10 @@
       >
         <!-- 行头部（可点击展开） -->
         <div
-          class="flex items-center justify-between px-4 py-3 hover:bg-muted/20 cursor-pointer"
+          class="flex items-start justify-between px-4 py-3 hover:bg-muted/20 cursor-pointer"
           @click="toggleExpand(item.key)"
         >
-          <div class="flex items-center gap-2 flex-1 min-w-0">
+          <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1.5">
             <!-- 展开/收起图标 -->
             <ChevronRight
               class="w-4 h-4 text-muted-foreground shrink-0 transition-transform self-start mt-0.5"
@@ -50,7 +50,7 @@
             />
             <!-- 精确映射 -->
             <template v-if="item.type === 'exact'">
-              <div class="flex flex-col min-w-0">
+              <div class="flex min-w-0 flex-[1_1_12rem] flex-col">
                 <span class="font-semibold text-sm truncate">
                   {{ item.targetModelName }}
                 </span>
@@ -72,10 +72,26 @@
               <span class="text-xs text-muted-foreground shrink-0">
                 | {{ item.mappings.length }} 个映射
               </span>
+              <Badge
+                v-if="item.group"
+                variant="outline"
+                class="min-w-0 max-w-full text-xs"
+                :title="getGroupEndpointScopeTitle(item.group)"
+              >
+                <span class="truncate">{{ getGroupEndpointScopeLabel(item.group) }}</span>
+              </Badge>
+              <Badge
+                v-if="item.group"
+                variant="outline"
+                class="min-w-0 max-w-full text-xs"
+                :title="getGroupOperationScopeLabel(item.group)"
+              >
+                <span class="truncate">{{ getGroupOperationScopeLabel(item.group) }}</span>
+              </Badge>
             </template>
             <!-- 正则映射 -->
             <template v-else>
-              <div class="flex flex-col min-w-0">
+              <div class="flex min-w-0 flex-[1_1_12rem] flex-col">
                 <span class="font-semibold text-sm truncate">
                   {{ item.targetModelName }}
                 </span>
@@ -153,6 +169,7 @@
               </span>
               <!-- 测试按钮（直连测试） -->
               <Button
+                v-if="!item.group || item.group.operations.length === 0"
                 variant="ghost"
                 size="icon"
                 class="h-7 w-7 shrink-0"
@@ -287,9 +304,11 @@
 
   <!-- 添加/编辑映射对话框 -->
   <ModelMappingDialog
+    v-if="dialogOpen"
     v-model:open="dialogOpen"
     :provider-id="provider.id"
     :models="models"
+    :endpoints="endpoints"
     :editing-group="editingGroup"
     :preselected-model-id="preselectedModelId"
     :has-auto-fetch-key="hasAutoFetchKey"
@@ -313,16 +332,35 @@
     :open="modelTest.dialogOpen.value"
     :result="modelTest.testResult.value"
     mode="direct"
+    :provider-type="provider.provider_type"
     :selecting-model-name="testingModelName"
+    :endpoints="selectableTestEndpoints"
+    :selected-endpoint="selectedTestEndpoint"
     :testing="modelTest.testing.value"
     :trace="modelTest.testTrace.value"
     :request-id="modelTest.requestId.value"
+    :request-headers-draft="testRequestHeadersDraft"
+    :request-headers-reset-value="testRequestHeadersResetValue"
+    :request-headers-error="testRequestHeadersError"
+    :request-body-draft="testRequestBodyDraft"
+    :request-body-reset-value="testRequestBodyResetValue"
+    :request-body-error="testRequestBodyError"
+    :key-options="testKeyOptions"
+    :selected-key-ids="selectedTestKeyIds"
+    :key-options-loading="loadingTestKeys"
+    :start-disabled="loadingTestKeys || !selectedTestEndpoint || !!testRequestHeadersError || !!testRequestBodyError"
     @close="handleTestDialogClose"
+    @back="handleTestDialogBack"
+    @select-endpoint="handleSelectTestEndpoint"
+    @start="handleStartMappingTest"
+    @update:request-headers-draft="testRequestHeadersDraft = $event"
+    @update:request-body-draft="testRequestBodyDraft = $event"
+    @update:selected-key-ids="selectedTestKeyIds = $event"
   />
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useSmartPagination } from '@/composables/useSmartPagination'
 import { useModelTest } from '@/composables/useModelTest'
 import { Tag, Plus, Edit, Trash2, ChevronRight, Loader2, Play } from 'lucide-vue-next'
@@ -335,13 +373,34 @@ import ModelTestDialog from './ModelTestDialog.vue'
 import { useToast } from '@/composables/useToast'
 import {
   type Model,
+  type ProviderEndpoint,
   type ProviderModelAlias,
   type ProviderMappingPreviewResponse,
 } from '@/api/endpoints'
-import { type EndpointAPIKey } from '@/api/endpoints/keys'
+import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { getProviderKeys, type EndpointAPIKey } from '@/api/endpoints/keys'
 import { updateModel } from '@/api/endpoints/models'
+import { useI18n } from '@/i18n'
 import { parseApiError } from '@/utils/errorParser'
 import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
+import {
+  formatModelMappingEndpointLabel,
+  formatModelMappingRequestScope,
+  modelMappingOperationsKey,
+  normalizeModelMappingOperations,
+} from '../../utils/modelMappingScope'
+import {
+  buildDefaultModelTestRequestHeaders,
+  buildDefaultModelTestRequestBody,
+  isModelTestableApiFormat,
+  isModelTestableEndpoint,
+  modelTestMappingScopeMatchesEndpoint,
+  modelTestKeySupportsEndpoint,
+  parseModelTestRequestHeadersDraft,
+  parseModelTestRequestBodyDraft,
+  selectPreferredModelTestEndpoint,
+  syncModelTestRequestBodyDraft,
+} from './model-test-request'
 
 interface MappingItem {
   name: string
@@ -369,9 +428,11 @@ interface CombinedMapping {
 
 const props = defineProps<{
   provider: ProviderWithEndpointsSummary
+  endpoints?: ProviderEndpoint[]
   providerKeys?: EndpointAPIKey[]
   models?: Model[]
   mappingPreview?: ProviderMappingPreviewResponse | null
+  loading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -379,28 +440,103 @@ const emit = defineEmits<{
 }>()
 
 const { error: showError, success: showSuccess } = useToast()
+const { t } = useI18n()
 
 // 模型测试 composable
 const modelTest = useModelTest({ providerId: () => props.provider.id })
 
 // 状态
-const loading = ref(false)
+const localLoading = ref(false)
 const dialogOpen = ref(false)
 const deleteConfirmOpen = ref(false)
 const editingGroup = ref<AliasGroup | null>(null)
 const deletingGroup = ref<AliasGroup | null>(null)
 const testingMapping = ref<string | null>(null)
+const pendingMappingKey = ref<string | null>(null)
 const testingModelName = ref<string | null>(null)
+const testingSourceModel = ref<Model | null>(null)
 const preselectedModelId = ref<string | null>(null)
+const selectedTestEndpoint = ref<ProviderEndpoint | null>(null)
+const selectedTestKeyIds = ref<string[]>([])
+const testKeys = ref<EndpointAPIKey[] | null>(null)
+const loadingTestKeys = ref(false)
+let testKeysLoadVersion = 0
+const testKeyOptions = computed(() => {
+  const endpoint = selectedTestEndpoint.value
+  if (!endpoint) return []
+  return [...new Map((testKeys.value ?? props.providerKeys ?? []).map(key => [key.id, key])).values()]
+    .filter(key => modelTestKeySupportsEndpoint(key, endpoint, props.provider.provider_type))
+    .sort((left, right) => left.internal_priority - right.internal_priority)
+    .map(key => ({
+      value: key.id,
+      label: [
+        key.name?.trim() || key.api_key_masked?.trim() || key.id,
+        key.name?.trim() ? key.api_key_masked?.trim() : '',
+        key.auth_type?.trim(),
+      ].filter(Boolean).join(' · '),
+    }))
+})
+
+function pruneSelectedTestKeyIds() {
+  const allowed = new Set(testKeyOptions.value.map(option => option.value))
+  selectedTestKeyIds.value = [...new Set(selectedTestKeyIds.value.filter(id => allowed.has(id)))]
+}
+
+async function loadTestKeys() {
+  const version = ++testKeysLoadVersion
+  const providerId = props.provider.id
+  loadingTestKeys.value = true
+  try {
+    const keys = await getProviderKeys(providerId)
+    if (version === testKeysLoadVersion && providerId === props.provider.id) {
+      testKeys.value = keys
+    }
+  } catch (err: unknown) {
+    if (version === testKeysLoadVersion && providerId === props.provider.id) {
+      showError(parseApiError(err, '加载测试 Key 失败'), '错误')
+    }
+  } finally {
+    if (version === testKeysLoadVersion) loadingTestKeys.value = false
+  }
+}
+
+watch(testKeyOptions, pruneSelectedTestKeyIds)
+watch(() => props.provider.id, () => {
+  testKeysLoadVersion += 1
+  testKeys.value = null
+  selectedTestKeyIds.value = []
+  loadingTestKeys.value = false
+})
+const testRequestHeadersDraft = ref('')
+const testRequestHeadersResetValue = ref('')
+const testRequestBodyDraft = ref('')
+const testRequestBodyResetValue = ref('')
+const mappingTestEndpoints = ref<ProviderEndpoint[] | null>(null)
+const providerKeysState = computed(() => props.providerKeys ?? [])
+const activeEndpoints = computed(() => (props.endpoints ?? [])
+  .filter(endpoint => {
+    if (typeof endpoint.active_keys === 'number') {
+      return endpoint.is_active !== false
+        && isModelTestableApiFormat(endpoint.api_format)
+        && (endpoint.active_keys > 0
+          || isModelTestableEndpoint(endpoint, providerKeysState.value, props.provider.provider_type))
+    }
+    return isModelTestableEndpoint(endpoint, providerKeysState.value, props.provider.provider_type)
+  }))
+const selectableTestEndpoints = computed(() => mappingTestEndpoints.value ?? activeEndpoints.value)
+const parsedTestRequestHeaders = computed(() => parseModelTestRequestHeadersDraft(testRequestHeadersDraft.value))
+const testRequestHeadersError = computed(() => parsedTestRequestHeaders.value.error)
+const parsedTestRequestBody = computed(() => parseModelTestRequestBodyDraft(testRequestBodyDraft.value))
+const testRequestBodyError = computed(() => parsedTestRequestBody.value.error)
+const isLoading = computed(() => Boolean(props.loading) || localLoading.value)
 
 // 使用 props 传入的数据
 const models = computed(() => props.models ?? [])
 const aliasMappingPreview = computed(() => props.mappingPreview ?? null)
-const providerKeysState = computed(() => props.providerKeys ?? [])
 
-// 是否有 key 配置了自动获取上游模型
+// 后端分页下当前页不一定包含 auto_fetch key；有活跃 key 时允许弹窗尝试拉取上游模型。
 const hasAutoFetchKey = computed(() => {
-  return providerKeysState.value.some(k => k.auto_fetch_models)
+  return providerKeysState.value.some(k => k.auto_fetch_models) || props.provider.active_keys > 0
 })
 
 // 展开状态
@@ -408,8 +544,70 @@ const expandedItems = ref<Set<string>>(new Set())
 
 // 生成作用域唯一键
 function getApiFormatsKey(formats: string[] | undefined): string {
-  if (!formats || formats.length === 0) return ''
-  return [...formats].sort().join(',')
+  return getScopeKey(formats)
+}
+
+function normalizeStringList(values: string[] | undefined): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values ?? []) {
+    const normalized = value.trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    result.push(normalized)
+  }
+  return result
+}
+
+function getScopeKey(values: string[] | undefined): string {
+  return normalizeStringList(values).sort().join(',')
+}
+
+function getEndpointIdsKey(endpointIds: string[] | undefined): string {
+  return getScopeKey(endpointIds)
+}
+
+function getOperationsKey(operations: string[] | undefined): string {
+  return modelMappingOperationsKey(operations)
+}
+
+const requestScopeLabels = computed(() => ({
+  allRequests: t('providers.modelMapping.scope.allRequests'),
+  sessionCompactionOnly: t('providers.modelMapping.scope.sessionCompactionOnly'),
+  customOperations: (operations: string[]) => t(
+    'providers.modelMapping.scope.customOperations',
+    { operations: operations.join(', ') },
+  ),
+}))
+
+function getGroupEndpointScopeLabel(group: AliasGroup): string {
+  if (!group.endpointIds || group.endpointIds.length === 0) {
+    return t('providers.modelMapping.scope.allEndpoints')
+  }
+  const labels = getGroupEndpointScopeLabels(group)
+  return labels.length === 1
+    ? labels[0]
+    : t('providers.modelMapping.scope.endpointCount', { count: labels.length })
+}
+
+function getGroupEndpointScopeTitle(group: AliasGroup): string {
+  if (!group.endpointIds || group.endpointIds.length === 0) {
+    return t('providers.modelMapping.scope.allEndpoints')
+  }
+  return getGroupEndpointScopeLabels(group).join('、')
+}
+
+function getGroupEndpointScopeLabels(group: AliasGroup): string[] {
+  const endpoints = props.endpoints ?? []
+  return group.endpointIds.map((endpointId) => {
+    const endpoint = endpoints.find(item => item.id === endpointId)
+    if (!endpoint) return endpointId
+    return formatModelMappingEndpointLabel(endpoint, endpoints)
+  })
+}
+
+function getGroupOperationScopeLabel(group: AliasGroup): string {
+  return formatModelMappingRequestScope(group.operations, requestScopeLabels.value)
 }
 
 // 精确映射分组（来自 provider_model_mappings）
@@ -422,13 +620,19 @@ const exactMappingGroups = computed<AliasGroup[]>(() => {
 
     for (const alias of model.provider_model_mappings) {
       const apiFormatsKey = getApiFormatsKey(alias.api_formats)
-      const groupKey = `${model.id}|${apiFormatsKey}`
+      const endpointIdsKey = getEndpointIdsKey(alias.endpoint_ids)
+      const operationsKey = getOperationsKey(alias.operations)
+      const groupKey = `${model.id}|${apiFormatsKey}|${endpointIdsKey}|${operationsKey}`
 
       if (!groupMap.has(groupKey)) {
         const group: AliasGroup = {
           model,
           apiFormatsKey,
           apiFormats: alias.api_formats || [],
+          endpointIdsKey,
+          endpointIds: normalizeStringList(alias.endpoint_ids),
+          operationsKey,
+          operations: normalizeModelMappingOperations(alias.operations),
           aliases: []
         }
         groupMap.set(groupKey, group)
@@ -452,13 +656,20 @@ const regexMappings = computed<CombinedMapping[]>(() => {
   const result: CombinedMapping[] = []
   const modelMap = new Map<string, CombinedMapping>()
 
-  for (const keyInfo of aliasMappingPreview.value.keys) {
-    for (const gm of keyInfo.matching_global_models) {
+  const previewKeys = Array.isArray(aliasMappingPreview.value.keys)
+    ? aliasMappingPreview.value.keys
+    : []
+  for (const keyInfo of previewKeys) {
+    const matchingGlobalModels = Array.isArray(keyInfo.matching_global_models)
+      ? keyInfo.matching_global_models
+      : []
+    for (const gm of matchingGlobalModels) {
+      const matchedModels = Array.isArray(gm.matched_models) ? gm.matched_models : []
       if (!modelMap.has(gm.global_model_id)) {
         modelMap.set(gm.global_model_id, {
           key: `regex-${gm.global_model_id}`,
           type: 'regex',
-          targetModelName: gm.display_name,
+          targetModelName: gm.display_name || gm.global_model_name || gm.global_model_id,
           targetModelId: gm.global_model_id,
           globalModelName: gm.global_model_name,
           mappings: [],
@@ -471,7 +682,7 @@ const regexMappings = computed<CombinedMapping[]>(() => {
       if (!mapping) continue
 
       // 添加 Key 信息
-      const keyMatches: MappingItem[] = gm.matched_models.map(m => ({
+      const keyMatches: MappingItem[] = matchedModels.map(m => ({
         name: m.allowed_model,
         pattern: m.mapping_pattern
       }))
@@ -484,7 +695,7 @@ const regexMappings = computed<CombinedMapping[]>(() => {
       })
 
       // 收集所有映射（去重）
-      for (const match of gm.matched_models) {
+      for (const match of matchedModels) {
         if (!mapping.mappings.some(m => m.name === match.allowed_model)) {
           mapping.mappings.push({
             name: match.allowed_model,
@@ -505,7 +716,7 @@ const combinedMappings = computed<CombinedMapping[]>(() => {
   // 添加精确映射
   for (const group of exactMappingGroups.value) {
     result.push({
-      key: `exact-${group.model.id}-${group.apiFormatsKey}`,
+      key: `exact-${group.model.id}-${group.apiFormatsKey}-${group.endpointIdsKey}-${group.operationsKey}`,
       type: 'exact',
       targetModelName: group.model.global_model_display_name || group.model.provider_model_name,
       targetModelId: group.model.id,
@@ -549,7 +760,9 @@ const deleteConfirmDescription = computed(() => {
   const { model, aliases } = deletingGroup.value
   const modelName = model.global_model_display_name || model.provider_model_name
   const aliasNames = aliases.map(a => a.name).join(', ')
-  return `确定要删除模型「${modelName}」的 ${aliases.length} 个映射吗？\n\n映射名称：${aliasNames}`
+  const endpointScope = getGroupEndpointScopeLabel(deletingGroup.value)
+  const operationScope = getGroupOperationScopeLabel(deletingGroup.value)
+  return `确定要删除模型「${modelName}」在「${endpointScope} / ${operationScope}」下的 ${aliases.length} 个映射吗？\n\n映射名称：${aliasNames}`
 })
 
 // 切换展开状态
@@ -596,14 +809,19 @@ function deleteGroup(group: AliasGroup) {
 async function confirmDelete() {
   if (!deletingGroup.value) return
 
-  const { model, aliases, apiFormatsKey } = deletingGroup.value
+  const { model, aliases, apiFormatsKey, endpointIdsKey, operationsKey } = deletingGroup.value
 
   try {
     const currentAliases = model.provider_model_mappings || []
     const aliasNamesToRemove = new Set(aliases.map(a => a.name))
     const newAliases = currentAliases.filter((a: ProviderModelAlias) => {
       const currentKey = getApiFormatsKey(a.api_formats)
-      return !(currentKey === apiFormatsKey && aliasNamesToRemove.has(a.name))
+      const currentEndpointIdsKey = getEndpointIdsKey(a.endpoint_ids)
+      const currentOperationsKey = getOperationsKey(a.operations)
+      return !(currentKey === apiFormatsKey
+        && currentEndpointIdsKey === endpointIdsKey
+        && currentOperationsKey === operationsKey
+        && aliasNamesToRemove.has(a.name))
     })
 
     await updateModel(props.provider.id, model.id, {
@@ -626,28 +844,161 @@ async function onDialogSaved() {
 
 function handleTestDialogClose() {
   modelTest.resetState()
+  testKeysLoadVersion += 1
+  loadingTestKeys.value = false
+  testKeys.value = null
+  pendingMappingKey.value = null
   testingModelName.value = null
+  testingSourceModel.value = null
+  testingMapping.value = null
+  selectedTestEndpoint.value = null
+  selectedTestKeyIds.value = []
+  mappingTestEndpoints.value = null
+  testRequestHeadersDraft.value = ''
+  testRequestHeadersResetValue.value = ''
+  testRequestBodyDraft.value = ''
+  testRequestBodyResetValue.value = ''
+}
+
+function handleTestDialogBack() {
+  if (modelTest.testing.value) return
+  modelTest.testResult.value = null
+  modelTest.stopPolling()
+}
+
+function handleSelectTestEndpoint(endpointId: string) {
+  const endpoint = selectableTestEndpoints.value.find(item => item.id === endpointId)
+  if (!endpoint) return
+  selectedTestEndpoint.value = endpoint
+  pruneSelectedTestKeyIds()
+  syncMappingTestRequestBody()
+}
+
+function findMappingTestModel(modelName: string): Model | null {
+  const normalized = modelName.trim()
+  if (!normalized) return null
+
+  return models.value.find(model => (
+    model.provider_model_name === normalized
+    || model.global_model_name === normalized
+    || model.global_model_display_name === normalized
+    || (model.provider_model_mappings ?? []).some(alias => alias.name === normalized)
+  )) ?? null
 }
 
 // 测试映射（直连测试，带故障转移和实时进度）
-async function runMappingTest(testingKey: string, modelName: string) {
-  testingMapping.value = testingKey
+function runMappingTest(
+  testingKey: string,
+  modelName: string,
+  endpointsOverride?: ProviderEndpoint[],
+  sourceModel?: Model | null,
+) {
+  const endpoints = endpointsOverride ?? activeEndpoints.value
+  if (endpoints.length === 0) {
+    showError('暂无可用于测试的活跃端点')
+    return
+  }
+  pendingMappingKey.value = testingKey
+  selectedTestKeyIds.value = []
+  void loadTestKeys()
+  modelTest.testResult.value = null
+  modelTest.dialogOpen.value = true
+  testingMapping.value = null
   testingModelName.value = modelName
+  testingSourceModel.value = sourceModel ?? findMappingTestModel(modelName)
+  mappingTestEndpoints.value = endpointsOverride ?? null
+  selectedTestEndpoint.value = selectPreferredModelTestEndpoint(
+    testingSourceModel.value,
+    endpoints,
+  )
+  testRequestHeadersResetValue.value = buildDefaultModelTestRequestHeaders()
+  testRequestHeadersDraft.value = testRequestHeadersResetValue.value
+  resetMappingTestRequestBody()
+}
+
+function resetMappingTestRequestBody() {
+  if (!testingModelName.value) return
+
+  testRequestBodyResetValue.value = buildDefaultModelTestRequestBody(
+    testingModelName.value,
+    selectedTestEndpoint.value?.api_format,
+    testingSourceModel.value,
+  )
+  testRequestBodyDraft.value = testRequestBodyResetValue.value
+}
+
+function syncMappingTestRequestBody() {
+  if (!testingModelName.value) return
+
+  const nextResetValue = buildDefaultModelTestRequestBody(
+    testingModelName.value,
+    selectedTestEndpoint.value?.api_format,
+    testingSourceModel.value,
+  )
+  const next = syncModelTestRequestBodyDraft(
+    testRequestBodyDraft.value,
+    testRequestBodyResetValue.value,
+    nextResetValue,
+    testingModelName.value,
+  )
+  testRequestBodyResetValue.value = next.resetValue
+  testRequestBodyDraft.value = next.draft
+}
+
+async function handleStartMappingTest() {
+  if (modelTest.testing.value || loadingTestKeys.value || !testingModelName.value) return
+  const endpoint = selectedTestEndpoint.value || selectableTestEndpoints.value[0]
+  if (!endpoint) {
+    showError('请选择要测试的端点')
+    return
+  }
+
+  const { value: requestHeaders, error: requestHeadersError } = parsedTestRequestHeaders.value
+  if (!requestHeaders || requestHeadersError) {
+    showError(`测试请求头无效: ${requestHeadersError || '无效 JSON'}`)
+    return
+  }
+
+  const { value: requestBody, error } = parsedTestRequestBody.value
+  if (!requestBody || error) {
+    showError(`测试请求体无效: ${error || '无效 JSON'}`)
+    return
+  }
+
+  const currentMappingKey = pendingMappingKey.value || testingModelName.value
+  testingMapping.value = pendingMappingKey.value ? currentMappingKey : null
+  pruneSelectedTestKeyIds()
   await modelTest.startTest({
     mode: 'direct',
-    modelName,
-    displayLabel: `映射 "${modelName}"`,
-    message: 'hello',
-    onSuccess: () => {
-      testingModelName.value = null
-    },
+    modelName: testingModelName.value,
+    displayLabel: `[${formatApiFormat(endpoint.api_format)}] 映射 "${testingModelName.value}"`,
+    apiFormat: endpoint.api_format,
+    endpointId: endpoint.id,
+    endpointBaseUrl: endpoint.base_url,
+    apiKeyIds: selectedTestKeyIds.value,
+    requestHeaders,
+    requestBody,
   })
+  if (pendingMappingKey.value === currentMappingKey) {
+    pendingMappingKey.value = null
+  }
   testingMapping.value = null
+}
+
+function scopedMappingEndpoints(item: CombinedMapping): ProviderEndpoint[] {
+  const group = item.group
+  if (!group) return activeEndpoints.value
+
+  return activeEndpoints.value.filter(endpoint => modelTestMappingScopeMatchesEndpoint(
+    group.apiFormats,
+    group.endpointIds,
+    endpoint,
+  ))
 }
 
 // 测试精确映射
 function testMapping(item: CombinedMapping, mapping: MappingItem) {
-  runMappingTest(`${item.key}-${mapping.name}`, mapping.name)
+  runMappingTest(`${item.key}-${mapping.name}`, mapping.name, scopedMappingEndpoints(item), item.group?.model)
 }
 
 // 测试正则映射

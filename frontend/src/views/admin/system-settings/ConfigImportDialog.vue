@@ -40,7 +40,7 @@
         <Select
           :model-value="mergeMode"
           :open="mergeModeSelectOpen"
-          @update:model-value="$emit('update:mergeMode', $event)"
+          @update:model-value="($event === 'skip' || $event === 'overwrite' || $event === 'error') && $emit('update:mergeMode', $event)"
           @update:open="$emit('update:mergeModeSelectOpen', $event)"
         >
           <SelectTrigger>
@@ -66,7 +66,7 @@
             已存在的配置将被导入的配置覆盖
           </template>
           <template v-else>
-            如果发现任何冲突，导入将中止并回滚
+            如果发现任何冲突，导入将在写入前预检并中止
           </template>
         </p>
       </div>
@@ -74,6 +74,22 @@
       <p class="text-xs text-muted-foreground">
         注意：相同的 API Keys 会自动跳过，不会创建重复记录。
       </p>
+
+      <div
+        v-if="importProgress"
+        class="space-y-2 rounded-md border border-border p-3"
+      >
+        <div class="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+          <span>{{ importProgress.message }}</span>
+          <span>{{ importProgress.percent }}%</span>
+        </div>
+        <div class="h-1.5 overflow-hidden rounded-full bg-muted">
+          <div
+            class="h-full bg-primary transition-all"
+            :style="{ width: `${importProgress.percent}%` }"
+          />
+        </div>
+      </div>
     </div>
 
     <template #footer>
@@ -220,6 +236,7 @@ import SelectContent from '@/components/ui/select-content.vue'
 import SelectItem from '@/components/ui/select-item.vue'
 import { Dialog } from '@/components/ui'
 import type { ConfigExportData, ConfigImportResponse } from '@/api/admin'
+import type { ImportProgressState } from './composables/useConfigExportImport'
 
 defineProps<{
   importDialogOpen: boolean
@@ -229,6 +246,7 @@ defineProps<{
   mergeMode: 'skip' | 'overwrite' | 'error'
   mergeModeSelectOpen: boolean
   importLoading: boolean
+  importProgress: ImportProgressState | null
 }>()
 
 defineEmits<{

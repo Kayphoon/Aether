@@ -67,7 +67,7 @@
                 <div
                   class="node-dot"
                   :class="[
-                    getStatusColorClass(getDisplayStatus(group.primary)),
+                    getStatusColorClass(group.primaryStatus),
                     { 'is-first-selected': isGroupSelected(group) && selectedAttemptIndex === 0 }
                   ]"
                   @click.stop="selectFirstAttempt(group)"
@@ -75,19 +75,21 @@
 
                 <!-- 子节点（同提供商的其他尝试，不包含首次） -->
                 <div
-                  v-if="group.retryCount > 0 && isGroupSelected(group)"
+                  v-if="group.retryCount > 0"
                   class="sub-dots"
                 >
                   <button
                     v-for="(attempt, idx) in group.allAttempts.slice(1)"
                     :key="attempt.id"
+                    type="button"
                     class="sub-dot"
                     :class="[
                       getStatusColorClass(getDisplayStatus(attempt)),
-                      { active: selectedAttemptIndex === idx + 1 }
+                      { active: isAttemptSelected(group, idx + 1) }
                     ]"
-                    :title="attempt.key_name || `Key ${idx + 2}`"
-                    @click.stop="selectedAttemptIndex = idx + 1"
+                    :title="formatAttemptDotTitle(attempt)"
+                    :aria-label="formatAttemptDotTitle(attempt)"
+                    @click.stop="selectAttemptInGroup(group, idx + 1)"
                   />
                 </div>
               </div>
@@ -115,12 +117,12 @@
                 <div class="panel-title">
                   <span
                     class="title-dot"
-                    :class="getStatusColorClass(getDisplayStatus(currentAttempt))"
+                    :class="getStatusColorClass(currentAttemptDisplayStatus)"
                   />
                   <span class="title-text">{{ currentGroupTitle }}</span>
                   <a
-                    v-if="currentAttempt.provider_website"
-                    :href="currentAttempt.provider_website"
+                    v-if="currentAttemptProviderWebsite"
+                    :href="currentAttemptProviderWebsite"
                     target="_blank"
                     rel="noopener noreferrer"
                     class="provider-link"
@@ -130,15 +132,31 @@
                   </a>
                   <span
                     class="status-tag"
-                    :class="getStatusColorClass(getDisplayStatus(currentAttempt))"
+                    :class="getStatusColorClass(currentAttemptDisplayStatus)"
                   >
-                    {{ currentAttempt.status_code || getStatusLabel(currentAttempt.status) }}
+                    {{ currentAttempt.status_code || getStatusLabel(currentAttemptDisplayStatus) }}
                   </span>
                   <!-- 多 Key 标识 -->
                   <template v-if="selectedGroup.retryCount > 0">
-                    <span class="cache-hint">
-                      {{ selectedAttemptIndex + 1 }}/{{ selectedGroup.allAttempts.length }}
-                    </span>
+                    <div class="attempt-switcher">
+                      <button
+                        class="attempt-nav-btn"
+                        :disabled="selectedAttemptIndex === 0"
+                        @click.stop="navigateAttempt(-1)"
+                      >
+                        <ChevronLeft class="w-3 h-3" />
+                      </button>
+                      <span class="cache-hint">
+                        {{ selectedAttemptIndex + 1 }}/{{ selectedGroup.allAttempts.length }}
+                      </span>
+                      <button
+                        class="attempt-nav-btn"
+                        :disabled="selectedAttemptIndex === selectedGroup.allAttempts.length - 1"
+                        @click.stop="navigateAttempt(1)"
+                      >
+                        <ChevronRight class="w-3 h-3" />
+                      </button>
+                    </div>
                   </template>
                 </div>
                 <div class="panel-nav">
@@ -164,20 +182,20 @@
                 <!-- 核心信息网格 -->
                 <div class="info-grid">
                   <div
-                    v-if="currentAttempt.started_at"
+                    v-if="currentAttemptTimeRange"
                     class="info-item"
                   >
                     <span class="info-label">时间范围</span>
                     <span class="info-value mono time-range-value">
-                      {{ formatTime(currentAttempt.started_at) }}
+                      {{ formatTime(currentAttemptTimeRange.startIso) }}
                       <span class="time-arrow-container">
                         <span
-                          v-if="currentAttempt.finished_at"
+                          v-if="currentAttemptTimeRange.endIso"
                           class="time-duration"
-                        >+{{ formatDuration(currentAttempt.started_at, currentAttempt.finished_at) }}</span>
+                        >+{{ currentAttemptTimeRange.durationLabel }}</span>
                         <span class="time-arrow">→</span>
                       </span>
-                      {{ currentAttempt.finished_at ? formatTime(currentAttempt.finished_at) : '进行中' }}
+                      {{ currentAttemptTimeRange.endIso ? formatTime(currentAttemptTimeRange.endIso) : '进行中' }}
                     </span>
                   </div>
                   <div
@@ -197,13 +215,22 @@
                     </span>
                   </div>
                   <div
-                    v-if="currentAttempt.key_name || currentAttempt.key_id"
+                    v-if="currentAttemptRequestPathDisplay"
+                    class="info-item"
+                  >
+                    <span class="info-label">请求路径</span>
+                    <span class="info-value">
+                      <code class="format-code request-path-code">{{ currentAttemptRequestPathDisplay }}</code>
+                    </span>
+                  </div>
+                  <div
+                    v-if="currentAttemptKeyDisplay"
                     class="info-item"
                   >
                     <span class="info-label">{{ isOAuthType(currentAttempt.key_auth_type) ? '账号' : '密钥' }}</span>
                     <span class="info-value info-value-stacked">
                       <span class="key-name">
-                        {{ currentAttempt.key_name || '未知' }}
+                        {{ currentAttemptKeyDisplay }}
                         <span
                           v-if="currentAttempt.key_auth_type && currentAttempt.key_auth_type !== 'api_key'"
                           class="auth-type-tag"
@@ -213,6 +240,18 @@
                         v-if="currentAttempt.key_preview"
                         class="key-preview"
                       >{{ currentAttempt.key_preview }}</code>
+                    </span>
+                  </div>
+                  <div
+                    v-if="currentAttemptKeyFormatsDisplay"
+                    class="info-item"
+                  >
+                    <span class="info-label">支持端点</span>
+                    <span class="info-value info-value-stacked">
+                      <code class="format-code">{{ currentAttemptKeyFormatsDisplay }}</code>
+                      <span class="text-xs text-muted-foreground">
+                        Key 声明的可用 endpoint 格式
+                      </span>
                     </span>
                   </div>
                   <div
@@ -240,6 +279,10 @@
                           -->{{ proxyTimingBreakdown(currentAttempt.extra_data.proxy) }}<!--
                         -->)</span>
                       </span>
+                      <code
+                        v-if="typeof currentAttempt.extra_data.proxy.node_id === 'string' && currentAttempt.extra_data.proxy.node_id"
+                        class="text-xs font-mono text-muted-foreground"
+                      >节点 Key {{ currentAttempt.extra_data.proxy.node_id }}</code>
                     </span>
                   </div>
                   <div
@@ -298,21 +341,66 @@
                       </span>
                     </span>
                   </div>
-                  <div
-                    v-if="mergedCapabilities.length > 0"
-                    class="info-item"
-                  >
-                    <span class="info-label">能力</span>
-                    <span class="info-value">
-                      <span class="capability-tags">
-                        <span
-                          v-for="cap in mergedCapabilities"
-                          :key="cap"
-                          class="capability-tag"
-                          :class="{ active: isCapabilityUsed(cap) }"
-                        >{{ formatCapabilityLabel(cap) }}</span>
-                      </span>
+                </div>
+
+                <div
+                  v-if="currentImageProgress"
+                  class="image-progress-block"
+                >
+                  <div class="image-progress-header">
+                    <span class="image-progress-title">图片生成进度</span>
+                    <span
+                      class="image-progress-phase"
+                      :class="imageProgressPhaseClass(currentImageProgress.phase)"
+                    >
+                      {{ formatImageProgressPhase(currentImageProgress.phase) }}
                     </span>
+                  </div>
+                  <div class="image-progress-grid">
+                    <div class="image-progress-item">
+                      <span class="image-progress-label">上游 TTFB</span>
+                      <span class="image-progress-value mono">{{ formatLatency(currentImageProgress.upstream_ttfb_ms) }}</span>
+                    </div>
+                    <div class="image-progress-item">
+                      <span class="image-progress-label">SSE 帧数</span>
+                      <span class="image-progress-value mono">{{ formatProgressCount(currentImageProgress.upstream_sse_frame_count) }}</span>
+                    </div>
+                    <div class="image-progress-item">
+                      <span class="image-progress-label">Partial 图片</span>
+                      <span class="image-progress-value mono">{{ formatProgressCount(currentImageProgress.partial_image_count) }}</span>
+                    </div>
+                    <div class="image-progress-item">
+                      <span class="image-progress-label">最后帧</span>
+                      <span class="image-progress-value mono">{{ formatProgressFrameTime(currentImageProgress.last_upstream_frame_at_unix_ms) }}</span>
+                    </div>
+                    <template v-if="hasDownstreamHeartbeatProgress">
+                      <div class="image-progress-item">
+                        <span class="image-progress-label">下游心跳</span>
+                        <span class="image-progress-value mono">{{ formatProgressCount(currentImageProgress.downstream_heartbeat_count) }}</span>
+                      </div>
+                      <div class="image-progress-item">
+                        <span class="image-progress-label">心跳间隔</span>
+                        <span class="image-progress-value mono">{{ formatLatency(currentImageProgress.downstream_heartbeat_interval_ms) }}</span>
+                      </div>
+                      <div class="image-progress-item">
+                        <span class="image-progress-label">最后心跳</span>
+                        <span class="image-progress-value mono">{{ formatProgressFrameTime(currentImageProgress.last_downstream_heartbeat_at_unix_ms) }}</span>
+                      </div>
+                    </template>
+                    <div
+                      v-if="currentImageProgress.last_upstream_event"
+                      class="image-progress-item full-width"
+                    >
+                      <span class="image-progress-label">上游事件</span>
+                      <code class="image-progress-code">{{ currentImageProgress.last_upstream_event }}</code>
+                    </div>
+                    <div
+                      v-if="currentImageProgress.last_client_visible_event"
+                      class="image-progress-item full-width"
+                    >
+                      <span class="image-progress-label">客户端可见事件</span>
+                      <code class="image-progress-code">{{ currentImageProgress.last_client_visible_event }}</code>
+                    </div>
                   </div>
                 </div>
 
@@ -358,35 +446,104 @@
 
                 <!-- 跳过原因 -->
                 <div
-                  v-if="currentAttempt.skip_reason"
+                  v-if="currentAttemptSkipReasonDisplay"
                   class="skip-reason"
                 >
                   <span class="reason-label">跳过原因</span>
-                  <span class="reason-value">{{ currentAttempt.skip_reason }}</span>
+                  <span class="reason-content">
+                    <span class="reason-value">{{ currentAttemptSkipReasonDisplay }}</span>
+                    <span
+                      v-if="currentAttemptFailureDiagnostic"
+                      class="reason-detail"
+                    >
+                      <code>{{ currentAttemptFailureDiagnostic.path }}</code>
+                      {{ currentAttemptFailureDiagnostic.message }}
+                    </span>
+                  </span>
                 </div>
 
-                <!-- 错误信息 -->
+                <!-- 错误信息：将实际上游响应头和响应体作为同一个对象展示 -->
                 <div
-                  v-if="currentAttempt.status === 'failed' && (currentAttempt.error_message || currentAttempt.error_type)"
+                  v-if="currentAttempt.status === 'failed' && currentAttemptRequestError"
                   class="error-block"
                 >
-                  <div class="error-type">
-                    {{ currentAttempt.error_type || '错误' }}
+                  <div class="error-heading">
+                    <span class="error-type">错误信息</span>
+                    <span
+                      v-if="currentAttemptRequestError.statusCode != null"
+                      class="error-status-badge"
+                      :class="currentAttemptRequestError.statusCode >= 400 ? 'is-error' : currentAttemptRequestError.statusCode >= 300 ? 'is-warning' : 'is-success'"
+                    >
+                      HTTP {{ currentAttemptRequestError.statusCode }}
+                    </span>
                   </div>
-                  <div class="error-msg">
-                    {{ currentAttempt.error_message || '未知错误' }}
+                  <div
+                    v-if="currentAttemptRequestError.upstreamStatusCode != null && currentAttemptRequestError.upstreamStatusCode !== currentAttemptRequestError.statusCode"
+                    class="error-upstream-status text-xs text-muted-foreground mb-1"
+                  >
+                    上游响应状态：HTTP {{ currentAttemptRequestError.upstreamStatusCode }}（本次尝试状态见上方）
+                  </div>
+                  <div
+                    v-if="currentAttemptRequestError.finalStatusCode != null"
+                    class="error-final-status text-xs text-muted-foreground mb-1"
+                  >
+                    请求最终状态：HTTP {{ currentAttemptRequestError.finalStatusCode }}（与本次尝试状态不同）
+                  </div>
+                  <div
+                    v-if="currentAttemptRequestError.message"
+                    class="error-msg"
+                  >
+                    {{ currentAttemptRequestError.message }}
+                  </div>
+                  <div
+                    v-if="currentAttemptRequestError.upstreamResponse"
+                    class="error-json error-upstream-response-json"
+                  >
+                    <JsonContentPanel
+                      :data="currentAttemptRequestError.upstreamResponse"
+                      :is-dark="isDark"
+                      title="上游响应"
+                      empty-message="无上游响应"
+                    />
                   </div>
                 </div>
+
+                <div
+                  v-if="diagnosticDisplay"
+                  class="error-json error-diagnostic-json"
+                >
+                  <JsonContentPanel
+                    :data="diagnosticDisplay"
+                    :is-dark="isDark"
+                    :custom-copy="true"
+                    :copied="diagnosticCopied"
+                    :copy-disabled="diagnosticCopying"
+                    title="失败诊断"
+                    empty-message="无失败诊断信息"
+                    @copy="copyFailureDiagnostic"
+                  />
+                </div>
+                <p
+                  v-if="diagnosticDisplay"
+                  class="text-xs text-muted-foreground mt-1"
+                >
+                  {{ diagnosticCopying ? '正在读取并脱敏诊断上下文…' : '复制时补取已采集的正文并脱敏；未采集、无权限或超限的信息会明确标注。分享前请检查诊断内容。' }}
+                </p>
 
                 <!-- 额外数据 -->
                 <details
-                  v-if="currentAttempt.extra_data && Object.keys(currentAttempt.extra_data).length > 0"
+                  v-if="currentAttemptExtraDataDisplay"
                   class="extra-block"
                 >
                   <summary class="extra-toggle">
                     额外信息
                   </summary>
-                  <pre class="extra-json">{{ JSON.stringify(currentAttempt.extra_data, null, 2) }}</pre>
+                  <JsonContentPanel
+                    class="extra-json-panel"
+                    :data="currentAttemptExtraDataDisplay"
+                    :is-dark="isDark"
+                    empty-message="无额外信息"
+                  />
                 </details>
               </div>
             </div>
@@ -410,15 +567,32 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { getI18nLocale } from '@/i18n'
+import { ref, watch, computed, onBeforeUnmount } from 'vue'
+import { isAxiosError } from 'axios'
 import Card from '@/components/ui/card.vue'
 import Badge from '@/components/ui/badge.vue'
 import Skeleton from '@/components/ui/skeleton.vue'
+import JsonContentPanel from './JsonContentPanel.vue'
 import { ChevronLeft, ChevronRight, ExternalLink } from 'lucide-vue-next'
-import { requestTraceApi, type RequestTrace, type CandidateRecord } from '@/api/requestTrace'
+import { requestTraceApi, type RequestTrace, type CandidateProxy, type CandidateRecord, type ImageProgress } from '@/api/requestTrace'
 import { log } from '@/utils/logger'
+import { safeExternalWebUrl } from '@/utils/navigationSecurity'
 import { parseApiError } from '@/utils/errorParser'
+import { formatTokens } from '@/utils/format'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { useDarkMode } from '@/composables/useDarkMode'
+import { resolveTimelineFinalStatus } from '../utils/status'
+import { useClipboard } from '@/composables/useClipboard'
+import { buildFailureDiagnosticBundle, diagnosticPathFromMessage, visibleFailureRecords } from '../utils/failureDiagnostic'
+import { prepareDiagnosticExport, sanitizeDiagnostic } from '../utils/diagnosticExport'
+import {
+  buildPoolGroupVisibleAttempts,
+  buildPoolParticipatedCandidates,
+  extractPoolGroupId,
+  makeAttemptKey,
+  TIMELINE_STATUS,
+} from '../utils/poolTrace'
 
 // 节点组类型
 interface NodeGroup {
@@ -426,18 +600,25 @@ interface NodeGroup {
   providerName: string
   primary: CandidateRecord
   primaryStatus: string
-  allAttempts: CandidateRecord[]  // 所有尝试（包括首次和重试）
+  allAttempts: CandidateRecord[]  // 当前展示的尝试（含主节点）
   retryCount: number
   totalLatency: number  // 所有尝试的总延迟
   startIndex: number
   endIndex: number
   hasConversion: boolean  // 组内是否有格式转换候选
-  providerApiFormat: string | null  // 提供商 API 格式（如 openai:cli）
+  providerApiFormat: string | null  // 提供商 API 格式（如 openai:responses）
   isPoolGroup?: boolean
+}
+
+interface AttemptTimeRange {
+  startIso: string
+  endIso?: string
+  durationLabel?: string
 }
 
 // 用量数据类型
 interface UsageData {
+  status?: string | null
   tokens: {
     input: number
     output: number
@@ -462,15 +643,32 @@ interface UsageData {
 }
 
 const props = defineProps<{
-  requestId: string
+  requestId?: string | null
   /** 外部传入的状态码，用于覆盖 trace.final_status 的判断 */
   overrideStatusCode?: number
+  /** 外部传入的请求状态，用于识别已失败/取消的终态请求 */
+  requestStatus?: string | null
   /** 请求侧 API 格式（客户端入口格式） */
   requestApiFormat?: string | null
   /** 用量和费用数据 */
   usageData?: UsageData | null
   /** 请求元数据（用于号池调度组装） */
   requestMetadata?: Record<string, unknown> | null
+  /** 已获取的追踪数据；传入时不再内部拉取 */
+  traceData?: RequestTrace | null
+}>()
+
+const emit = defineEmits<{
+  selectAttempt: [attempt: CandidateRecord | null]
+  traceState: [state: {
+    loaded: boolean
+    hasTrace: boolean
+    finalStatus?: RequestTrace['final_status'] | null
+    statusCode?: number | null
+    latencyMs?: number | null
+    imageProgress?: ImageProgress | null
+    errorMessage?: string | null
+  }]
 }>()
 
 // 用量数据（从 props 获取）
@@ -478,32 +676,15 @@ const usageData = computed(() => props.usageData)
 
 // 格式化数字
 const formatNumber = (num: number): string => {
-  return num.toLocaleString('zh-CN')
+  return formatTokens(num)
 }
-
-// 计算最终状态：优先检查进行中状态，再使用外部状态码
-const computedFinalStatus = computed(() => {
-  // 优先检查是否有进行中或流式传输的候选（请求尚未完成）
-  const hasPending = trace.value?.candidates?.some(
-    c => c.status === 'pending' || c.status === 'streaming'
-  )
-  if (hasPending) {
-    return 'pending'
-  }
-
-  // 使用外部状态码判断最终状态
-  if (props.overrideStatusCode !== undefined) {
-    return props.overrideStatusCode === 200 ? 'success' : 'failed'
-  }
-
-  return trace.value?.final_status || 'pending'
-})
 
 // 获取最终状态标签
 const getFinalStatusLabel = (status: string) => {
   const labels: Record<string, string> = {
     success: '最终成功',
     failed: '最终失败',
+    cancelled: '已取消',
     streaming: '流式传输中',
     pending: '进行中'
   }
@@ -517,6 +698,7 @@ const getFinalStatusBadgeVariant = (status: string): BadgeVariant => {
   const variants: Record<string, BadgeVariant> = {
     success: 'success',
     failed: 'destructive',
+    cancelled: 'warning',
     streaming: 'secondary',
     pending: 'secondary'
   }
@@ -525,10 +707,17 @@ const getFinalStatusBadgeVariant = (status: string): BadgeVariant => {
 
 const loading = ref(false)
 const error = ref<string | null>(null)
-const trace = ref<RequestTrace | null>(null)
+const internalTrace = ref<RequestTrace | null>(null)
+const { isDark } = useDarkMode()
+const trace = computed(() => props.traceData ?? internalTrace.value)
 const selectedGroupIndex = ref(0)
 const selectedAttemptIndex = ref(0)
+const selectionPinnedByUser = ref(false)
 const hoveredGroupIndex = ref<number | null>(null)
+const traceLoadStarted = ref(false)
+let tracePollTimer: ReturnType<typeof setTimeout> | null = null
+let traceLoadInFlight: Promise<void> | null = null
+const TRACE_POLL_INTERVAL_MS = 1000
 
 // 格式化延迟（自动调整单位）
 const formatLatency = (ms: number | undefined | null): string => {
@@ -547,8 +736,8 @@ const formatSize = (bytes: number): string => {
 }
 
 // 代理 timing 分阶段展示
-const proxyTimingBreakdown = (proxy: Record<string, unknown>): string => {
-  const t = proxy.timing as Record<string, number | null | undefined> | undefined
+const proxyTimingBreakdown = (proxy: CandidateProxy): string => {
+  const t = proxy.timing
   if (!t) return ''
 
   const parts: string[] = []
@@ -609,18 +798,6 @@ const proxyTimingBreakdown = (proxy: Record<string, unknown>): string => {
   return parts.join(' / ')
 }
 
-const TIMELINE_STATUS: CandidateRecord['status'][] = [
-  'success',
-  'failed',
-  'skipped',
-  'cancelled',
-  'pending',
-  'streaming',
-  'available',
-  'unused',
-  'stream_interrupted',
-]
-
 const STATUS_PRIORITY: Record<string, number> = {
   available: 0,
   unused: 0,
@@ -633,61 +810,42 @@ const STATUS_PRIORITY: Record<string, number> = {
   success: 4,
 }
 
-const toInt = (value: unknown, defaultValue = 0): number => {
-  const num = Number(value)
-  return Number.isFinite(num) ? Math.trunc(num) : defaultValue
+const isParticipatedCandidate = (candidate: CandidateRecord): boolean => {
+  return TIMELINE_STATUS.includes(candidate.status)
 }
 
-const makeAttemptKey = (candidateIndex: number, retryIndex: number): string => {
-  return `${candidateIndex}:${retryIndex}`
+const isLiveCandidate = (candidate: CandidateRecord): boolean => {
+  if (candidate.status === 'streaming') return true
+  return candidate.status === 'pending' && Boolean(candidate.started_at)
 }
 
-const POOL_UNATTEMPTED_STATUS = new Set<CandidateRecord['status']>([
-  'available',
-  'unused',
-  'skipped',
-])
+// 计算最终状态：优先检查真正已启动的进行中状态，再使用外部状态码
+const computedFinalStatus = computed(() => {
+  const hasPending = trace.value?.candidates?.some(isLiveCandidate)
+  return resolveTimelineFinalStatus({
+    hasPendingCandidates: hasPending,
+    statusCode: props.overrideStatusCode,
+    requestStatus: props.requestStatus ?? usageData.value?.status,
+    traceFinalStatus: trace.value?.final_status,
+  })
+})
 
-const isPoolAttemptedCandidate = (candidate: CandidateRecord): boolean => {
-  if (POOL_UNATTEMPTED_STATUS.has(candidate.status)) return false
-  // pending 只有开始执行后才算真正进入号池内部尝试
-  if (candidate.status === 'pending' && !candidate.started_at) return false
-  return true
-}
-
-const normalizeTimelineStatus = (value: unknown): CandidateRecord['status'] => {
-  if (typeof value !== 'string') return 'failed'
-  const normalized = value.trim().toLowerCase()
-  if ((TIMELINE_STATUS as string[]).includes(normalized)) {
-    return normalized as CandidateRecord['status']
+const compareBySchedulingOrder = (a: CandidateRecord, b: CandidateRecord): number => {
+  if (a.candidate_index !== b.candidate_index) {
+    return a.candidate_index - b.candidate_index
   }
-  // 兜底：内部调度轨迹里非标准状态统一按失败展示
-  return 'failed'
+  if (a.retry_index !== b.retry_index) {
+    return a.retry_index - b.retry_index
+  }
+  return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
 }
 
-const extractPoolGroupId = (candidate: CandidateRecord): string | null => {
-  const extra = candidate.extra_data
-  if (!extra || typeof extra !== 'object' || Array.isArray(extra)) return null
-  const value = (extra as Record<string, unknown>).pool_group_id
-  if (typeof value !== 'string') return null
-  const text = value.trim()
-  return text || null
-}
-
-// 候选时间线（按实际执行顺序排序）
+// 候选时间线（按调度顺序排序；lazy 加载的跳过候选通常没有 started_at）
 const rawTimeline = computed<CandidateRecord[]>(() => {
   if (!trace.value) return []
   return [...trace.value.candidates]
     .filter(c => TIMELINE_STATUS.includes(c.status))
-    .sort((a, b) => {
-      const startedA = a.started_at ? new Date(a.started_at).getTime() : Infinity
-      const startedB = b.started_at ? new Date(b.started_at).getTime() : Infinity
-      if (startedA !== startedB) return startedA - startedB
-      if (a.candidate_index !== b.candidate_index) {
-        return a.candidate_index - b.candidate_index
-      }
-      return a.retry_index - b.retry_index
-    })
+    .sort(compareBySchedulingOrder)
 })
 
 
@@ -700,109 +858,12 @@ const schedulingAudit = computed<Record<string, unknown> | null>(() => {
 })
 
 const poolAttemptCandidates = computed<CandidateRecord[]>(() => {
-  // 新链路：优先使用后端写入的 extra_data.pool_group_id，
-  // 但仅展示实际进入号池执行的 key（排除 available/unused/skipped）。
-  const fromTrace = rawTimeline.value.filter(
-    (candidate) => extractPoolGroupId(candidate) !== null && isPoolAttemptedCandidate(candidate),
+  const auditAttempts = schedulingAudit.value?.attempts
+  return buildPoolParticipatedCandidates(
+    rawTimeline.value,
+    auditAttempts,
+    props.requestId,
   )
-  if (fromTrace.length > 0) {
-    return fromTrace
-  }
-
-  // 兼容旧链路：回退到 request_metadata.scheduling_audit.attempts。
-  const audit = schedulingAudit.value
-  if (!audit) return []
-  const attempts = audit.attempts
-  if (!Array.isArray(attempts) || attempts.length === 0) return []
-
-  const providerNameById = new Map<string, string>()
-  for (const candidate of rawTimeline.value) {
-    const providerId = String(candidate.provider_id || '').trim()
-    const providerName = String(candidate.provider_name || '').trim()
-    if (!providerId || !providerName) continue
-    if (!providerNameById.has(providerId)) {
-      providerNameById.set(providerId, providerName)
-    }
-  }
-  const providerTypeLikeNames = new Set<string>([
-    'codex',
-    'kiro',
-    'antigravity',
-    'claude_code',
-    'claude code',
-    'gemini_cli',
-    'gemini cli',
-    'oauth',
-    'api_key',
-    'api key',
-  ])
-
-  const traceMap = new Map<string, CandidateRecord>()
-  for (const candidate of rawTimeline.value) {
-    traceMap.set(makeAttemptKey(candidate.candidate_index, candidate.retry_index), candidate)
-  }
-
-  return attempts
-    .map((item, index) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) return null
-      const raw = item as Record<string, unknown>
-      const candidateIndex = toInt(raw.candidate_index, index)
-      const retryIndex = toInt(raw.retry_index, 0)
-      const key = makeAttemptKey(candidateIndex, retryIndex)
-      const fromTrace = traceMap.get(key)
-
-      const merged: CandidateRecord = fromTrace
-        ? { ...fromTrace }
-        : {
-            id: `pool-${props.requestId}-${candidateIndex}-${retryIndex}-${index}`,
-            request_id: props.requestId,
-            candidate_index: candidateIndex,
-            retry_index: retryIndex,
-            provider_id: undefined,
-            provider_name: undefined,
-            endpoint_id: undefined,
-            key_id: undefined,
-            key_name: undefined,
-            status: 'failed',
-            is_cached: false,
-            created_at: new Date(0).toISOString(),
-          }
-
-      merged.status = normalizeTimelineStatus(raw.status ?? merged.status)
-      if (typeof raw.provider_id === 'string') merged.provider_id = raw.provider_id
-      if (typeof raw.provider_name === 'string') merged.provider_name = raw.provider_name
-      if (typeof raw.endpoint_id === 'string') merged.endpoint_id = raw.endpoint_id
-      if (typeof raw.key_id === 'string') merged.key_id = raw.key_id
-      if (typeof raw.key_name === 'string') merged.key_name = raw.key_name
-      if (typeof raw.status_code === 'number') merged.status_code = raw.status_code
-      if (typeof raw.error_type === 'string') merged.error_type = raw.error_type
-      const rawPoolGroupId = typeof raw.pool_group_id === 'string' ? raw.pool_group_id.trim() : ''
-      const fallbackPoolGroupId = typeof raw.provider_id === 'string' ? raw.provider_id.trim() : ''
-      const finalPoolGroupId = rawPoolGroupId || fallbackPoolGroupId
-      if (finalPoolGroupId) {
-        merged.extra_data = {
-          ...(merged.extra_data || {}),
-          pool_group_id: finalPoolGroupId,
-        }
-      }
-
-      const mergedProviderId = String(merged.provider_id || '').trim()
-      if (mergedProviderId) {
-        const inferredProviderName = providerNameById.get(mergedProviderId)
-        const currentProviderName = String(merged.provider_name || '').trim()
-        if (
-          inferredProviderName
-          && (
-            !currentProviderName
-            || providerTypeLikeNames.has(currentProviderName.toLowerCase())
-          )
-        ) {
-          merged.provider_name = inferredProviderName
-        }
-      }
-      return merged
-    })
-    .filter((item): item is CandidateRecord => item !== null)
 })
 
 const poolAttemptsByGroup = computed<Map<string, CandidateRecord[]>>(() => {
@@ -881,9 +942,9 @@ const buildProviderGroups = (items: CandidateRecord[]): NodeGroup[] => {
         currentGroup.hasConversion = true
       }
       const currentPriority = STATUS_PRIORITY[currentGroup.primaryStatus] ?? 0
-      const newPriority = STATUS_PRIORITY[candidate.status] ?? 0
+      const newPriority = STATUS_PRIORITY[getDisplayStatus(candidate)] ?? 0
       if (newPriority > currentPriority) {
-        currentGroup.primaryStatus = candidate.status
+        currentGroup.primaryStatus = getDisplayStatus(candidate)
       }
       return
     }
@@ -892,7 +953,7 @@ const buildProviderGroups = (items: CandidateRecord[]): NodeGroup[] => {
       id: providerKey,
       providerName: getProviderDisplayName(candidate),
       primary: candidate,
-      primaryStatus: candidate.status,
+      primaryStatus: getDisplayStatus(candidate),
       allAttempts: [candidate],
       retryCount: 0,
       totalLatency: candidate.latency_ms || 0,
@@ -910,7 +971,7 @@ const buildProviderGroups = (items: CandidateRecord[]): NodeGroup[] => {
 
 // 将相同 Provider 的所有请求合并为组（同提供商的 Key 放在子节点）
 const groupedTimeline = computed<NodeGroup[]>(() => {
-  const providerGroups = buildProviderGroups(timeline.value)
+  const providerGroups = buildProviderGroups(timeline.value.filter(isParticipatedCandidate))
   if (poolAttemptsByGroup.value.size === 0) {
     return providerGroups
   }
@@ -920,22 +981,22 @@ const groupedTimeline = computed<NodeGroup[]>(() => {
   const poolGroups: NodeGroup[] = []
 
   for (const [groupId, attemptsRaw] of poolAttemptsByGroup.value.entries()) {
-    const attempts = [...attemptsRaw].sort((a, b) => {
-      if (a.candidate_index !== b.candidate_index) {
-        return a.candidate_index - b.candidate_index
-      }
-      return a.retry_index - b.retry_index
-    })
+    const attempts = [...attemptsRaw].sort(compareBySchedulingOrder)
     if (attempts.length === 0) continue
 
-    const poolPrimaryStatus = attempts.reduce((best, current) => {
-      const bestPriority = STATUS_PRIORITY[best] ?? 0
-      const currentPriority = STATUS_PRIORITY[current.status] ?? 0
-      return currentPriority > bestPriority ? current.status : best
-    }, attempts[0].status)
+    const visibleAttempts = buildPoolGroupVisibleAttempts(attempts)
+    if (visibleAttempts.length === 0) continue
 
-    const successAttempt = attempts.find((item) => item.status === 'success')
-    const poolPrimary = successAttempt || attempts[attempts.length - 1] || attempts[0]
+    const poolPrimaryStatus = visibleAttempts.reduce((best, current) => {
+      const bestPriority = STATUS_PRIORITY[best] ?? 0
+      const currentStatus = getDisplayStatus(current)
+      const currentPriority = STATUS_PRIORITY[currentStatus] ?? 0
+      return currentPriority > bestPriority ? currentStatus : best
+    }, getDisplayStatus(visibleAttempts[0]))
+
+    const successAttempt = visibleAttempts.find((item) => item.status === 'success')
+    const poolPrimary =
+      successAttempt || visibleAttempts[visibleAttempts.length - 1] || visibleAttempts[0]
     const startIndex = Math.min(...attempts.map(item => item.candidate_index))
     const endIndex = Math.max(...attempts.map(item => item.candidate_index))
 
@@ -944,12 +1005,12 @@ const groupedTimeline = computed<NodeGroup[]>(() => {
       providerName: getProviderDisplayName(poolPrimary, { allowAuthTypeFallback: false }),
       primary: poolPrimary,
       primaryStatus: poolPrimaryStatus,
-      allAttempts: attempts,
-      retryCount: Math.max(0, attempts.length - 1),
-      totalLatency: attempts.reduce((sum, item) => sum + (item.latency_ms || 0), 0),
+      allAttempts: visibleAttempts,
+      retryCount: Math.max(0, visibleAttempts.length - 1),
+      totalLatency: visibleAttempts.reduce((sum, item) => sum + (item.latency_ms || 0), 0),
       startIndex,
       endIndex,
-      hasConversion: attempts.some((item) => item.extra_data?.needs_conversion === true),
+      hasConversion: visibleAttempts.some((item) => item.extra_data?.needs_conversion === true),
       providerApiFormat: null,
       isPoolGroup: true,
     })
@@ -990,25 +1051,26 @@ const conversionBoundaryIndex = computed(() => {
   return idx
 })
 
-// 计算链路总耗时（使用成功候选的 latency_ms 字段）
-// 优先使用 latency_ms，因为它与 Usage.response_time_ms 使用相同的时间基准
-// 避免 finished_at - started_at 带来的额外延迟（数据库操作时间）
+// The trace aggregate includes every attempted candidate, including failed
+// failover attempts. Per-candidate latency remains provider-scoped.
 const totalTraceLatency = computed(() => {
   if (!rawTimeline.value || rawTimeline.value.length === 0) return 0
 
-  // 查找成功的候选，使用其 latency_ms
-  const successCandidate = rawTimeline.value.find(c => c.status === 'success')
-  if (successCandidate?.latency_ms != null) {
-    return successCandidate.latency_ms
+  const aggregateLatency = trace.value?.total_latency_ms
+  if (typeof aggregateLatency === 'number' && Number.isFinite(aggregateLatency) && aggregateLatency > 0) {
+    return aggregateLatency
   }
 
-  // 如果没有成功的候选，查找失败但有 latency_ms 的候选
-  const failedWithLatency = rawTimeline.value.find(c => c.status === 'failed' && c.latency_ms != null)
-  if (failedWithLatency?.latency_ms != null) {
-    return failedWithLatency.latency_ms
+  const attemptedLatency = rawTimeline.value.reduce((sum, candidate) => {
+    const latency = normalizeLatencyMs(candidate.latency_ms)
+    return sum + (latency ?? 0)
+  }, 0)
+  if (attemptedLatency > 0) {
+    return attemptedLatency
   }
 
-  // 回退：使用 finished_at - started_at 计算
+  // Historical transport failures may not have latency_ms. Recover the wall
+  // clock span from candidate timestamps for those records.
   let earliestStart: number | null = null
   let latestEnd: number | null = null
 
@@ -1045,6 +1107,20 @@ const currentAttempt = computed(() => {
   return selectedGroup.value.allAttempts[selectedAttemptIndex.value] || selectedGroup.value.primary
 })
 
+const currentAttemptProviderWebsite = computed(() =>
+  safeExternalWebUrl(currentAttempt.value?.provider_website),
+)
+
+const currentAttemptTimeRange = computed<AttemptTimeRange | null>(() => {
+  return resolveAttemptTimeRange(currentAttempt.value)
+})
+
+const currentAttemptDisplayStatus = computed(() => getDisplayStatus(currentAttempt.value))
+
+watch(currentAttempt, (attempt) => {
+  emit('selectAttempt', attempt ?? null)
+}, { immediate: true })
+
 const currentGroupTitle = computed(() => {
   if (!selectedGroup.value || !currentAttempt.value) return ''
   if (selectedGroup.value.isPoolGroup) {
@@ -1057,14 +1133,200 @@ const normalizeFormatSignature = (value: string): string => {
   return value.trim().toLowerCase()
 }
 
+const extractObject = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+  return value as Record<string, unknown>
+}
+
+const readStringField = (obj: Record<string, unknown>, key: string): string | undefined => {
+  const value = obj[key]
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+const readNumberField = (obj: Record<string, unknown>, key: string): number | undefined => {
+  const value = obj[key]
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
+}
+
+const hasRenderableValue = (value: unknown): boolean => {
+  if (value == null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0
+  return true
+}
+
+const normalizeImageProgress = (value: unknown): ImageProgress | null => {
+  const raw = extractObject(value)
+  if (!raw) return null
+
+  const progress: ImageProgress = {
+    phase: readStringField(raw, 'phase'),
+    upstream_ttfb_ms: readNumberField(raw, 'upstream_ttfb_ms') ?? null,
+    upstream_sse_frame_count: readNumberField(raw, 'upstream_sse_frame_count') ?? null,
+    last_upstream_event: readStringField(raw, 'last_upstream_event') ?? null,
+    last_upstream_frame_at_unix_ms: readNumberField(raw, 'last_upstream_frame_at_unix_ms') ?? null,
+    partial_image_count: readNumberField(raw, 'partial_image_count') ?? null,
+    last_client_visible_event: readStringField(raw, 'last_client_visible_event') ?? null,
+    downstream_heartbeat_count: readNumberField(raw, 'downstream_heartbeat_count') ?? null,
+    last_downstream_heartbeat_at_unix_ms: readNumberField(raw, 'last_downstream_heartbeat_at_unix_ms') ?? null,
+    downstream_heartbeat_interval_ms: readNumberField(raw, 'downstream_heartbeat_interval_ms') ?? null,
+  }
+
+  return Object.values(progress).some(value => value !== undefined && value !== null && value !== '') ? progress : null
+}
+
+const currentImageProgress = computed<ImageProgress | null>(() => {
+  const attempt = currentAttempt.value
+  if (!attempt) return null
+  return normalizeImageProgress(attempt.image_progress)
+    ?? normalizeImageProgress(extractObject(attempt.extra_data)?.image_progress)
+})
+
+const formatImageProgressPhase = (phase?: string | null): string => {
+  const labels: Record<string, string> = {
+    upstream_connecting: '连接上游',
+    upstream_streaming: '上游生成中',
+    upstream_completed: '上游已完成',
+    failed: '失败',
+  }
+  if (!phase) return '未知'
+  return labels[phase] || phase
+}
+
+const imageProgressPhaseClass = (phase?: string | null): string => {
+  if (phase === 'upstream_completed') return 'phase-completed'
+  if (phase === 'failed') return 'phase-failed'
+  if (phase === 'upstream_streaming') return 'phase-streaming'
+  return 'phase-connecting'
+}
+
+const formatProgressCount = (value?: number | null): string => {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : '-'
+}
+
+const formatProgressFrameTime = (value?: number | null): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '-'
+  const date = new Date(value)
+  const time = formatTime(date.toISOString())
+  const ageMs = Date.now() - value
+  if (ageMs >= 0 && ageMs < 60_000) {
+    return `${Math.max(0, Math.round(ageMs / 1000))}s 前 (${time})`
+  }
+  return time
+}
+
+const hasDownstreamHeartbeatProgress = computed(() => {
+  const progress = currentImageProgress.value
+  return typeof progress?.downstream_heartbeat_count === 'number' ||
+    typeof progress?.last_downstream_heartbeat_at_unix_ms === 'number' ||
+    typeof progress?.downstream_heartbeat_interval_ms === 'number'
+})
+
+const latestTraceAttemptForState = computed<CandidateRecord | null>(() => {
+  const candidates = rawTimeline.value
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const candidate = candidates[index]
+    if (candidate.status !== 'available' && candidate.status !== 'unused') {
+      return candidate
+    }
+  }
+  return null
+})
+
+const latestTraceImageProgress = computed<ImageProgress | null>(() => {
+  const candidates = rawTimeline.value
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const candidate = candidates[index]
+    const progress = normalizeImageProgress(candidate.image_progress)
+      ?? normalizeImageProgress(extractObject(candidate.extra_data)?.image_progress)
+    if (progress) return progress
+  }
+  return null
+})
+
+watch(
+  [trace, loading, latestTraceImageProgress, latestTraceAttemptForState, computedFinalStatus],
+  ([value, isLoading, imageProgress, attempt, finalStatus]) => {
+    const waitingForInternalTrace = Boolean(props.requestId && !props.traceData && !traceLoadStarted.value && !value)
+    emit('traceState', {
+      loaded: !isLoading && !waitingForInternalTrace,
+      hasTrace: Boolean(value?.candidates?.length),
+      finalStatus: finalStatus ?? value?.final_status ?? null,
+      statusCode: attempt?.status_code ?? null,
+      latencyMs: attempt?.latency_ms ?? value?.total_latency_ms ?? null,
+      imageProgress,
+      errorMessage: attempt?.error_message ?? null,
+    })
+  },
+  { immediate: true },
+)
+
+const normalizeUpstreamResponseDisplay = (value: unknown): Record<string, unknown> | null => {
+  const raw = extractObject(value)
+  if (!raw) return null
+  const statusCode = readNumberField(raw, 'status_code') ?? readNumberField(raw, 'statusCode')
+  const headers = raw.headers ?? raw.header
+  const body = raw.body
+  const bodyRef = readStringField(raw, 'body_ref') ?? readStringField(raw, 'bodyRef')
+  const bodyState = readStringField(raw, 'body_state') ?? readStringField(raw, 'bodyState')
+  const meaningfulBodyState = bodyState && bodyState.toLowerCase() !== 'none'
+    ? bodyState
+    : ''
+
+  if (
+    statusCode == null &&
+    !hasRenderableValue(headers) &&
+    !hasRenderableValue(body) &&
+    !bodyRef &&
+    !meaningfulBodyState
+  ) {
+    return null
+  }
+
+  const data: Record<string, unknown> = {}
+  if (statusCode != null) data.status_code = statusCode
+  if (hasRenderableValue(headers)) data.headers = headers
+  if (hasRenderableValue(body)) data.body = body
+  if (bodyRef) data.body_ref = bodyRef
+  if (meaningfulBodyState) data.body_state = meaningfulBodyState
+
+  return data
+}
+
+const extractStringList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map(item => typeof item === 'string' ? item.trim() : '')
+      .filter(Boolean)
+  }
+  if (typeof value === 'string') {
+    const raw = value.trim()
+    if (!raw) return []
+    try {
+      return extractStringList(JSON.parse(raw))
+    } catch {
+      return [raw]
+    }
+  }
+  return []
+}
+
+const resolveTransportDiagnostics = (attempt: CandidateRecord): Record<string, unknown> | null => {
+  const extra = extractObject(attempt.extra_data)
+  return extractObject(extra?.transport_diagnostics)
+}
+
 const currentAttemptFormatDisplay = computed(() => {
   const attempt = currentAttempt.value
   if (!attempt) return ''
-  const extra = (
-    attempt.extra_data && typeof attempt.extra_data === 'object' && !Array.isArray(attempt.extra_data)
-      ? attempt.extra_data
-      : {}
-  ) as Record<string, unknown>
+  const extra = extractObject(attempt.extra_data) ?? {}
 
   const providerRaw = typeof extra.provider_api_format === 'string' ? extra.provider_api_format : ''
   const clientRawFromExtra = typeof extra.client_api_format === 'string' ? extra.client_api_format : ''
@@ -1088,39 +1350,625 @@ const currentAttemptFormatDisplay = computed(() => {
   return providerText || requestText
 })
 
-// 计算当前尝试启用的能力标签（请求需要的能力）
-const activeCapabilities = computed(() => {
-  if (!currentAttempt.value?.required_capabilities) return []
-  const caps = currentAttempt.value.required_capabilities
-  // 只返回值为 true 的能力
-  return Object.entries(caps)
-    .filter(([_, enabled]) => enabled)
-    .map(([key]) => key)
-})
-
-// 计算当前 Key 支持的能力标签
-const keyCapabilities = computed(() => {
-  if (!currentAttempt.value?.key_capabilities) return []
-  const caps = currentAttempt.value.key_capabilities
-  // 只返回值为 true 的能力
-  return Object.entries(caps)
-    .filter(([_, enabled]) => enabled)
-    .map(([key]) => key)
-})
-
-// 合并后的能力列表：Key 支持的能力 + 请求需要的能力（去重）
-const mergedCapabilities = computed(() => {
-  const keyCaps = new Set(keyCapabilities.value)
-  const activeCaps = new Set(activeCapabilities.value)
-  // 合并两个集合
-  const merged = new Set([...keyCaps, ...activeCaps])
-  return Array.from(merged)
-})
-
-// 检查某个能力是否被请求使用
-const isCapabilityUsed = (cap: string): boolean => {
-  return activeCapabilities.value.includes(cap)
+const normalizeQueryString = (value: string): string => {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return trimmed.startsWith('?') ? trimmed.slice(1) : trimmed
 }
+
+const resolveRequestPathFromObject = (value: unknown): string => {
+  const object = extractObject(value)
+  if (!object) return ''
+
+  const pathWithQuery = (
+    readStringField(object, 'request_path_and_query')
+    || readStringField(object, 'public_path_and_query')
+    || readStringField(object, 'path_and_query')
+    || readStringField(object, 'request_uri')
+    || readStringField(object, 'public_uri')
+  )
+  if (pathWithQuery) return pathWithQuery
+
+  const path = (
+    readStringField(object, 'request_path')
+    || readStringField(object, 'public_path')
+    || readStringField(object, 'path')
+  )
+  if (!path) return ''
+
+  const query = normalizeQueryString(
+    readStringField(object, 'request_query_string')
+    || readStringField(object, 'public_query_string')
+    || readStringField(object, 'query_string')
+    || readStringField(object, 'query')
+    || '',
+  )
+  if (!query || path.includes('?')) return path
+  return `${path}?${query}`
+}
+
+const currentAttemptRequestPathDisplay = computed(() => {
+  const attempt = currentAttempt.value
+  const fromAttempt = resolveRequestPathFromObject(attempt?.extra_data)
+  if (fromAttempt) return fromAttempt
+
+  const fromTrace = resolveRequestPathFromObject(trace.value)
+  if (fromTrace) return fromTrace
+
+  const fromRequestMetadata = resolveRequestPathFromObject(props.requestMetadata)
+  if (fromRequestMetadata) return fromRequestMetadata
+
+  return ''
+})
+
+const currentAttemptKeyDisplay = computed(() => {
+  const attempt = currentAttempt.value
+  if (!attempt) return ''
+  return attempt.key_account_label || attempt.key_name || attempt.key_id || ''
+})
+
+const currentAttemptKeyFormatsDisplay = computed(() => {
+  const attempt = currentAttempt.value
+  if (!attempt) return ''
+
+  const formats = extractStringList(attempt.key_api_formats)
+  if (!formats.length) return ''
+
+  return formats
+    .map(format => formatApiFormat(format))
+    .join(' / ')
+})
+const SKIP_REASON_LABELS: Record<string, string> = {
+  auth_api_key_concurrency_limit_reached: '调用方 API Key 并发已达上限',
+  api_key_concurrency_limit_reached: '调用方 API Key 并发已达上限',
+  pool_key_lease_busy: '池内账号正被其他请求占用',
+  provider_concurrency_limit_reached: '上游提供商并发已达上限',
+  provider_key_concurrency_limit_reached: '上游账号并发已达上限',
+  provider_request_body_build_failed: '上游请求体转换失败',
+  provider_request_body_missing: '无法构建上游请求体',
+}
+const currentAttemptSkipReasonDisplay = computed(() => {
+  const attempt = currentAttempt.value
+  if (!attempt?.skip_reason) return ''
+
+  const skipReasonLabel = SKIP_REASON_LABELS[attempt.skip_reason]
+  if (skipReasonLabel) {
+    return skipReasonLabel
+  }
+
+  if (attempt.skip_reason !== 'transport_unsupported') {
+    return attempt.skip_reason
+  }
+
+  const transportDiagnostics = resolveTransportDiagnostics(attempt)
+  const requestPair = extractObject(transportDiagnostics?.request_pair)
+  const detailedReason = typeof requestPair?.transport_unsupported_reason === 'string'
+    ? requestPair.transport_unsupported_reason.trim()
+    : ''
+
+  return detailedReason || attempt.skip_reason
+})
+
+const currentAttemptFailureDiagnostic = computed<{
+  path: string
+  message: string
+} | null>(() => {
+  const attempt = currentAttempt.value
+  if (!attempt) return null
+  const extra = extractObject(attempt.extra_data)
+  if (extractObject(extra?.failure_diagnostic)?.safe_to_show === false) return null
+  const failureDiagnostic = extractVisibleFailureDiagnostic(extra)
+  const error = failureDiagnostic
+    ? failureDiagnostic
+    : extractObject(extra?.request_body_build_error)
+  const path = typeof error?.path === 'string' && error.path.trim()
+    ? error.path.trim()
+    : ''
+  const message = typeof error?.message === 'string' && error.message.trim()
+    ? error.message.trim()
+    : ''
+  if (!path && !message) return null
+  return {
+    path: path || '$',
+    message: formatAttemptErrorMessage(message) || message || '请求体转换失败',
+  }
+})
+
+const isGenericExecutionRuntimeStatusMessage = (message: string): boolean =>
+  /execution runtime (stream )?returned non-success status \d+/i.test(message)
+
+const isStreamTerminalDiagnosticMessage = (message: string): boolean =>
+  /(?:unsupported provider stream finish reason|upstream stream ended with finish reason)\s*:/i.test(message)
+
+const isStreamFinishErrorDiagnostic = (message: string): boolean =>
+  /(?:unsupported provider stream finish reason|upstream stream ended with finish reason)\s*:\s*error(?:[ \t]*(?:$|\r?\n)|["')])/i.test(message)
+
+const isLocalSyncFinalizeDiagnostic = (message: string): boolean =>
+  /local sync attempt failed before terminal finalization/i.test(message)
+  || /unsupported provider stream (event|finish reason)/i.test(message)
+
+const isActionableDiagnosticMessage = (message: string): boolean =>
+  isLocalSyncFinalizeDiagnostic(message)
+  || isStreamTerminalDiagnosticMessage(message)
+  || isConversionDiagnosticMessage(message)
+
+const extractVisibleFailureDiagnostic = (
+  extra: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null => {
+  const failureDiagnostic = extractObject(extra?.failure_diagnostic)
+  if (!failureDiagnostic || failureDiagnostic.safe_to_show === false) return null
+  return failureDiagnostic
+}
+
+const extractVisibleDiagnosticObjects = (
+  extra: Record<string, unknown> | null | undefined,
+): Array<Record<string, unknown>> => [
+  ...visibleFailureRecords(extra ?? {}),
+]
+
+const extractVisibleDiagnosticMessage = (
+  extra: Record<string, unknown> | null | undefined,
+): string => {
+  for (const diagnostic of extractVisibleDiagnosticObjects(extra)) {
+    const message = readStringField(diagnostic, 'message')
+    if (message) return message
+  }
+  return ''
+}
+
+const chooseAttemptRawErrorMessage = (
+  flowMessage: string,
+  fallbackMessage: string,
+  diagnosticMessage: string,
+): string => {
+  const flow = flowMessage.trim()
+  const fallback = fallbackMessage.trim()
+  const diagnostic = diagnosticMessage.trim()
+
+  if (flow && fallback && !isActionableDiagnosticMessage(flow) && isActionableDiagnosticMessage(fallback)) {
+    return fallback
+  }
+  if (flow && diagnostic && isGenericExecutionRuntimeStatusMessage(flow) && isActionableDiagnosticMessage(diagnostic)) {
+    return diagnostic
+  }
+  if (fallback && diagnostic && isGenericExecutionRuntimeStatusMessage(fallback) && isActionableDiagnosticMessage(diagnostic)) {
+    return diagnostic
+  }
+
+  return flow || fallback || diagnostic
+}
+
+const decodeRustDebugString = (value: string): string => {
+  try {
+    return JSON.parse(`"${value}"`)
+  } catch {
+    return value.replace(/\\"/g, '"')
+  }
+}
+
+const normalizeDiagnosticFieldPath = (field: string): string => {
+  const trimmed = field.trim()
+  if (!trimmed || trimmed === '$') return '$'
+  if (trimmed.startsWith('$')) return trimmed
+  if (trimmed.startsWith('[')) return `$${trimmed}`
+  return `$.${trimmed}`
+}
+
+const formatConversionPair = (source: string, target: string): string =>
+  `${formatApiFormat(source.trim())} → ${formatApiFormat(target.trim())}`
+
+const extractFieldDetail = (message: string): string => {
+  const fieldMatch = message.match(/field\s+([^;=]+?)\s*=\s*("(?:\\.|[^"\\])*"|[^;]+)/i)
+  const unsupportedFieldMatch = message.match(/field\s+([^;]+?)\s+is unsupported/i)
+  if (fieldMatch?.[1]) {
+    return `字段 ${normalizeDiagnosticFieldPath(fieldMatch[1])} = ${fieldMatch[2].trim()}`
+  }
+  if (unsupportedFieldMatch?.[1]) {
+    return `字段 ${normalizeDiagnosticFieldPath(unsupportedFieldMatch[1])} 不支持`
+  }
+  return ''
+}
+
+const formatUnsupportedStreamEventMessage = (message: string): string => {
+  const detail = extractFieldDetail(message)
+  const fieldDetail = detail ? `（${detail}）` : ''
+  return `流式格式转换失败：上游返回了当前不支持的 stream event${fieldDetail}，无法无损转换到客户端请求格式`
+}
+
+const formatUnsupportedFinishReasonMessage = (message: string): string => {
+  const terminalMatch = message.match(/^unsupported provider stream finish reason\s*:\s*(.+)$/i)
+  if (terminalMatch?.[1]) {
+    return `流式终态校验失败：上游返回了当前不支持的 finish reason（${terminalMatch[1].trim()}），已按失败处理`
+  }
+  const fieldDetail = extractFieldDetail(message)
+  const legacyMatch = message.match(/unsupported provider stream finish reason\s+(.+?)\s+cannot be converted losslessly/i)
+  const detail = fieldDetail || (legacyMatch?.[1]
+    ? `字段 $.finish_reason = ${legacyMatch[1].trim()}`
+    : '')
+  return `流式格式转换失败：上游返回了当前不支持的 finish reason${detail ? `（${detail}）` : ''}，无法无损转换到客户端请求格式`
+}
+
+const formatKnownConversionErrorMessage = (message: string): string => {
+  const lossy = message.match(/^lossy conversion blocked from\s+(\S+)\s+to\s+(\S+)\s+at\s+([^:]+):\s*(.+)$/i)
+  if (lossy) {
+    return `格式转换失败：${formatConversionPair(lossy[1], lossy[2])} 在字段 ${normalizeDiagnosticFieldPath(lossy[3])} 会丢失信息：${lossy[4].trim()}`
+  }
+
+  const unaudited = message.match(/^unaudited field\s+(.+?)\s+in\s+(.+?)\s+cannot be converted to\s+(\S+):\s*(.+)$/i)
+  if (unaudited) {
+    return `格式转换失败：${formatConversionPair(unaudited[2], unaudited[3])} 的字段 ${normalizeDiagnosticFieldPath(unaudited[1])} 尚未审计，不能安全转换：${unaudited[4].trim()}`
+  }
+
+  const unsupportedField = message.match(/^unsupported field\s+(.+?)\s+in\s+([^:]+(?::[^:]+)?):\s*(.+)$/i)
+  if (unsupportedField) {
+    return `格式转换失败：${formatApiFormat(unsupportedField[2])} 不支持字段 ${normalizeDiagnosticFieldPath(unsupportedField[1])}：${unsupportedField[3].trim()}`
+  }
+
+  const invalidEnum = message.match(/^invalid enum value\s+(.+?)\s+for\s+([\w:-]+)\.(.+)$/i)
+  if (invalidEnum) {
+    return `格式转换失败：${formatApiFormat(invalidEnum[2])} 字段 ${normalizeDiagnosticFieldPath(invalidEnum[3])} 的枚举值 ${invalidEnum[1].trim()} 无效`
+  }
+
+  const invalidTarget = message.match(/^invalid target field\s+(.+?)\s+for\s+(.+?):\s*(.+)$/i)
+  if (invalidTarget) {
+    return `格式转换失败：目标格式 ${formatApiFormat(invalidTarget[2])} 字段 ${normalizeDiagnosticFieldPath(invalidTarget[1])} 无效：${invalidTarget[3].trim()}`
+  }
+
+  const unsupportedFormat = message.match(/^unsupported AI format:\s*(.+)$/i)
+  if (unsupportedFormat) {
+    return `格式转换失败：不支持的 API 格式 ${unsupportedFormat[1].trim()}`
+  }
+
+  const parseEmit = message.match(/^failed to\s+(parse|emit)\s+(.+?)\s+(request|response)$/i)
+  if (parseEmit) {
+    const action = parseEmit[1].toLowerCase() === 'parse' ? '解析' : '生成'
+    const subject = parseEmit[3].toLowerCase() === 'request' ? '请求体' : '响应体'
+    return `格式转换失败：无法${action} ${formatApiFormat(parseEmit[2])} ${subject}`
+  }
+
+  return ''
+}
+
+const isConversionDiagnosticMessage = (message: string): boolean => {
+  const normalized = message.trim()
+  if (!normalized || isStreamTerminalDiagnosticMessage(normalized)) return false
+  return /conversion|converted|convertible|cannot be converted|lossy conversion|unsupported field|unaudited field|invalid enum value|invalid target field|unsupported ai format|failed to (parse|emit) .+ (request|response)|unsupported provider stream (event|finish reason)|转换|无损|字段 .*不支持/i
+    .test(normalized)
+}
+
+const formatAttemptErrorMessage = (message: string, statusCode?: number): string => {
+  const normalized = message.trim()
+  if (!normalized) return ''
+  const directInternal = normalized.match(/^Internal\("((?:\\.|[^"\\])*)"\)$/i)
+  if (directInternal?.[1]) {
+    return formatAttemptErrorMessage(decodeRustDebugString(directInternal[1]), statusCode)
+  }
+  const localSyncInternal = normalized.match(/local sync attempt failed before terminal finalization:\s*Internal\("((?:\\.|[^"\\])*)"\)/i)
+  if (localSyncInternal?.[1]) {
+    return formatAttemptErrorMessage(decodeRustDebugString(localSyncInternal[1]), statusCode)
+  }
+  if (isStreamFinishErrorDiagnostic(normalized)) {
+    return '上游流式响应异常终止：上游返回了错误结束原因（error），已按失败处理'
+  }
+  if (/unsupported provider stream event cannot be converted losslessly/i.test(normalized)) {
+    return formatUnsupportedStreamEventMessage(normalized)
+  }
+  if (/unsupported provider stream finish reason/i.test(normalized)) {
+    return formatUnsupportedFinishReasonMessage(normalized)
+  }
+  const conversionMessage = formatKnownConversionErrorMessage(normalized)
+  if (conversionMessage) {
+    return conversionMessage
+  }
+  if (isGenericExecutionRuntimeStatusMessage(normalized)) {
+    return statusCode != null ? `上游返回非成功状态 ${statusCode}` : '上游返回非成功状态'
+  }
+  return normalized
+}
+
+const shouldShowAttemptMessageWithUpstreamResponse = (
+  rawMessage: string,
+  upstreamResponse: Record<string, unknown> | null,
+): boolean => {
+  if (!upstreamResponse || !hasRenderableValue(upstreamResponse.body)) return true
+  const normalized = rawMessage.trim()
+  if (!normalized) return false
+  return isActionableDiagnosticMessage(normalized)
+}
+
+const currentAttemptRequestError = computed<{
+  message: string
+  statusCode?: number
+  upstreamStatusCode?: number
+  finalStatusCode?: number
+  upstreamResponse: Record<string, unknown> | null
+  diagnostic: Record<string, unknown> | null
+} | null>(() => {
+  const attempt = currentAttempt.value
+  if (!attempt || attempt.status !== 'failed') return null
+
+  const extra = extractObject(attempt.extra_data)
+  const upstreamResponse = extractObject(extra?.upstream_response)
+  const errorFlow = extractObject(extra?.error_flow)
+  const upstreamStatusCode = readNumberField(upstreamResponse ?? {}, 'status_code')
+    ?? readNumberField(upstreamResponse ?? {}, 'statusCode')
+  const statusCode = attempt.status_code
+    ?? upstreamStatusCode
+    ?? readNumberField(errorFlow ?? {}, 'status_code')
+    ?? readNumberField(errorFlow ?? {}, 'statusCode')
+  const finalStatusCode = !['pending', 'streaming'].includes(computedFinalStatus.value)
+    && props.overrideStatusCode != null && props.overrideStatusCode !== statusCode
+    ? props.overrideStatusCode
+    : undefined
+  const flowMessage = errorFlow
+    ? readStringField(errorFlow, 'message')
+    : ''
+  const fallbackMessage = typeof attempt.error_message === 'string' && attempt.error_message.trim()
+    ? attempt.error_message.trim()
+    : ''
+  const fallbackType = typeof attempt.error_type === 'string' && attempt.error_type.trim()
+    ? attempt.error_type.trim()
+    : ''
+  const diagnosticMessage = extractVisibleDiagnosticMessage(extra)
+  const rawMessage = chooseAttemptRawErrorMessage(flowMessage || '', fallbackMessage, diagnosticMessage)
+  const message = formatAttemptErrorMessage(rawMessage, statusCode) || fallbackType
+    || '本次尝试失败，链路追踪未包含详细错误内容。'
+  const upstreamResponseDisplay = normalizeUpstreamResponseDisplay(extra?.upstream_response)
+  const visibleDiagnosticObjects = extractVisibleDiagnosticObjects(extra)
+  const shouldAttachDiagnostic = Boolean(
+    visibleDiagnosticObjects.length
+      || isActionableDiagnosticMessage(rawMessage),
+  )
+  const diagnostic = shouldAttachDiagnostic
+    ? buildAttemptDiagnosticPayload(
+        attempt,
+        message || fallbackType || rawMessage || '未知失败',
+        statusCode,
+        upstreamResponseDisplay,
+        rawMessage,
+      )
+    : null
+  const upstreamResponseData: Record<string, unknown> = {}
+  const responseHeader = upstreamResponseDisplay?.headers
+  const responseBody = upstreamResponseDisplay?.body
+  if (hasRenderableValue(responseHeader)) upstreamResponseData.header = responseHeader
+  if (hasRenderableValue(responseBody)) upstreamResponseData.body = responseBody
+  const response = Object.keys(upstreamResponseData).length > 0
+    ? upstreamResponseData
+    : null
+  const showMessage = shouldShowAttemptMessageWithUpstreamResponse(
+    rawMessage || fallbackType,
+    upstreamResponseDisplay,
+  )
+
+  return {
+    message: showMessage ? message : '',
+    statusCode,
+    upstreamStatusCode,
+    finalStatusCode,
+    upstreamResponse: response,
+    diagnostic,
+  }
+})
+
+const diagnosticPathFromObject = (value: unknown): string => {
+  const object = extractObject(value)
+  if (!object) return ''
+  return readStringField(object, 'path')
+    || readStringField(object, 'field_path')
+    || readStringField(object, 'fieldPath')
+    || readStringField(object, 'field')
+    || ''
+}
+
+const diagnosticFieldPathFromMessage = diagnosticPathFromMessage
+
+function resolveAttemptDiagnosticBreakpoint(attempt: CandidateRecord, rawMessageOverride = ''): string {
+  const extra = extractObject(attempt.extra_data)
+  const failureDiagnostic = extractVisibleFailureDiagnostic(extra)
+  const requestConversionError = extractObject(extra?.request_conversion_error)
+  const requestBodyBuildError = extractObject(extra?.request_body_build_error)
+  const errorFlow = extractObject(extra?.error_flow)
+  const rawMessage = [
+    rawMessageOverride,
+    readStringField(errorFlow ?? {}, 'message') ?? '',
+    readStringField(failureDiagnostic ?? {}, 'message') ?? '',
+    readStringField(requestConversionError ?? {}, 'message') ?? '',
+    readStringField(requestBodyBuildError ?? {}, 'message') ?? '',
+    typeof attempt.error_message === 'string' ? attempt.error_message : '',
+  ].find(item => item.trim()) ?? ''
+  const streamFinishReasonPath = isStreamTerminalDiagnosticMessage(rawMessage) ? '$.finish_reason' : ''
+
+  return diagnosticPathFromObject(failureDiagnostic)
+    || diagnosticPathFromObject(requestConversionError)
+    || diagnosticPathFromObject(requestBodyBuildError)
+    || diagnosticFieldPathFromMessage(rawMessage)
+    || streamFinishReasonPath
+    || '$'
+}
+
+function buildAttemptDiagnosticPayload(
+  attempt: CandidateRecord,
+  summaryInput: string,
+  statusCode: number | undefined,
+  upstreamResponseDisplay: Record<string, unknown> | null,
+  rawMessageForBreakpoint = '',
+): Record<string, unknown> | null {
+  const extra = extractObject(attempt.extra_data)
+  const rawFailureDiagnostic = extractVisibleFailureDiagnostic(extra)
+  const rawRequestConversionError = extractObject(extra?.request_conversion_error)
+  const rawRequestBodyBuildError = extractObject(extra?.request_body_build_error)
+  const hasDiagnostic = Boolean(
+    summaryInput
+      || rawFailureDiagnostic
+      || rawRequestConversionError
+      || rawRequestBodyBuildError
+      || attempt.error_message
+      || attempt.error_type
+      || attempt.skip_reason
+      || upstreamResponseDisplay,
+  )
+  if (!hasDiagnostic) return null
+
+  const summary = summaryInput
+    || readStringField(rawFailureDiagnostic ?? {}, 'message')
+    || readStringField(rawRequestConversionError ?? {}, 'message')
+    || readStringField(rawRequestBodyBuildError ?? {}, 'message')
+    || (typeof attempt.error_message === 'string' ? formatAttemptErrorMessage(attempt.error_message, attempt.status_code) : '')
+    || attempt.error_type
+    || currentAttemptSkipReasonDisplay.value
+    || '未知失败'
+  const breakpoint = resolveAttemptDiagnosticBreakpoint(attempt, rawMessageForBreakpoint)
+  const providerFormat = readStringField(extra ?? {}, 'provider_api_format')
+  const clientFormat = readStringField(extra ?? {}, 'client_api_format')
+    || (typeof props.requestApiFormat === 'string' ? props.requestApiFormat : '')
+  const conversionDisplay = clientFormat || providerFormat
+    ? `${clientFormat ? formatApiFormat(clientFormat) : '未知请求格式'} → ${providerFormat ? formatApiFormat(providerFormat) : '未知上游格式'}`
+    : currentAttemptFormatDisplay.value
+  const analysisHint = (() => {
+    const raw = `${summary}\n${rawMessageForBreakpoint}\n${attempt.error_message ?? ''}`.toLowerCase()
+    if (isStreamFinishErrorDiagnostic(raw)) {
+      return '上游通过结束原因报告了流式错误：检查原始 SSE 中的 error/message 及上游日志；保持失败状态，不要映射为正常结束。'
+    }
+    if (isStreamTerminalDiagnosticMessage(raw)) {
+      return '断点在上游流式终态校验：检查原始结束原因及协议兼容性；该错误不代表发生了格式转换，不能确认成功时保持失败闭合。'
+    }
+    if (raw.includes('unsupported provider stream event')) {
+      return '断点在上游流式事件解析/转换矩阵：先按 breakpoint 对应字段确认 event type，再决定是补 canonical mapping 还是加入 known noop。'
+    }
+    if (raw.includes('finish reason')) {
+      return '断点在 finish_reason 映射：确认该结束原因是否可等价映射；不能无损映射时保持失败闭合。'
+    }
+    if (raw.includes('lossy conversion') || raw.includes('无损') || raw.includes('丢失信息') || raw.includes('request_conversion')) {
+      return '断点在请求/响应格式转换器：检查 breakpoint 字段是否能被目标格式表达，不能表达就需要拒绝、降级或新增显式映射策略。'
+    }
+    return '先从 breakpoint 字段开始回放；若 breakpoint 为 $，优先查看 raw.failure_diagnostic / node.error_message 和 upstream_response。'
+  })()
+
+  const payload = {
+    summary,
+    breakpoint,
+    analysis_hint: analysisHint,
+    request: {
+      request_id: trace.value?.request_id ?? attempt.request_id,
+      path: currentAttemptRequestPathDisplay.value || null,
+      format_conversion: conversionDisplay || null,
+      client_api_format: clientFormat || null,
+      provider_api_format: providerFormat || null,
+      needs_conversion: extra?.needs_conversion ?? null,
+      conversion_mode: readStringField(extra ?? {}, 'conversion_mode') ?? null,
+    },
+    node: {
+      candidate_id: attempt.id,
+      candidate_index: attempt.candidate_index,
+      retry_index: attempt.retry_index,
+      provider: attempt.provider_name || attempt.provider_id || null,
+      key: currentAttemptKeyDisplay.value || null,
+      status: attempt.status,
+      status_code: statusCode ?? attempt.status_code ?? null,
+      skip_reason: attempt.skip_reason ?? null,
+      error_type: attempt.error_type ?? null,
+      error_message: attempt.error_message ?? null,
+    },
+    raw: {
+      failure_diagnostic: rawFailureDiagnostic,
+      request_conversion_error: rawFailureDiagnostic?.safe_to_show === false || extractObject(extra?.failure_diagnostic)?.safe_to_show === false ? null : rawRequestConversionError,
+      request_body_build_error: rawFailureDiagnostic?.safe_to_show === false || extractObject(extra?.failure_diagnostic)?.safe_to_show === false ? null : rawRequestBodyBuildError,
+      error_flow: extractObject(extra?.error_flow),
+      upstream_response: upstreamResponseDisplay ?? normalizeUpstreamResponseDisplay(extra?.upstream_response),
+    },
+  }
+  return buildFailureDiagnosticBundle(payload, attempt, trace.value, rawMessageForBreakpoint)
+}
+
+const { copyToClipboard } = useClipboard()
+const diagnosticCopying = ref(false)
+const diagnosticCopied = ref(false)
+const exportedDiagnostic = ref<Record<string, unknown> | null>(null)
+let diagnosticController: AbortController | null = null
+let diagnosticCopyTimer: ReturnType<typeof setTimeout> | undefined
+const currentAttemptDiagnostic = computed(() => {
+  const attempt = currentAttempt.value
+  if (!attempt) return null
+  if (attempt.status === 'failed') return currentAttemptRequestError.value?.diagnostic ?? null
+  if (attempt.status !== 'skipped' || !currentAttemptFailureDiagnostic.value) return null
+  return buildAttemptDiagnosticPayload(
+    attempt,
+    currentAttemptFailureDiagnostic.value.message,
+    attempt.status_code,
+    normalizeUpstreamResponseDisplay(attempt.extra_data?.upstream_response),
+    extractVisibleDiagnosticMessage(attempt.extra_data),
+  )
+})
+const diagnosticDisplay = computed(() => exportedDiagnostic.value
+  ?? (currentAttemptDiagnostic.value ? sanitizeDiagnostic(currentAttemptDiagnostic.value) as Record<string, unknown> : null))
+
+function resetDiagnosticCopy() {
+  diagnosticController?.abort()
+  diagnosticController = null
+  clearTimeout(diagnosticCopyTimer)
+  diagnosticCopying.value = false
+  diagnosticCopied.value = false
+  exportedDiagnostic.value = null
+}
+
+async function copyFailureDiagnostic() {
+  if (!currentAttemptDiagnostic.value || !currentAttempt.value || diagnosticCopying.value) return
+  const bundle = JSON.parse(JSON.stringify(currentAttemptDiagnostic.value)) as Record<string, unknown>
+  const attempt = JSON.parse(JSON.stringify(currentAttempt.value)) as CandidateRecord
+  const currentTrace = trace.value ? { ...trace.value, candidates: [] } : null
+  const controller = new AbortController()
+  diagnosticController = controller
+  diagnosticCopying.value = true
+  diagnosticCopied.value = false
+  try {
+    const diagnostic = await prepareDiagnosticExport(bundle, attempt, currentTrace, controller.signal)
+    if (controller.signal.aborted) return
+    exportedDiagnostic.value = diagnostic
+    const copied = await copyToClipboard(JSON.stringify(diagnostic, null, 2))
+    if (controller.signal.aborted) return
+    diagnosticCopied.value = copied
+    if (copied) diagnosticCopyTimer = setTimeout(() => { diagnosticCopied.value = false }, 2000)
+  } catch {
+    if (controller.signal.aborted) return
+    const fallback = sanitizeDiagnostic({
+      ...bundle,
+      reproduction: { status: 'insufficient_context', missing_context: ['export_failed'] },
+    }) as Record<string, unknown>
+    exportedDiagnostic.value = fallback
+    diagnosticCopied.value = await copyToClipboard(JSON.stringify(fallback, null, 2))
+  } finally {
+    if (diagnosticController === controller) {
+      diagnosticCopying.value = false
+      diagnosticController = null
+    }
+  }
+}
+
+watch([() => props.requestId, () => currentAttempt.value?.id, () => currentAttempt.value?.error_message], resetDiagnosticCopy)
+onBeforeUnmount(resetDiagnosticCopy)
+
+const currentAttemptExtraDataDisplay = computed<Record<string, unknown> | null>(() => {
+  const extra = extractObject(currentAttempt.value?.extra_data)
+  if (!extra) return null
+
+  const display = { ...extra }
+  delete display.upstream_response
+  delete display.error_flow
+  delete display.client_response
+  delete display.provider_response
+
+  return Object.keys(display).length > 0 ? display : null
+})
+
+const hasActiveImageProgress = computed(() => {
+  return rawTimeline.value.some((candidate) => {
+    const progress = normalizeImageProgress(candidate.image_progress)
+      ?? normalizeImageProgress(extractObject(candidate.extra_data)?.image_progress)
+    if (!progress?.phase) return false
+    return progress.phase !== 'upstream_completed' && progress.phase !== 'failed'
+  })
+})
 
 // 判断是否为 OAuth 类型（provider_type 为具体值时也算 OAuth）
 const isOAuthType = (authType?: string): boolean => {
@@ -1144,20 +1992,6 @@ const formatAuthTypeWithPlan = (authType: string, planType?: string): string => 
     return `${typeName} ${planType}`
   }
   return typeName
-}
-
-// 格式化能力标签显示
-const formatCapabilityLabel = (cap: string): string => {
-  const labels: Record<string, string> = {
-    'cache_1h': '1h缓存',
-    'cache_5min': '5min缓存',
-    'context_1m': '1M上下文',
-    'context_200k': '200K上下文',
-    'extended_thinking': '深度思考',
-    'vision': '视觉',
-    'function_calling': '函数调用',
-  }
-  return labels[cap] || cap
 }
 
 const poolSelectionLabel = (reason: string): string => {
@@ -1189,107 +2023,92 @@ const isGroupSelected = (group: NodeGroup) => {
   return selectedGroupIndex.value === groupedTimeline.value.findIndex(g => g.id === group.id && g.startIndex === group.startIndex)
 }
 
-// 选中一个组
-const selectGroup = (group: NodeGroup) => {
-  const index = groupedTimeline.value.findIndex(g => g.id === group.id && g.startIndex === group.startIndex)
-  if (index >= 0) {
-    selectedGroupIndex.value = index
-    // 默认选中成功的尝试，或最后一个尝试
-    const successIdx = group.allAttempts.findIndex(a => a.status === 'success')
-    selectedAttemptIndex.value = successIdx >= 0 ? successIdx : group.allAttempts.length - 1
-  }
+const findGroupIndex = (groups: NodeGroup[], group: NodeGroup): number => {
+  return groups.findIndex(g => g.id === group.id && g.startIndex === group.startIndex)
 }
 
-// 选中一个组的首次请求
-const selectFirstAttempt = (group: NodeGroup) => {
-  const index = groupedTimeline.value.findIndex(g => g.id === group.id && g.startIndex === group.startIndex)
-  if (index >= 0) {
-    selectedGroupIndex.value = index
-    selectedAttemptIndex.value = 0
-  }
+const selectedAttemptFromGroups = (groups: NodeGroup[]): CandidateRecord | null => {
+  const group = groups[selectedGroupIndex.value]
+  if (!group) return null
+  return group.allAttempts[selectedAttemptIndex.value] || null
 }
 
-// 导航到上/下一组
-const navigateGroup = (direction: number) => {
-  const newIndex = selectedGroupIndex.value + direction
-  if (newIndex >= 0 && newIndex < groupedTimeline.value.length) {
-    selectedGroupIndex.value = newIndex
-    const group = groupedTimeline.value[newIndex]
-    // 默认选中成功的尝试，或最后一个尝试
-    const successIdx = group.allAttempts.findIndex(a => a.status === 'success')
-    selectedAttemptIndex.value = successIdx >= 0 ? successIdx : group.allAttempts.length - 1
-  }
+const groupHasSuccess = (group: NodeGroup): boolean => {
+  return group.allAttempts.some(attempt => getDisplayStatus(attempt) === 'success')
 }
 
-// 加载请求追踪数据
-const isSilentRefresh = ref(false)
-const loadTrace = async (silent = false) => {
-  if (!props.requestId) return
-
-  isSilentRefresh.value = silent
-
-  if (!silent) {
-    loading.value = true
-  }
-  error.value = null
-
-  try {
-    trace.value = await requestTraceApi.getRequestTrace(props.requestId)
-  } catch (err: unknown) {
-    if (!silent) {
-      error.value = parseApiError(err, '加载失败')
-    }
-    log.error('加载请求追踪失败:', err)
-  } finally {
-    if (!silent) {
-      loading.value = false
-    }
-  }
+const groupsHaveSuccess = (groups: NodeGroup[]): boolean => {
+  return groups.some(groupHasSuccess)
 }
 
-// 监听 groupedTimeline 变化，自动选择最有意义的组
-watch(groupedTimeline, (newGroups) => {
+const groupsHaveLiveCandidate = (groups: NodeGroup[]): boolean => {
+  return groups.some(group => group.allAttempts.some(isLiveCandidate))
+}
+
+const TERMINAL_ATTEMPT_STATUSES = ['failed', 'cancelled', 'stream_interrupted', 'skipped']
+
+const isTerminalResultAttempt = (attempt: CandidateRecord): boolean => {
+  return TERMINAL_ATTEMPT_STATUSES.includes(getDisplayStatus(attempt))
+}
+
+const groupsHaveTerminalResult = (groups: NodeGroup[]): boolean => {
+  return groups.some(group => group.allAttempts.some(isTerminalResultAttempt))
+}
+
+const selectedAttemptMatchesBestSilentState = (groups: NodeGroup[]): boolean => {
+  const attempt = selectedAttemptFromGroups(groups)
+  if (!attempt) return false
+
+  if (groupsHaveSuccess(groups)) {
+    return getDisplayStatus(attempt) === 'success'
+  }
+
+  if (groupsHaveLiveCandidate(groups)) {
+    return isLiveCandidate(attempt)
+  }
+
+  if (groupsHaveTerminalResult(groups)) {
+    return isTerminalResultAttempt(attempt)
+  }
+
+  return true
+}
+
+const selectMostRelevantGroup = (newGroups: NodeGroup[]) => {
   if (!newGroups || newGroups.length === 0) return
 
-  // 静默刷新时不重置选中状态
-  if (isSilentRefresh.value) {
-    isSilentRefresh.value = false
-    return
-  }
-
   // 查找成功的组
-  const successIdx = newGroups.findIndex(g => g.primaryStatus === 'success')
+  const successIdx = newGroups.findIndex(groupHasSuccess)
   if (successIdx >= 0) {
     selectedGroupIndex.value = successIdx
     // 选中成功的尝试
     const group = newGroups[successIdx]
-    const attemptIdx = group.allAttempts.findIndex(a => a.status === 'success')
+    const attemptIdx = group.allAttempts.findIndex(a => getDisplayStatus(a) === 'success')
     selectedAttemptIndex.value = attemptIdx >= 0 ? attemptIdx : 0
     return
   }
 
   // 查找正在进行的组
-  const activeIdx = newGroups.findIndex(g => g.primaryStatus === 'pending' || g.primaryStatus === 'streaming')
+  const activeIdx = newGroups.findIndex(g => g.allAttempts.some(isLiveCandidate))
   if (activeIdx >= 0) {
     selectedGroupIndex.value = activeIdx
     // 选中正在进行的尝试，而非最后一个
     const group = newGroups[activeIdx]
-    const attemptIdx = group.allAttempts.findIndex(a => a.status === 'pending' || a.status === 'streaming')
+    const attemptIdx = group.allAttempts.findIndex(isLiveCandidate)
     selectedAttemptIndex.value = attemptIdx >= 0 ? attemptIdx : group.allAttempts.length - 1
     return
   }
 
   // 查找最后一个有效结果的组（有实际执行过的状态：failed/cancelled/stream_interrupted/skipped）
   // 从后往前找第一个有效状态的组
-  const activeStatuses = ['failed', 'cancelled', 'stream_interrupted', 'skipped']
   for (let i = newGroups.length - 1; i >= 0; i--) {
     const group = newGroups[i]
-    if (activeStatuses.includes(group.primaryStatus)) {
+    if (TERMINAL_ATTEMPT_STATUSES.includes(group.primaryStatus)) {
       selectedGroupIndex.value = i
       // 选中最后一个有效状态的尝试（从后往前遍历）
       let targetIdx = -1
       for (let j = group.allAttempts.length - 1; j >= 0; j--) {
-        if (activeStatuses.includes(group.allAttempts[j].status)) {
+        if (isTerminalResultAttempt(group.allAttempts[j])) {
           targetIdx = j
           break
         }
@@ -1302,21 +2121,280 @@ watch(groupedTimeline, (newGroups) => {
   // 都没有有效状态，选择第一个组（避免选到末尾的未执行节点）
   selectedGroupIndex.value = 0
   selectedAttemptIndex.value = 0
+}
+
+// 选中一个组
+const selectGroup = (group: NodeGroup) => {
+  const index = findGroupIndex(groupedTimeline.value, group)
+  if (index >= 0) {
+    selectionPinnedByUser.value = true
+    selectedGroupIndex.value = index
+    // 默认选中成功的尝试，或最后一个尝试
+    const successIdx = group.allAttempts.findIndex(a => a.status === 'success')
+    selectedAttemptIndex.value = successIdx >= 0 ? successIdx : group.allAttempts.length - 1
+  }
+}
+
+// 选中一个组的首次请求
+const selectFirstAttempt = (group: NodeGroup) => {
+  const index = findGroupIndex(groupedTimeline.value, group)
+  if (index >= 0) {
+    selectionPinnedByUser.value = true
+    selectedGroupIndex.value = index
+    selectedAttemptIndex.value = 0
+  }
+}
+
+const selectAttemptInGroup = (group: NodeGroup, attemptIndex: number) => {
+  const groupIndex = findGroupIndex(groupedTimeline.value, group)
+  if (groupIndex < 0) return
+  selectionPinnedByUser.value = true
+  selectedGroupIndex.value = groupIndex
+  selectedAttemptIndex.value = attemptIndex
+}
+
+const isAttemptSelected = (group: NodeGroup, attemptIndex: number) => {
+  return isGroupSelected(group) && selectedAttemptIndex.value === attemptIndex
+}
+
+const formatCandidateAttemptIndex = (attempt: CandidateRecord): string => {
+  return attempt.retry_index > 0
+    ? `#${attempt.candidate_index}.${attempt.retry_index}`
+    : `#${attempt.candidate_index}`
+}
+
+const formatAttemptDotTitle = (attempt: CandidateRecord): string => {
+  const parts = [
+    formatCandidateAttemptIndex(attempt),
+    attempt.key_name || attempt.key_account_label || attempt.key_preview || '未知 Key',
+    getStatusLabel(getDisplayStatus(attempt)),
+  ]
+  return parts.filter(Boolean).join(' · ')
+}
+
+// 导航到上/下一组
+const navigateGroup = (direction: number) => {
+  const newIndex = selectedGroupIndex.value + direction
+  if (newIndex >= 0 && newIndex < groupedTimeline.value.length) {
+    selectionPinnedByUser.value = true
+    selectedGroupIndex.value = newIndex
+    const group = groupedTimeline.value[newIndex]
+    // 默认选中成功的尝试，或最后一个尝试
+    const successIdx = group.allAttempts.findIndex(a => a.status === 'success')
+    selectedAttemptIndex.value = successIdx >= 0 ? successIdx : group.allAttempts.length - 1
+  }
+}
+
+const navigateAttempt = (direction: number) => {
+  const group = selectedGroup.value
+  if (!group) return
+  const newIndex = selectedAttemptIndex.value + direction
+  if (newIndex >= 0 && newIndex < group.allAttempts.length) {
+    selectionPinnedByUser.value = true
+    selectedAttemptIndex.value = newIndex
+  }
+}
+
+// 加载请求追踪数据
+const isSilentRefresh = ref(false)
+const loadTrace = async (silent = false) => {
+  const requestId = props.requestId
+  if (!requestId || props.traceData) return
+  if (traceLoadInFlight) return traceLoadInFlight
+
+  traceLoadInFlight = (async () => {
+    isSilentRefresh.value = silent
+    traceLoadStarted.value = true
+
+    if (!silent) {
+      loading.value = true
+    }
+    error.value = null
+
+    try {
+      internalTrace.value = await requestTraceApi.getRequestTrace(requestId, { attemptedOnly: true })
+    } catch (err: unknown) {
+      if (isAxiosError(err) && err.response?.status === 404) {
+        internalTrace.value = null
+        error.value = null
+        return
+      }
+      if (!silent) {
+        error.value = parseApiError(err, '加载失败')
+      }
+      log.error('加载请求追踪失败:', err)
+    } finally {
+      if (!silent) {
+        loading.value = false
+      }
+      traceLoadInFlight = null
+    }
+  })()
+
+  return traceLoadInFlight
+}
+
+const propsRequestIsActive = computed(() => {
+  const status = props.requestStatus ?? usageData.value?.status
+  return status === 'pending' || status === 'streaming'
+})
+
+const traceHasActiveCandidate = computed(() => {
+  return rawTimeline.value.some(isLiveCandidate)
+})
+
+const traceFinalIsTerminal = computed(() => {
+  const status = trace.value?.final_status
+  return status === 'success' || status === 'failed' || status === 'cancelled'
+})
+
+const shouldPollTrace = computed(() => {
+  if (!props.requestId || props.traceData) return false
+  if (traceHasActiveCandidate.value || hasActiveImageProgress.value) return true
+  return propsRequestIsActive.value && !traceFinalIsTerminal.value
+})
+
+const stopTracePolling = () => {
+  if (tracePollTimer) {
+    clearTimeout(tracePollTimer)
+    tracePollTimer = null
+  }
+}
+
+const scheduleTracePolling = () => {
+  stopTracePolling()
+  if (!shouldPollTrace.value) return
+
+  tracePollTimer = setTimeout(async () => {
+    await loadTrace(true)
+    scheduleTracePolling()
+  }, TRACE_POLL_INTERVAL_MS)
+}
+
+// 监听 groupedTimeline 变化，自动选择最有意义的组
+watch(groupedTimeline, (newGroups) => {
+  if (!newGroups || newGroups.length === 0) return
+
+  // 静默刷新时保留用户手动选择；未手动选择时跟随成功/进行中的 Key。
+  if (isSilentRefresh.value) {
+    isSilentRefresh.value = false
+    if (selectionPinnedByUser.value && selectedAttemptFromGroups(newGroups)) {
+      return
+    }
+    if (selectedAttemptMatchesBestSilentState(newGroups)) {
+      return
+    }
+    selectMostRelevantGroup(newGroups)
+    return
+  }
+
+  selectMostRelevantGroup(newGroups)
 }, { immediate: true })
 
-// 监听 requestId 变化
-watch(() => props.requestId, () => {
-  selectedGroupIndex.value = 0
-  selectedAttemptIndex.value = 0
-  loadTrace()
+// 监听 requestId / 外部 trace 变化
+watch(
+  [() => props.requestId, () => props.traceData],
+  () => {
+    selectedGroupIndex.value = 0
+    selectedAttemptIndex.value = 0
+    selectionPinnedByUser.value = false
+    traceLoadStarted.value = false
+
+    if (props.traceData) {
+      internalTrace.value = null
+      loading.value = false
+      error.value = null
+      return
+    }
+
+    if (!props.requestId) {
+      internalTrace.value = null
+      loading.value = false
+      error.value = null
+      return
+    }
+
+    void loadTrace()
+  },
+  { immediate: true },
+)
+
+watch(shouldPollTrace, () => {
+  scheduleTracePolling()
 }, { immediate: true })
+
+onBeforeUnmount(() => {
+  stopTracePolling()
+})
 
 defineExpose({ refresh: () => loadTrace(true) })
+
+const TERMINAL_TIME_RANGE_STATUSES = new Set([
+  'success',
+  'failed',
+  'cancelled',
+  'stream_interrupted',
+])
+
+const parseTimestampMs = (value?: string | null): number | null => {
+  if (!value) return null
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+const normalizeLatencyMs = (value?: number | null): number | null => {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null
+  return Math.round(value)
+}
+
+const formatDurationMs = (durationMs: number): string => {
+  const safeDurationMs = Math.max(0, Math.round(durationMs))
+  if (safeDurationMs >= 1000) {
+    return `${(safeDurationMs / 1000).toFixed(2)}s`
+  }
+  return `${safeDurationMs}ms`
+}
+
+const resolveAttemptTimeRange = (attempt: CandidateRecord | null | undefined): AttemptTimeRange | null => {
+  if (!attempt?.started_at) return null
+
+  const startMs = parseTimestampMs(attempt.started_at)
+  if (startMs == null) {
+    return {
+      startIso: attempt.started_at,
+      endIso: attempt.finished_at,
+      durationLabel: attempt.finished_at ? formatDuration(attempt.started_at, attempt.finished_at) : undefined,
+    }
+  }
+
+  const rawEndMs = parseTimestampMs(attempt.finished_at)
+  const latencyMs = normalizeLatencyMs(attempt.latency_ms)
+  let endMs = rawEndMs
+
+  if (
+    latencyMs != null &&
+    latencyMs > 0 &&
+    (endMs == null || endMs <= startMs) &&
+    (attempt.finished_at || TERMINAL_TIME_RANGE_STATUSES.has(attempt.status))
+  ) {
+    endMs = startMs + latencyMs
+  }
+
+  if (endMs == null) {
+    return { startIso: attempt.started_at }
+  }
+
+  return {
+    startIso: attempt.started_at,
+    endIso: new Date(endMs).toISOString(),
+    durationLabel: formatDurationMs(endMs - startMs),
+  }
+}
 
 // 格式化时间（详细）
 const formatTime = (dateStr: string) => {
   const date = new Date(dateStr)
-  const timeStr = date.toLocaleTimeString('zh-CN', {
+  const timeStr = date.toLocaleTimeString(getI18nLocale(), {
     hour12: false,
     hour: '2-digit',
     minute: '2-digit',
@@ -1330,19 +2408,15 @@ const formatTime = (dateStr: string) => {
 const formatDuration = (startStr: string, endStr: string): string => {
   const start = new Date(startStr).getTime()
   const end = new Date(endStr).getTime()
-  const durationMs = end - start
-  if (durationMs >= 1000) {
-    return `${(durationMs / 1000).toFixed(2)}s`
-  }
-  return `${durationMs}ms`
+  return formatDurationMs(end - start)
 }
 
 // 获取状态标签
 const getStatusLabel = (status: string) => {
   const labels: Record<string, string> = {
-    available: '未执行',
-    unused: '未执行',
-    pending: '等待中',
+    available: '可用未尝试',
+    unused: '未使用',
+    pending: '进行中',
     streaming: '传输中',
     stream_interrupted: '流中断',
     success: '成功',
@@ -1370,8 +2444,25 @@ const getStatusColorClass = (status: string) => {
 }
 
 // 展示状态：进行中态优先（包括 started 但未 finished 的中间态），再按 HTTP 状态码兜底
-const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string => {
+function getDisplayStatus(attempt: CandidateRecord | null | undefined): string {
   if (!attempt) return 'available'
+  const code = attempt.status_code
+  const isTerminalSuccessCode = typeof code === 'number' && code >= 200 && code < 300
+
+  if (attempt.status === 'success') {
+    if (typeof code === 'number' && !isTerminalSuccessCode) {
+      return 'failed'
+    }
+    return 'success'
+  }
+  if (
+    attempt.status === 'failed' ||
+    attempt.status === 'cancelled' ||
+    attempt.status === 'skipped' ||
+    attempt.status === 'stream_interrupted'
+  ) {
+    return attempt.status
+  }
   const hasFinished = Boolean(attempt.finished_at)
   const isExplicitPending = (attempt.status === 'pending' || attempt.status === 'streaming') && !hasFinished
   const isImplicitPending = Boolean(
@@ -1383,10 +2474,9 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
   if (isExplicitPending || isImplicitPending) {
     return 'pending'
   }
-  const code = attempt.status_code
   if (typeof code === 'number') {
-    if (code >= 200 && code < 300) return 'success'
-    if (code >= 400) return 'failed'
+    if (isTerminalSuccessCode) return 'success'
+    if (code >= 300) return 'failed'
   }
   return attempt.status
 }
@@ -1403,7 +2493,7 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
   align-items: center;
   justify-content: safe center;
   gap: 64px;
-  padding: 2rem;
+  padding: 2rem 2rem 2.75rem;
   overflow-x: auto;
   overflow-y: hidden;
 
@@ -1502,6 +2592,7 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
   gap: 6px;
   padding: 0;
   background: transparent;
+  z-index: 3;
 }
 
 /* 子节点 - 增大点击区域 */
@@ -1542,7 +2633,7 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
 .sub-dot.status-failed { background: #ef4444; color: #ef4444; }
 .sub-dot.status-cancelled { background: #f59e0b; color: #f59e0b; }
 .sub-dot.status-pending { background: #3b82f6; color: #3b82f6; }
-.sub-dot.status-skipped { background: hsl(var(--primary)); color: hsl(var(--primary)); }
+.sub-dot.status-skipped { background: hsl(var(--foreground)); color: hsl(var(--foreground)); }
 .sub-dot.status-available { background: #d1d5db; color: #d1d5db; }
 
 /* 选中状态：呼吸动画 + 涟漪效果 */
@@ -1605,7 +2696,7 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
 .node-dot.status-failed { color: #ef4444; }
 .node-dot.status-cancelled { color: #f59e0b; }
 .node-dot.status-pending { color: #3b82f6; }
-.node-dot.status-skipped { color: hsl(var(--primary)); }
+.node-dot.status-skipped { color: hsl(var(--foreground)); }
 .node-dot.status-available { color: #d1d5db; }
 
 /* 连接线容器 */
@@ -1668,7 +2759,7 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
 .title-dot.status-failed { background: #ef4444; }
 .title-dot.status-cancelled { background: #f59e0b; }
 .title-dot.status-pending { background: #3b82f6; }
-.title-dot.status-skipped { background: hsl(var(--primary)); }
+.title-dot.status-skipped { background: hsl(var(--foreground)); }
 .title-dot.status-available { background: #d1d5db; }
 
 .title-text {
@@ -1761,8 +2852,8 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
 }
 
 .status-tag.status-skipped {
-  background: hsl(var(--primary) / 0.15);
-  color: hsl(var(--primary));
+  background: hsl(var(--foreground) / 0.08);
+  color: hsl(var(--foreground));
 }
 
 .status-tag.status-available {
@@ -1794,7 +2885,37 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
   color: hsl(var(--muted-foreground));
   background: hsl(var(--muted) / 0.5);
   border-radius: 4px;
+}
+
+.attempt-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
   margin-left: 0.5rem;
+}
+
+.attempt-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  border-radius: 9999px;
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.attempt-nav-btn:hover:not(:disabled) {
+  background: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.attempt-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .info-grid {
@@ -1947,33 +3068,110 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
   color: hsl(var(--muted-foreground));
 }
 
-/* 能力标签 */
-.capability-tags {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.375rem;
+.image-progress-block {
+  margin-top: 0.875rem;
+  padding: 0.75rem;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: 8px;
+  background: hsl(var(--background) / 0.72);
 }
 
-.capability-tag {
+.image-progress-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.625rem;
+}
+
+.image-progress-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.image-progress-phase {
   display: inline-flex;
   align-items: center;
   padding: 0.15rem 0.5rem;
+  border-radius: 999px;
   font-size: 0.7rem;
-  font-weight: 500;
-  color: hsl(var(--muted-foreground));
+  font-weight: 600;
   white-space: nowrap;
-  border-radius: 4px;
-  background: transparent;
-  border: 1px dashed hsl(var(--border));
-  transition: all 0.15s ease;
+  border: 1px solid hsl(var(--border));
 }
 
-/* 被请求使用的能力（高亮边框） */
-.capability-tag.active {
-  color: hsl(var(--primary));
-  border-color: hsl(var(--primary) / 0.5);
-  background: hsl(var(--primary) / 0.08);
+.image-progress-phase.phase-connecting,
+.image-progress-phase.phase-streaming {
+  color: #2563eb;
+  background: #3b82f614;
+  border-color: #3b82f633;
+}
+
+.image-progress-phase.phase-completed {
+  color: #16a34a;
+  background: #22c55e14;
+  border-color: #22c55e33;
+}
+
+.image-progress-phase.phase-failed {
+  color: #dc2626;
+  background: #ef444414;
+  border-color: #ef444433;
+}
+
+.image-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.625rem 0.875rem;
+}
+
+.image-progress-item {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.image-progress-item.full-width {
+  grid-column: span 2;
+}
+
+.image-progress-label {
+  font-size: 0.68rem;
+  color: hsl(var(--muted-foreground));
+  white-space: nowrap;
+}
+
+.image-progress-value {
+  min-width: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+.image-progress-code {
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.12rem 0.35rem;
+  border-radius: 4px;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  font-size: 0.72rem;
+  font-family: ui-monospace, monospace;
+}
+
+@media (max-width: 768px) {
+  .image-progress-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .image-progress-item.full-width {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Provider 官网链接 */
@@ -2110,6 +3308,7 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
 /* 跳过原因 */
 .skip-reason {
   margin-top: 1rem;
+  padding: 0.75rem;
   background: hsl(var(--muted) / 0.5);
   border-radius: 8px;
   display: flex;
@@ -2126,6 +3325,28 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
   color: hsl(var(--foreground));
 }
 
+.reason-content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.reason-detail {
+  color: hsl(var(--muted-foreground));
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.reason-detail code {
+  margin-right: 0.4rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: hsl(var(--background) / 0.8);
+  color: hsl(var(--foreground));
+  font-size: 0.8rem;
+}
+
 /* 错误信息 */
 .error-block {
   margin-top: 1rem;
@@ -2135,19 +3356,67 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
   border-radius: 8px;
 }
 
+.error-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
 .error-type {
   font-size: 0.75rem;
   font-weight: 600;
   color: #ef4444;
-  margin-bottom: 0.25rem;
   text-transform: uppercase;
   letter-spacing: 0.025em;
+}
+
+.error-status-badge {
+  flex-shrink: 0;
+  padding: 0.125rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-family: ui-monospace, monospace;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+.error-status-badge.is-success {
+  color: #166534;
+  background: #22c55e18;
+}
+
+.error-status-badge.is-warning {
+  color: #92400e;
+  background: #f59e0b1f;
+}
+
+.error-status-badge.is-error {
+  color: #991b1b;
+  background: #ef44441f;
 }
 
 .error-msg {
   font-size: 0.85rem;
   color: #dc2626;
   word-break: break-word;
+}
+
+.error-json {
+  margin-top: 0.75rem;
+}
+
+.dark .error-status-badge.is-success {
+  color: #bbf7d0;
+}
+
+.dark .error-status-badge.is-warning {
+  color: #fde68a;
+}
+
+.dark .error-status-badge.is-error {
+  color: #fecaca;
 }
 
 /* 额外信息 */
@@ -2167,16 +3436,8 @@ const getDisplayStatus = (attempt: CandidateRecord | null | undefined): string =
   color: hsl(var(--foreground));
 }
 
-.extra-json {
+.extra-json-panel {
   margin-top: 0.5rem;
-  padding: 0.75rem;
-  background: hsl(var(--muted) / 0.5);
-  border-radius: 8px;
-  font-size: 0.75rem;
-  font-family: ui-monospace, monospace;
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
 }
 
 /* 动画 */

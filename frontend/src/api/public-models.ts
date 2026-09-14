@@ -15,6 +15,7 @@ export interface PublicGlobalModel {
   default_price_per_request: number | null  // 按次计费价格
   // Key 能力支持
   supported_capabilities: string[] | null
+  supports_embedding?: boolean | null
   // 模型配置（JSON）
   config: Record<string, unknown> | null
   // 调用次数
@@ -35,6 +36,6 @@ export async function getPublicGlobalModels(params?: {
   is_active?: boolean
   search?: string
 }): Promise<PublicGlobalModelListResponse> {
-  const response = await client.get('/api/public/global-models', { params })
+  const response = await client.get<PublicGlobalModelListResponse>('/api/public/global-models', { params })
   return response.data
 }

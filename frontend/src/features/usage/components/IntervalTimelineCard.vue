@@ -54,26 +54,31 @@
 </template>
 
 <script setup lang="ts">
+import type { TimeScatterChartData } from '@/components/charts/types'
 import { computed, ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import Card from '@/components/ui/card.vue'
 import ScatterChart from '@/components/charts/ScatterChart.vue'
 import { cacheAnalysisApi, type IntervalTimelineResponse } from '@/api/cache'
 import { meApi } from '@/api/me'
-import type { ChartData, ChartOptions } from 'chart.js'
+import type { ChartOptions } from 'chart.js'
 import { log } from '@/utils/logger'
 
 const props = withDefaults(defineProps<{
   title: string
   isAdmin: boolean
   hours?: number
+  refreshIntervalMs?: number
 }>(), {
-  hours: 24  // 默认当天
+  hours: 24,  // 默认当天
+  refreshIntervalMs: 30000
 })
 
 const loading = ref(false)
 const timelineData = ref<IntervalTimelineResponse | null>(null)
 const primaryColor = ref('201, 100, 66')  // 默认主题色
 let loadRequestId = 0
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+const isPageVisible = ref(typeof document === 'undefined' ? true : !document.hidden)
 
 const ADMIN_TIMELINE_LIMIT = 1500
 const USER_TIMELINE_LIMIT = 1200
@@ -90,7 +95,11 @@ function getPrimaryColor(): string {
 
 onMounted(() => {
   primaryColor.value = getPrimaryColor()
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+  }
   void loadData()
+  scheduleNextRefresh()
 })
 
 // 预定义的颜色列表（用于区分不同用户/模型）
@@ -178,7 +187,7 @@ function formatModelName(model: string): string {
 }
 
 // 构建图表数据
-const chartData = computed<ChartData<'scatter'>>(() => {
+const chartData = computed<TimeScatterChartData>(() => {
   if (!timelineData.value?.points) {
     return { datasets: [] }
   }
@@ -315,11 +324,48 @@ async function loadData() {
   }
 }
 
+function stopRefreshTimer() {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+function scheduleNextRefresh() {
+  if (refreshTimer) return
+  if (!isPageVisible.value) return
+  if (!props.refreshIntervalMs || props.refreshIntervalMs <= 0) return
+  refreshTimer = setTimeout(async () => {
+    refreshTimer = null
+    await loadData()
+    scheduleNextRefresh()
+  }, props.refreshIntervalMs)
+}
+
+function handleVisibilityChange() {
+  isPageVisible.value = !document.hidden
+  if (!isPageVisible.value) {
+    stopRefreshTimer()
+    return
+  }
+  if (!props.refreshIntervalMs || props.refreshIntervalMs <= 0) {
+    return
+  }
+  void loadData()
+  scheduleNextRefresh()
+}
+
 watch([() => props.hours, () => props.isAdmin], () => {
   void loadData()
+  stopRefreshTimer()
+  scheduleNextRefresh()
 })
 
 onBeforeUnmount(() => {
   loadRequestId++
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }
+  stopRefreshTimer()
 })
 </script>

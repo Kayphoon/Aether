@@ -8,6 +8,7 @@
  */
 
 import client from './client'
+import type { CredentialsSchema } from './providerCredentials'
 
 // ==================== Types ====================
 
@@ -27,6 +28,7 @@ export type ProviderActionType =
 /** 操作状态 */
 export type ActionStatus =
   | 'success'
+  | 'pending'
   | 'auth_failed'
   | 'auth_expired'
   | 'rate_limited'
@@ -45,11 +47,11 @@ export interface ArchitectureInfo {
   architecture_id: string
   display_name: string
   description: string
-  credentials_schema: Record<string, unknown>
+  credentials_schema: CredentialsSchema
   supported_auth_types: Array<{
     type: string
     display_name: string
-    credentials_schema?: Record<string, unknown>
+    credentials_schema?: CredentialsSchema
   }>
   supported_actions: Array<{
     type: string
@@ -126,12 +128,19 @@ export interface ActionConfigRequest {
 }
 
 /** 保存配置请求 */
+export interface QuotaAlertConfig {
+  enabled: boolean
+  threshold_amount: number
+  fetch_interval_seconds: number
+}
+
 export interface SaveConfigRequest {
   architecture_id: string
   base_url?: string
   connector: ConnectorConfigRequest
   actions: Record<string, ActionConfigRequest>
   schedule: Record<string, string>
+  quota_alert?: QuotaAlertConfig
 }
 
 /** 连接请求 */
@@ -189,6 +198,7 @@ export interface ProviderOpsConfigResponse {
     config: Record<string, unknown>
     credentials: Record<string, unknown>
   }
+  quota_alert?: QuotaAlertConfig
 }
 
 /**

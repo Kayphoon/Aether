@@ -13,7 +13,7 @@
             class="space-y-4"
             @submit.prevent="updateProfile"
           >
-            <div class="flex items-center justify-between">
+            <div class="flex flex-wrap items-center justify-between gap-3">
               <h3 class="text-lg font-medium text-foreground">
                 基本信息
               </h3>
@@ -81,6 +81,69 @@
           </form>
         </Card>
 
+        <Card class="p-6">
+          <div class="flex flex-col items-start gap-3 mb-4 sm:flex-row sm:justify-between">
+            <div class="min-w-0 flex-1">
+              <h3 class="text-lg font-medium text-foreground">
+                敏感信息保护
+              </h3>
+              <p class="text-sm text-muted-foreground mt-1">
+                管理员开启功能后，可默认应用到你的账户和 API Key
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              class="shrink-0"
+              :disabled="savingFeatureSettings || !hasFeatureSettingsChanges"
+              @click="updateFeatureSettings"
+            >
+              {{ savingFeatureSettings ? '保存中...' : '保存' }}
+            </Button>
+          </div>
+          <div class="space-y-4">
+            <div class="flex items-center justify-between gap-4 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              <div>
+                <Label class="text-sm font-medium">默认启用</Label>
+                <p class="mt-1 text-xs text-muted-foreground">
+                  未单独配置的 API Key 会跟随此设置
+                </p>
+              </div>
+              <Switch v-model="featureSettingsForm.chatPiiRedactionEnabled" />
+            </div>
+            <div class="flex items-center justify-between gap-4 rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+              <div>
+                <Label class="text-sm font-medium">占位符说明</Label>
+                <p class="mt-1 text-xs text-muted-foreground">
+                  向模型说明占位符含义
+                </p>
+              </div>
+              <Switch
+                v-model="featureSettingsForm.chatPiiRedactionInjectNotice"
+                :disabled="!featureSettingsForm.chatPiiRedactionEnabled"
+              />
+            </div>
+          </div>
+        </Card>
+
+        <Card
+          v-if="featureSettingsForm.notificationPushServiceEnabled"
+          class="p-6"
+        >
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <h3 class="text-lg font-medium text-foreground">
+                通知推送服务
+              </h3>
+              <p class="mt-1 text-sm text-muted-foreground">
+                管理员已允许你配置自己的第三方推送渠道
+              </p>
+            </div>
+            <Badge variant="success">
+              已开放
+            </Badge>
+          </div>
+        </Card>
+
         <!-- 密码设置（LDAP 用户不显示） -->
         <Card
           v-if="profile?.auth_source !== 'ldap'"
@@ -90,7 +153,7 @@
             class="space-y-4"
             @submit.prevent="changePassword"
           >
-            <div class="flex items-center justify-between">
+            <div class="flex flex-wrap items-center justify-between gap-3">
               <h3 class="text-lg font-medium text-foreground">
                 {{ profile?.has_password ? '修改密码' : '设置密码' }}
               </h3>
@@ -107,7 +170,8 @@
               <Input
                 id="old-password"
                 v-model="passwordForm.old_password"
-                type="password"
+                type="text"
+                masked
                 class="mt-1"
               />
             </div>
@@ -116,7 +180,8 @@
               <Input
                 id="new-password"
                 v-model="passwordForm.new_password"
-                type="password"
+                type="text"
+                masked
                 :placeholder="getPasswordPolicyPlaceholder(passwordPolicyLevel)"
                 class="mt-1"
               />
@@ -134,11 +199,12 @@
               </p>
             </div>
             <div>
-              <Label for="confirm-password">确认{{ profile?.has_password ? '新' : '' }}密码</Label>
+              <Label for="confirm-password">{{ profile?.has_password ? '确认新密码' : '确认密码' }}</Label>
               <Input
                 id="confirm-password"
                 v-model="passwordForm.confirm_password"
-                type="password"
+                type="text"
+                masked
                 placeholder="再次输入密码"
                 class="mt-1"
               />
@@ -153,8 +219,8 @@
         </Card>
 
         <Card class="p-6">
-          <div class="flex items-center justify-between mb-4">
-            <div>
+          <div class="flex flex-col items-start gap-3 mb-4 sm:flex-row sm:justify-between">
+            <div class="min-w-0 flex-1">
               <h3 class="text-lg font-medium text-foreground">
                 登录设备
               </h3>
@@ -164,6 +230,7 @@
             </div>
             <Button
               variant="outline"
+              class="shrink-0"
               :disabled="sessionsLoading || otherSessionCount === 0 || sessionActionLoading === 'others'"
               @click="handleRevokeOtherSessions"
             >
@@ -190,7 +257,7 @@
             <div
               v-for="session in userSessions"
               :key="session.id"
-              class="flex items-start justify-between gap-4 rounded-lg border border-border/60 bg-muted/20 p-4"
+              class="flex min-w-0 flex-col items-start gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 sm:flex-row sm:justify-between"
             >
               <div class="min-w-0">
                 <div class="flex items-center gap-2 flex-wrap">
@@ -198,14 +265,15 @@
                     <Input
                       v-model="sessionLabelDraft"
                       size="sm"
-                      class="h-8 w-56"
+                      class="h-8 w-full sm:w-56"
                       maxlength="120"
                       @keyup.enter="saveSessionLabel(session.id)"
                     />
                   </template>
                   <span
                     v-else
-                    class="font-medium text-foreground"
+                    translate="no"
+                    class="break-words font-medium text-foreground"
                   >{{ session.device_label }}</span>
                   <Badge
                     v-if="session.is_current"
@@ -222,7 +290,7 @@
                   <span v-if="session.ip_address"> · IP {{ session.ip_address }}</span>
                 </p>
               </div>
-              <div class="flex items-center gap-2">
+              <div class="flex shrink-0 flex-wrap items-center gap-2">
                 <template v-if="editingSessionId === session.id">
                   <Button
                     size="sm"
@@ -341,7 +409,7 @@
                   <!-- eslint-disable vue/no-v-html -->
                   <div
                     class="oauth-icon shrink-0"
-                    v-html="getOAuthIcon(p.provider_type)"
+                    v-html="getOAuthIcon(p.provider_type, p.icon_url)"
                   />
                   <!-- eslint-enable vue/no-v-html -->
                   <div class="min-w-0">
@@ -417,7 +485,7 @@
                     <SelectItem value="zh-CN">
                       简体中文
                     </SelectItem>
-                    <SelectItem value="en">
+                    <SelectItem value="en-US">
                       English
                     </SelectItem>
                   </SelectContent>
@@ -453,7 +521,7 @@
                       邮件通知
                     </Label>
                     <p class="text-xs text-muted-foreground mt-1">
-                      接收系统重要通知
+                      接收系统通知邮件
                     </p>
                   </div>
                   <Switch
@@ -515,7 +583,7 @@
             <div class="flex justify-between">
               <span class="text-muted-foreground">角色</span>
               <Badge :variant="profile?.role === 'admin' ? 'default' : 'secondary'">
-                {{ profile?.role === 'admin' ? '管理员' : '普通用户' }}
+                {{ profileRoleLabel }}
               </Badge>
             </div>
             <div class="flex justify-between">
@@ -589,14 +657,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { getI18nLocale, normalizeLocale, useI18n } from '@/i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { meApi, type Profile } from '@/api/me'
 import { type UserSession, formatSessionMeta } from '@/types/session'
 import { authApi } from '@/api/auth'
 import { oauthApi, type OAuthLinkInfo, type OAuthProviderInfo } from '@/api/oauth'
-import { getClientDeviceId } from '@/utils/deviceId'
 import { getOAuthIcon } from '@/utils/oauth-icons'
 import { useDarkMode, type ThemeMode } from '@/composables/useDarkMode'
 import {
@@ -620,18 +688,29 @@ import SelectItem from '@/components/ui/select-item.vue'
 import Switch from '@/components/ui/switch.vue'
 import { useToast } from '@/composables/useToast'
 import { formatCurrency } from '@/utils/format'
-import { getApiUrl } from '@/utils/url'
 import { log } from '@/utils/logger'
+import { safeExternalHttpsUrl } from '@/utils/navigationSecurity'
 import { getErrorMessage, getErrorStatus } from '@/types/api-error'
+import {
+  mergeChatPiiRedactionFeatureSettings,
+  readNotificationPushServiceFeatureSettings,
+  readChatPiiRedactionFeatureSettings,
+} from '@/utils/featureSettings'
 
 const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 const { success, error: showError } = useToast()
 const { setThemeMode } = useDarkMode()
+const { locale, setLocale } = useI18n()
 
 const profile = ref<Profile | null>(null)
 const userSessions = ref<UserSession[]>([])
+const profileRoleLabel = computed(() => {
+  if (profile.value?.role === 'admin') return '管理员'
+  if (profile.value?.role === 'audit_admin') return '审计管理员'
+  return '普通用户'
+})
 
 const profileForm = ref({
   email: '',
@@ -648,7 +727,7 @@ const preferencesForm = ref({
   avatar_url: '',
   bio: '',
   theme: 'light',
-  language: 'zh-CN',
+  language: locale.value,
   timezone: 'Asia/Shanghai',
   notifications: {
     email: true,
@@ -657,7 +736,14 @@ const preferencesForm = ref({
   }
 })
 
+const featureSettingsForm = ref({
+  chatPiiRedactionEnabled: false,
+  chatPiiRedactionInjectNotice: true,
+  notificationPushServiceEnabled: false,
+})
+
 const savingProfile = ref(false)
+const savingFeatureSettings = ref(false)
 const changingPassword = ref(false)
 const sessionsLoading = ref(false)
 const sessionActionLoading = ref<string | null>(null)
@@ -676,6 +762,7 @@ const emailConfigured = ref(false) // 系统是否配置了邮箱服务
 // 原始值，用于检测是否有修改
 const originalProfileForm = ref({ email: '', username: '' })
 const originalPreferencesForm = ref({ avatar_url: '', bio: '' })
+const originalFeatureSettingsForm = ref({ ...featureSettingsForm.value })
 
 // 检测基本信息是否有修改
 const hasProfileChanges = computed(() => {
@@ -684,6 +771,13 @@ const hasProfileChanges = computed(() => {
     profileForm.value.email !== originalProfileForm.value.email ||
     preferencesForm.value.avatar_url !== originalPreferencesForm.value.avatar_url ||
     preferencesForm.value.bio !== originalPreferencesForm.value.bio
+  )
+})
+
+const hasFeatureSettingsChanges = computed(() => {
+  return (
+    featureSettingsForm.value.chatPiiRedactionEnabled !== originalFeatureSettingsForm.value.chatPiiRedactionEnabled ||
+    featureSettingsForm.value.chatPiiRedactionInjectNotice !== originalFeatureSettingsForm.value.chatPiiRedactionInjectNotice
   )
 })
 
@@ -716,18 +810,25 @@ function handleThemeChange(value: string) {
 }
 
 function handleLanguageChange(value: string) {
-  preferencesForm.value.language = value
+  const nextLocale = normalizeLocale(value)
+  if (!nextLocale) return
+  preferencesForm.value.language = nextLocale
+  setLocale(nextLocale)
   languageSelectOpen.value = false
   updatePreferences()
 }
 
+watch(locale, value => {
+  preferencesForm.value.language = value
+})
+
 onMounted(async () => {
-  await loadProfile()
+  const profilePromise = loadProfile()
   await Promise.all([
     loadPreferences(),
     loadSessions(),
-    loadOAuthBindings(),
     loadEmailConfigured(),
+    profilePromise.then(() => loadOAuthBindings()),
   ])
 })
 
@@ -749,11 +850,44 @@ async function loadProfile() {
       email: profile.value.email || '',
       username: profile.value.username
     }
+    const redactionFeature = readChatPiiRedactionFeatureSettings(profile.value.feature_settings)
+    const notificationPushFeature = readNotificationPushServiceFeatureSettings(profile.value.feature_settings)
+    featureSettingsForm.value = {
+      chatPiiRedactionEnabled: redactionFeature.enabled,
+      chatPiiRedactionInjectNotice: redactionFeature.inject_model_instruction,
+      notificationPushServiceEnabled: notificationPushFeature.enabled,
+    }
     // 保存原始值
     originalProfileForm.value = { ...profileForm.value }
+    originalFeatureSettingsForm.value = { ...featureSettingsForm.value }
   } catch (error) {
     log.error('加载个人信息失败:', error)
     showError('加载个人信息失败')
+  }
+}
+
+async function updateFeatureSettings() {
+  savingFeatureSettings.value = true
+  try {
+    await meApi.updateProfile({
+      feature_settings: mergeChatPiiRedactionFeatureSettings(profile.value?.feature_settings, {
+        enabled: featureSettingsForm.value.chatPiiRedactionEnabled,
+        inject_model_instruction: featureSettingsForm.value.chatPiiRedactionInjectNotice,
+      }),
+    })
+    if (profile.value) {
+      profile.value.feature_settings = mergeChatPiiRedactionFeatureSettings(profile.value.feature_settings, {
+        enabled: featureSettingsForm.value.chatPiiRedactionEnabled,
+        inject_model_instruction: featureSettingsForm.value.chatPiiRedactionInjectNotice,
+      })
+    }
+    originalFeatureSettingsForm.value = { ...featureSettingsForm.value }
+    success('敏感信息保护设置已保存')
+  } catch (err) {
+    log.error('更新敏感信息保护设置失败:', err)
+    showError(getErrorMessage(err), '更新敏感信息保护设置失败')
+  } finally {
+    savingFeatureSettings.value = false
   }
 }
 
@@ -811,20 +945,22 @@ function handleBind(providerType: string) {
   // 保存返回路径（OAuth callback 会读取）
   sessionStorage.setItem('redirectPath', route.fullPath)
 
-  // 先获取一次性绑定令牌，再在新标签页打开（避免在 URL 中暴露 access_token）
+  // 后端以当前认证会话创建一次性 OAuth state；URL 中不携带任何绑定凭据。
   oauthActionLoading.value = true
-  oauthApi.createBindToken(providerType)
-    .then((bindToken) => {
-      // getApiUrl 可能返回相对路径，需要拼接完整 URL
-      const basePath = getApiUrl(`/api/user/oauth/${providerType}/bind`)
-      const bindUrl = basePath.startsWith('http')
-        ? new URL(basePath)
-        : new URL(basePath, window.location.origin)
-      bindUrl.searchParams.set('bind_token', bindToken)
-      bindUrl.searchParams.set('client_device_id', getClientDeviceId())
+  oauthApi.createBindAuthorization(providerType)
+    .then((authorizeUrl) => {
+      const bindUrl = safeExternalHttpsUrl(authorizeUrl)
+      if (!bindUrl) {
+        throw new Error('OAuth 服务返回了不安全的授权地址')
+      }
 
-      // 新标签页打开 OAuth 流程
-      const newTab = window.open(bindUrl.toString(), '_blank')
+      // Keep a handle for close detection, but sever opener before the tab reaches
+      // the external OAuth provider so it cannot navigate the authenticated page.
+      const newTab = window.open('', '_blank')
+      if (newTab) {
+        newTab.opener = null
+        newTab.location.replace(bindUrl)
+      }
 
       // 监听标签页关闭，刷新绑定状态
       if (newTab) {
@@ -840,7 +976,7 @@ function handleBind(providerType: string) {
       } else {
         // 被浏览器阻止，回退到当前页面跳转
         oauthActionLoading.value = false
-        window.location.href = bindUrl.toString()
+        window.location.href = bindUrl
       }
     })
     .catch((err) => {
@@ -875,7 +1011,7 @@ async function loadPreferences() {
       avatar_url: prefs.avatar_url || '',
       bio: prefs.bio || '',
       theme: localTheme,  // 使用本地主题，而非服务端返回值
-      language: prefs.language || 'zh-CN',
+      language: locale.value,
       timezone: prefs.timezone || 'Asia/Shanghai',
       notifications: {
         email: prefs.notifications?.email ?? true,
@@ -1069,7 +1205,7 @@ function isUnlimitedBilling(): boolean {
 
 function formatDate(dateString?: string): string {
   if (!dateString) return '未知'
-  return new Date(dateString).toLocaleDateString('zh-CN', {
+  return new Date(dateString).toLocaleDateString(getI18nLocale(), {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

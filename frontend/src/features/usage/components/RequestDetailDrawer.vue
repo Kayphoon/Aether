@@ -18,47 +18,71 @@
           <!-- 固定头部 - 整合基本信息 -->
           <div class="sticky top-0 z-10 bg-background border-b px-3 sm:px-6 py-3 sm:py-4 flex-shrink-0">
             <!-- 第一行：标题、模型、状态、操作按钮 -->
-            <div class="flex items-center justify-between gap-4 mb-3">
-              <div class="flex items-center gap-3 flex-wrap">
+            <div class="flex items-center justify-between gap-2 sm:gap-4 mb-3">
+              <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-3 flex-wrap">
                 <h3 class="text-lg font-semibold">
                   请求详情
                 </h3>
-                <div class="flex items-center gap-1 text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                  <span>{{ detail?.model || '-' }}</span>
-                  <template v-if="detail?.target_model && detail.target_model !== detail.model">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                      class="w-3 h-3 flex-shrink-0"
-                    >
-                      <path
-                        fill-rule="evenodd"
-                        d="M3 10a.75.75 0 01.75-.75h10.638L10.23 5.29a.75.75 0 111.04-1.08l5.5 5.25a.75.75 0 010 1.08l-5.5 5.25a.75.75 0 11-1.04-1.08l4.158-3.96H3.75A.75.75 0 013 10z"
-                        clip-rule="evenodd"
-                      />
-                    </svg>
-                    <span>{{ detail.target_model }}</span>
-                  </template>
+                <UsageModelDisplay
+                  v-if="headerModelRecord"
+                  :record="headerModelRecord"
+                  :cyber="detailCyberPolicyError"
+                  context="detail"
+                  data-request-detail-model-display
+                  class="min-w-0 max-w-[18rem] text-sm font-mono text-muted-foreground sm:max-w-none"
+                  model-row-class="rounded bg-muted px-2 py-0.5"
+                />
+                <div
+                  v-else
+                  data-request-detail-model-display
+                  class="rounded bg-muted px-2 py-0.5 text-sm font-mono text-muted-foreground"
+                >
+                  -
                 </div>
                 <Badge
                   v-if="detail?.status_code === 200"
                   variant="success"
+                  data-request-lifecycle-status
                 >
                   {{ detail.status_code }}
                 </Badge>
                 <Badge
                   v-else-if="detail"
                   variant="destructive"
+                  data-request-lifecycle-status
                 >
                   {{ detail.status_code }}
                 </Badge>
                 <Badge
-                  v-if="detail"
+                  v-if="detail && isUsageWebSocket(detail)"
                   variant="outline"
-                  class="text-xs"
+                  data-usage-transport="websocket"
+                  :title="formatUsageWebSocketTransportTitle(detail)"
+                  class="border-sky-500/50 text-xs text-sky-600 dark:text-sky-400"
                 >
-                  {{ detail.is_stream ? '流式' : '标准' }}
+                  WS
+                </Badge>
+                <Badge
+                  v-else-if="detail && resolveUsageStreamLabelSegments(detail).hasConversion"
+                  data-usage-transport="http"
+                  :variant="streamBadgeVariant(resolveUsageStreamLabelSegments(detail).client === '流式')"
+                  :class="streamBadgeVariant(resolveUsageStreamLabelSegments(detail).client === '流式') === 'secondary'
+                    ? 'text-xs inline-flex items-center gap-1'
+                    : 'text-xs inline-flex items-center gap-1 border-border/60 text-muted-foreground'"
+                >
+                  <span>HTTP {{ resolveUsageStreamLabelSegments(detail).client }}</span>
+                  <span class="opacity-60">→</span>
+                  <span>HTTP {{ resolveUsageStreamLabelSegments(detail).upstream }}</span>
+                </Badge>
+                <Badge
+                  v-else-if="detail"
+                  data-usage-transport="http"
+                  :variant="streamBadgeVariant(isUsageUpstreamStream(detail))"
+                  :class="streamBadgeVariant(isUsageUpstreamStream(detail)) === 'secondary'
+                    ? 'text-xs'
+                    : 'text-xs border-border/60 text-muted-foreground'"
+                >
+                  HTTP {{ formatUsageStreamLabel(detail) }}
                 </Badge>
               </div>
               <div class="flex items-center gap-1 shrink-0">
@@ -77,7 +101,7 @@
                   size="icon"
                   class="h-8 w-8"
                   :disabled="loading && !autoRefreshing"
-                  :title="autoRefreshing ? '停止自动刷新' : '刷新'"
+                  :title="refreshButtonTitle"
                   @click="refreshDetail"
                 >
                   <RefreshCw
@@ -99,20 +123,21 @@
             <!-- 第二行：关键元信息 -->
             <div
               v-if="detail"
-              class="flex items-center flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"
+              class="flex items-center flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground sm:gap-x-4"
             >
-              <span class="flex items-center gap-1">
+              <span class="flex min-w-0 items-center gap-1">
                 <span class="font-medium text-foreground">ID:</span>
-                <span class="font-mono">{{ detail.request_id || detail.id }}</span>
+                <span
+                  class="font-mono"
+                  :title="fullRequestId"
+                >{{ displayRequestId }}</span>
               </span>
-              <span class="opacity-40">|</span>
+              <span class="hidden opacity-40 sm:inline">|</span>
               <span>{{ formatDateTime(detail.created_at) }}</span>
-              <span class="opacity-40">|</span>
+              <span class="hidden opacity-40 sm:inline">|</span>
               <span>{{ formatApiFormat(detail.api_format) }}</span>
-              <span class="opacity-40">|</span>
+              <span class="hidden opacity-40 sm:inline">|</span>
               <span>用户: {{ detail.user?.username || 'Unknown' }}</span>
-              <span class="opacity-40">|</span>
-              <span class="font-mono">{{ detail.api_key?.display || 'N/A' }}</span>
             </div>
           </div>
 
@@ -148,52 +173,106 @@
               <!-- 费用与性能概览 -->
               <Card>
                 <div class="p-3 sm:p-4">
-                  <!-- 总费用和响应时间（独立显示） -->
-                  <div class="flex items-center mb-4">
-                    <div class="flex items-center">
-                      <span class="text-xs text-muted-foreground w-[56px]">总费用</span>
-                      <span class="text-lg font-bold text-green-600 dark:text-green-400">
-                        ${{ ((typeof detail.cost === 'object' ? detail.cost?.total : detail.cost) || detail.total_cost || 0).toFixed(6) }}
+                  <div class="mb-4 text-sm">
+                    <div class="sm:hidden">
+                      <span class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground/70">{{ detailPricingLabel }}</span>
+                    </div>
+                    <div class="mt-2 grid grid-cols-[max-content_max-content_max-content_max-content_max-content] items-center gap-x-2 overflow-x-auto whitespace-nowrap text-xs sm:hidden">
+                      <span>
+                        <span class="text-muted-foreground">总费用</span>
+                        <span
+                          class="ml-1 font-bold"
+                          :class="detailPricingAvailable ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'"
+                          data-request-detail-total-cost
+                        >
+                          {{ detailPricingAvailable ? `$${detailTotalCostForDisplay.toFixed(6)}` : (detailUsageAvailable ? '未计价' : '不可用') }}
+                        </span>
+                      </span>
+                      <span class="text-muted-foreground">|</span>
+                      <span>
+                        <span class="text-muted-foreground">耗时</span>
+                        <span class="ml-1 font-bold">
+                          {{ formatDurationMs(detail.end_to_end_first_byte_time_ms ?? detail.first_byte_time_ms) }} / {{ formatDurationMs(detail.end_to_end_time_ms ?? detail.response_time_ms) }}
+                        </span>
+                      </span>
+                      <span class="text-muted-foreground">|</span>
+                      <span>
+                        <span class="text-muted-foreground">输出速度</span>
+                        <span class="ml-1 font-bold text-primary">{{ formatOutputRateValue(detailOutputRate) }}tps</span>
                       </span>
                     </div>
-                    <Separator
-                      orientation="vertical"
-                      class="h-6 mx-6"
-                    />
-                    <div class="flex items-center">
-                      <span class="text-xs text-muted-foreground w-[56px]">响应时间</span>
-                      <span class="text-lg font-bold">{{ detail.response_time_ms ? formatResponseTime(detail.response_time_ms).value : 'N/A' }}</span>
-                      <span class="text-sm text-muted-foreground ml-1">{{ detail.response_time_ms ? formatResponseTime(detail.response_time_ms).unit : '' }}</span>
+                    <div class="hidden flex-wrap items-center gap-x-2 gap-y-1 sm:flex">
+                      <span class="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground/70">{{ detailPricingLabel }}</span>
+                      <span class="text-muted-foreground">|</span>
+                      <span class="whitespace-nowrap">
+                        <span class="text-muted-foreground">总费用</span>
+                        <span
+                          class="ml-1 font-bold"
+                          :class="detailPricingAvailable ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'"
+                          data-request-detail-total-cost
+                        >
+                          {{ detailPricingAvailable ? `$${detailTotalCostForDisplay.toFixed(6)}` : (detailUsageAvailable ? '未计价' : '不可用') }}
+                        </span>
+                      </span>
+                      <span class="text-muted-foreground">|</span>
+                      <span class="whitespace-nowrap">
+                        <span class="text-muted-foreground">耗时</span>
+                        <span class="ml-1 font-bold">
+                          {{ formatDurationMs(detail.end_to_end_first_byte_time_ms ?? detail.first_byte_time_ms) }} / {{ formatDurationMs(detail.end_to_end_time_ms ?? detail.response_time_ms) }}
+                        </span>
+                      </span>
+                      <span class="text-muted-foreground">|</span>
+                      <span class="whitespace-nowrap">
+                        <span class="text-muted-foreground">输出速度</span>
+                        <span class="ml-1 font-bold text-primary">{{ formatOutputRateValue(detailOutputRate) }}tps</span>
+                      </span>
                     </div>
+                    <ServiceTierFacts
+                      v-if="hasServiceTierFacts && processingTierPriceMultiplier === null"
+                      class="mt-3"
+                      :requested="serviceTierFacts.requested"
+                      :price-multiplier="processingTierPriceMultiplier"
+                    />
                   </div>
 
                   <!-- 分隔线 -->
                   <Separator class="mb-4" />
 
-                  <!-- ========== 1. 费用聚合计算 ========== -->
-                  <div class="text-xs text-muted-foreground mb-3 flex items-center gap-2 flex-wrap">
-                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground/70">{{ priceSourceLabel }}</span>
-                    <span class="text-foreground">|</span>
-                    <span class="font-mono text-foreground">
-                      总费用 = Token费用 <span class="font-medium">${{ tokenCostTotal.toFixed(6) }}</span>
-                      <template v-if="perRequestCost > 0">
-                        + 按次费用 <span class="font-medium">${{ perRequestCost.toFixed(6) }}</span>
-                      </template>
-                      <template v-if="videoCostTotal > 0">
-                        + {{ detail.video_billing?.task_type === 'image' ? '图像' : detail.video_billing?.task_type === 'audio' ? '音频' : '视频' }}费用 <span class="font-medium">${{ videoCostTotal.toFixed(6) }}</span>
-                      </template>
+                  <div
+                    v-if="!detailUsageAvailable"
+                    data-request-detail-usage-unavailable
+                    class="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-3 text-xs text-muted-foreground"
+                  >
+                    上游未提供可验证的 token/费用用量，本会话不显示伪造的 0 token 或 0 费用。
+                  </div>
+                  <div
+                    v-else-if="!detailPricingAvailable"
+                    data-request-detail-usage-unpriced
+                    class="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-3 text-xs text-muted-foreground"
+                  >
+                    上游提供了权威 token 用量，但包含 Aether 当前计价规则无法安全拆分的音频 token；保留 token 统计并将本会话标记为未计价。
+                    <span v-if="(detail.input_audio_tokens || 0) > 0 || (detail.output_audio_tokens || 0) > 0">
+                      音频输入/输出：{{ detail.input_audio_tokens || 0 }} / {{ detail.output_audio_tokens || 0 }}。
                     </span>
                   </div>
 
-                  <!-- ========== 2. Token分阶段成本 ========== -->
+                  <!-- ========== 1. Token分阶段成本 ========== -->
                   <div
-                    v-if="hasTokenCost"
+                    v-if="detailPricingAvailable && hasTokenCost"
                     class="space-y-2 mb-3"
                   >
                     <!-- 阶梯标题 -->
                     <div class="text-xs text-muted-foreground flex items-center gap-2 flex-wrap">
                       <span class="font-medium text-foreground">Token 计费</span>
-                      <span class="text-muted-foreground/60">(输入 {{ formatNumber(detail.tokens?.input || detail.input_tokens || 0) }} + 缓存创建 {{ cacheCreationSummaryText }} + 缓存读取 {{ formatNumber(detail.cache_read_input_tokens || 0) }})</span>
+                      <span class="font-mono font-medium text-foreground">
+                        <template v-if="processingTierPriceMultiplier !== null">
+                          ${{ tokenCostBaseTotal.toFixed(6) }} × {{ processingTierPriceMultiplier }} ({{ processingTierLabel }} 层级)
+                        </template>
+                        <template v-else>
+                          ${{ tokenCostTotal.toFixed(6) }}
+                        </template>
+                      </span>
+                      <span class="text-muted-foreground/60">(输入 {{ formatNumber(displayInputTokens) }} + 缓存创建 {{ cacheCreationSummaryText }} + 缓存读取 {{ formatNumber(detail.cache_read_input_tokens || 0) }})</span>
                       <Badge
                         v-if="displayTiers.length > 1"
                         variant="outline"
@@ -233,34 +312,79 @@
                           </Badge>
                         </div>
                         <!-- 单价信息 -->
-                        <div class="text-muted-foreground flex items-center gap-2 flex-wrap">
-                          <span>输入 ${{ formatPrice(tier.input_price_per_1m) }}/M</span>
-                          <span>输出 ${{ formatPrice(tier.output_price_per_1m) }}/M</span>
-                          <template v-if="hasTierCacheCreationSplitPricing(tier)">
-                            <span v-if="getTierCachePriceForTTL(tier, 5, 'cache_creation_price_per_1m') !== null">
-                              缓存创建(5min) ${{ formatPrice(getTierCachePriceForTTL(tier, 5, 'cache_creation_price_per_1m') || 0) }}/M
-                            </span>
-                            <span v-if="getTierCachePriceForTTL(tier, 60, 'cache_creation_price_per_1m') !== null">
-                              缓存创建(1h) ${{ formatPrice(getTierCachePriceForTTL(tier, 60, 'cache_creation_price_per_1m') || 0) }}/M
-                            </span>
+                        <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground sm:hidden">
+                          <div class="grid grid-cols-[max-content_1fr] items-baseline gap-x-1">
+                            <span>输入</span>
+                            <span class="text-right">{{ formatPricePerMillion(tier.input_price_per_1m) }}</span>
+                          </div>
+                          <div
+                            class="grid grid-cols-[max-content_1fr] items-baseline gap-x-1"
+                          >
+                            <span>输出</span>
+                            <span class="text-right">{{ formatPricePerMillion(tier.output_price_per_1m) }}</span>
+                          </div>
+                          <template v-if="getTierActiveCacheCreationDisplay(tier) || shouldShowCacheReadPrice(tier)">
+                            <div
+                              v-if="getTierActiveCacheCreationDisplay(tier)"
+                              class="grid grid-cols-[max-content_1fr] items-baseline gap-x-1"
+                            >
+                              <span>{{ getTierActiveCacheCreationDisplay(tier)?.label }}</span>
+                              <span class="text-right">${{ formatPrice(getTierActiveCacheCreationDisplay(tier)?.price || 0) }}/M</span>
+                            </div>
+                            <div v-else />
+                            <div
+                              v-if="shouldShowCacheReadPrice(tier)"
+                              class="grid grid-cols-[max-content_1fr] items-baseline gap-x-1"
+                            >
+                              <span>缓存读取</span>
+                              <span class="text-right">${{ formatPrice(getTierActiveCacheReadPrice(tier) ?? 0) }}/M</span>
+                            </div>
+                            <div v-else />
                           </template>
-                          <span v-else-if="tier.cache_creation_price_per_1m">
-                            缓存创建 ${{ formatPrice(tier.cache_creation_price_per_1m) }}/M
+                        </div>
+                        <div class="text-muted-foreground hidden items-center gap-2 flex-wrap sm:flex">
+                          <span>输入 {{ formatPricePerMillion(tier.input_price_per_1m) }}</span>
+                          <span>输出 {{ formatPricePerMillion(tier.output_price_per_1m) }}</span>
+                          <span v-if="getTierActiveCacheCreationDisplay(tier)">
+                            {{ getTierActiveCacheCreationDisplay(tier)?.label }}
+                            ${{ formatPrice(getTierActiveCacheCreationDisplay(tier)?.price || 0) }}/M
                           </span>
-                          <span v-if="tier.cache_read_price_per_1m">
-                            缓存读取 ${{ formatPrice(tier.cache_read_price_per_1m) }}/M
+                          <span v-if="shouldShowCacheReadPrice(tier)">
+                            缓存读取 ${{ formatPrice(getTierActiveCacheReadPrice(tier) ?? 0) }}/M
                           </span>
                         </div>
                       </div>
 
                       <!-- 当前阶梯的详细计算 -->
                       <template v-if="index === currentTierIndex">
+                        <div class="grid gap-y-2 sm:hidden">
+                          <div class="grid grid-cols-[64px_minmax(0,1fr)_92px] items-center gap-x-2">
+                            <span class="text-xs text-muted-foreground">输入</span>
+                            <span class="text-sm font-semibold font-mono text-right tabular-nums">{{ displayInputTokens }}</span>
+                            <span class="text-xs font-mono text-right tabular-nums">${{ displayInputCost.toFixed(6) }}</span>
+                          </div>
+                          <div class="grid grid-cols-[64px_minmax(0,1fr)_92px] items-center gap-x-2">
+                            <span class="text-xs text-muted-foreground">输出</span>
+                            <span class="text-sm font-semibold font-mono text-right tabular-nums">{{ detail.tokens?.output || detail.output_tokens || 0 }}</span>
+                            <span class="text-xs font-mono text-right tabular-nums">${{ displayOutputCost.toFixed(6) }}</span>
+                          </div>
+                          <div class="grid grid-cols-[64px_minmax(0,1fr)_92px] items-center gap-x-2">
+                            <span class="text-xs text-muted-foreground">缓存创建</span>
+                            <span class="text-sm font-semibold font-mono text-right tabular-nums">{{ totalCacheCreationTokens }}</span>
+                            <span class="text-xs font-mono text-right tabular-nums">${{ displayCacheCreationCost.toFixed(6) }}</span>
+                          </div>
+                          <div class="grid grid-cols-[64px_minmax(0,1fr)_92px] items-center gap-x-2">
+                            <span class="text-xs text-muted-foreground">缓存读取</span>
+                            <span class="text-sm font-semibold font-mono text-right tabular-nums">{{ detail.cache_read_input_tokens || 0 }}</span>
+                            <span class="text-xs font-mono text-right tabular-nums">${{ displayCacheReadCost.toFixed(6) }}</span>
+                          </div>
+                        </div>
                         <!-- 输入 输出 -->
-                        <div class="flex items-center">
+                        <div class="hidden items-center sm:flex">
                           <div class="flex items-center flex-1">
                             <span class="text-xs text-muted-foreground w-[56px]">输入</span>
-                            <span class="text-sm font-semibold font-mono flex-1 text-center">{{ detail.tokens?.input || detail.input_tokens || 0 }}</span>
-                            <span class="text-xs font-mono">${{ (detail.cost?.input || detail.input_cost || 0).toFixed(6) }}</span>
+                            <span class="text-sm font-semibold font-mono flex-1 text-center">{{ displayInputTokens }}</span>
+                            <span class="text-xs font-mono">${{ displayInputCost.toFixed(6) }}</span>
                           </div>
                           <Separator
                             orientation="vertical"
@@ -269,15 +393,15 @@
                           <div class="flex items-center flex-1">
                             <span class="text-xs text-muted-foreground w-[56px]">输出</span>
                             <span class="text-sm font-semibold font-mono flex-1 text-center">{{ detail.tokens?.output || detail.output_tokens || 0 }}</span>
-                            <span class="text-xs font-mono">${{ (detail.cost?.output || detail.output_cost || 0).toFixed(6) }}</span>
+                            <span class="text-xs font-mono">${{ displayOutputCost.toFixed(6) }}</span>
                           </div>
                         </div>
                         <!-- 缓存创建 缓存读取 -->
-                        <div class="flex items-center">
+                        <div class="hidden items-center sm:flex">
                           <div class="flex items-center flex-1">
                             <span class="text-xs text-muted-foreground w-[56px]">{{ cacheCreationSplitRows.length > 0 ? '创建合计' : '缓存创建' }}</span>
-                            <span class="text-sm font-semibold font-mono flex-1 text-center">{{ detail.cache_creation_input_tokens || 0 }}</span>
-                            <span class="text-xs font-mono">${{ (detail.cache_creation_cost || 0).toFixed(6) }}</span>
+                            <span class="text-sm font-semibold font-mono flex-1 text-center">{{ totalCacheCreationTokens }}</span>
+                            <span class="text-xs font-mono">${{ displayCacheCreationCost.toFixed(6) }}</span>
                           </div>
                           <Separator
                             orientation="vertical"
@@ -286,13 +410,38 @@
                           <div class="flex items-center flex-1">
                             <span class="text-xs text-muted-foreground w-[56px]">缓存读取</span>
                             <span class="text-sm font-semibold font-mono flex-1 text-center">{{ detail.cache_read_input_tokens || 0 }}</span>
-                            <span class="text-xs font-mono">${{ (detail.cache_read_cost || 0).toFixed(6) }}</span>
+                            <span class="text-xs font-mono">${{ displayCacheReadCost.toFixed(6) }}</span>
                           </div>
                         </div>
                         <!-- 缓存创建 5m/1h 细分 -->
                         <div
                           v-if="cacheCreationSplitRows.length > 0"
-                          class="space-y-1 pl-[56px]"
+                          class="grid gap-y-1 sm:hidden"
+                        >
+                          <div
+                            v-for="row in cacheCreationSplitRows"
+                            :key="row.key"
+                            class="grid grid-cols-[64px_minmax(0,1fr)_68px_92px] items-center gap-x-2 text-xs text-muted-foreground/70"
+                          >
+                            <span>{{ row.label }}</span>
+                            <span class="font-mono text-right tabular-nums text-foreground/90">{{ formatNumber(row.tokens) }}</span>
+                            <span
+                              class="text-right"
+                              :class="row.pricePer1M === null ? 'invisible' : ''"
+                            >
+                              {{ row.pricePer1M !== null ? `$${formatPrice(row.pricePer1M)}/M` : '-' }}
+                            </span>
+                            <span
+                              class="font-mono text-right tabular-nums"
+                              :class="row.cost === null ? 'invisible' : ''"
+                            >
+                              {{ row.cost !== null ? `$${row.cost.toFixed(6)}` : '-' }}
+                            </span>
+                          </div>
+                        </div>
+                        <div
+                          v-if="cacheCreationSplitRows.length > 0"
+                          class="hidden space-y-1 pl-[56px] sm:block"
                         >
                           <div
                             v-for="row in cacheCreationSplitRows"
@@ -314,18 +463,19 @@
 
                   <!-- ========== 3. 按次计费 ========== -->
                   <div
-                    v-if="perRequestCost > 0 && !detail.video_billing"
+                    v-if="detailPricingAvailable && perRequestCost > 0 && !detail.video_billing"
                     class="space-y-2 mb-3"
                   >
-                    <div class="flex items-center justify-between text-xs">
+                    <div class="flex items-center gap-2 text-xs">
                       <span class="font-medium text-foreground">按次计费</span>
+                      <span class="font-mono font-medium text-foreground">${{ perRequestCost.toFixed(6) }}</span>
                     </div>
                     <div class="rounded-lg p-3 bg-primary/5 border border-primary/30 space-y-2">
                       <div
-                        v-if="detail.price_per_request"
+                        v-if="effectivePricePerRequest > 0"
                         class="flex items-center justify-end text-xs"
                       >
-                        <span class="text-muted-foreground">${{ detail.price_per_request.toFixed(6) }}/次</span>
+                        <span class="text-muted-foreground">${{ effectivePricePerRequest.toFixed(6) }}/次</span>
                       </div>
                       <div class="flex items-center">
                         <div class="flex items-center flex-1">
@@ -337,9 +487,54 @@
                     </div>
                   </div>
 
-                  <!-- ========== 4. 视频/图像/音频计费（独立隔离，与Token计费风格一致） ========== -->
+                  <!-- ========== 4. 图片输出计费 ========== -->
                   <div
-                    v-if="detail.video_billing"
+                    v-if="detailPricingAvailable && hasImageBillingDetail"
+                    class="rounded-lg p-3 space-y-2 bg-primary/5 border border-primary/30 mb-3"
+                  >
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-2 text-xs">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="font-medium text-primary">图片输出</span>
+                        <Badge
+                          variant="outline"
+                          class="text-[10px] px-1.5 py-0 h-4"
+                        >
+                          {{ imageOutputBillingLabel }}
+                        </Badge>
+                        <span
+                          v-if="imageOutputPricingDescriptor"
+                          class="text-muted-foreground font-mono"
+                        >{{ imageOutputPricingDescriptor }}</span>
+                      </div>
+                      <div class="text-muted-foreground flex items-center gap-2 flex-wrap">
+                        <span
+                          v-if="imageOutputPricePerImage !== null"
+                          class="font-mono"
+                        >{{ formatNumber(imageOutputCount) }} 张 × ${{ imageOutputPricePerImage.toFixed(6) }}/张 = ${{ imageOutputCostTotal.toFixed(6) }}</span>
+                      </div>
+                    </div>
+
+                    <div class="flex items-center">
+                      <div class="flex items-center flex-1">
+                        <span class="text-xs text-muted-foreground w-[56px]">数量</span>
+                        <span class="text-sm font-semibold font-mono flex-1 text-center">{{ formatNumber(imageOutputCount) }}</span>
+                        <span class="text-xs font-mono">${{ imageOutputCostTotal.toFixed(6) }}</span>
+                      </div>
+                      <Separator
+                        orientation="vertical"
+                        class="h-4 mx-4"
+                      />
+                      <div class="flex items-center flex-1">
+                        <span class="text-xs text-muted-foreground w-[56px]">格式</span>
+                        <span class="text-sm font-semibold font-mono flex-1 text-center">{{ imageOutputFormat || '-' }}</span>
+                        <span class="text-xs font-mono text-muted-foreground">{{ imageOutputBillingLabel }}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- ========== 5. 视频/图像/音频计费（独立隔离，与Token计费风格一致） ========== -->
+                  <div
+                    v-if="detailPricingAvailable && detail.video_billing"
                     class="rounded-lg p-3 space-y-2 bg-primary/5 border border-primary/30"
                   >
                     <!-- 标题行（与阶梯标题行风格一致） -->
@@ -400,31 +595,16 @@
               <!-- 请求链路追踪卡片 -->
               <div>
                 <HorizontalRequestTimeline
-                  v-if="showTimeline && (detail.request_id || detail.id)"
+                  v-if="showTimeline && traceTimelineRequestId"
                   ref="timelineRef"
-                  :request-id="detail.request_id || detail.id"
+                  :request-id="traceTimelineRequestId"
                   :override-status-code="detail.status_code"
+                  :request-status="detail.status"
                   :request-api-format="detail.api_format || null"
                   :request-metadata="traceRequestMetadata"
+                  @trace-state="handleTraceState"
                 />
               </div>
-
-              <!-- 响应客户端错误卡片 -->
-              <Card
-                v-if="detail.error_message"
-                class="border-red-200 dark:border-red-800"
-              >
-                <div class="p-4">
-                  <h4 class="text-sm font-semibold text-red-600 dark:text-red-400 mb-2">
-                    响应客户端错误
-                  </h4>
-                  <div class="bg-red-50 dark:bg-red-900/20 rounded-lg p-3">
-                    <p class="text-sm text-red-800 dark:text-red-300">
-                      {{ detail.error_message }}
-                    </p>
-                  </div>
-                </div>
-              </Card>
 
               <!-- Tabs 区域 -->
               <Card>
@@ -449,9 +629,21 @@
                     </div>
 
                     <!-- Tab 内容（统一容器） -->
-                    <div class="content-block rounded-md border overflow-hidden">
-                      <!-- 表头栏：工具按钮 -->
-                      <div class="flex items-center justify-end gap-0.5 px-3 py-1 border-b bg-muted/40">
+                    <JsonContentPanel
+                      class="content-block"
+                      :title="activeJsonPanelTitle"
+                      :data="activeJsonPanelData"
+                      :is-dark="isDark"
+                      :expand-depth="currentExpandDepth"
+                      :copied="Boolean(copiedStates[activeTab])"
+                      :custom-copy="true"
+                      :expand-disabled="viewMode === 'compare' || (supportsConversationView && contentViewMode === 'conversation')"
+                      :copy-disabled="viewMode === 'compare' || bodyCopying || (supportsConversationView && !hasValidConversation)"
+                      max-height="500px"
+                      @update:expand-depth="currentExpandDepth = $event"
+                      @copy="copyContent(activeTab)"
+                    >
+                      <template #toolbar-actions-before>
                         <!-- 区域1：条件性按钮（cURL、视图切换、对比） -->
                         <!-- cURL 复制（仅在请求头/请求体 Tab） -->
                         <template v-if="['request-headers', 'request-body'].includes(activeTab)">
@@ -530,53 +722,16 @@
 
                         <!-- 区域3：常驻按钮（展开/收缩、复制） -->
                         <div class="w-px h-3.5 bg-border mx-0.5" />
-
-                        <!-- 展开/收缩 -->
-                        <button
-                          :title="currentExpandDepth === 0 ? '展开全部' : '收缩全部'"
-                          class="p-1 rounded transition-colors"
-                          :class="viewMode === 'compare' || (supportsConversationView && contentViewMode === 'conversation')
-                            ? 'text-muted-foreground/40 cursor-not-allowed'
-                            : 'text-muted-foreground hover:bg-muted'"
-                          :disabled="viewMode === 'compare' || (supportsConversationView && contentViewMode === 'conversation')"
-                          @click="currentExpandDepth === 0 ? expandAll() : collapseAll()"
-                        >
-                          <Maximize2
-                            v-if="currentExpandDepth === 0"
-                            class="w-3.5 h-3.5"
-                          />
-                          <Minimize2
-                            v-else
-                            class="w-3.5 h-3.5"
-                          />
-                        </button>
-
-                        <!-- 复制 -->
-                        <button
-                          :title="copiedStates[activeTab] ? '已复制' : '复制'"
-                          class="p-1 rounded transition-colors"
-                          :class="viewMode === 'compare'
-                            ? 'text-muted-foreground/40 cursor-not-allowed'
-                            : 'text-muted-foreground hover:bg-muted'"
-                          :disabled="viewMode === 'compare'"
-                          @click="copyContent(activeTab)"
-                        >
-                          <Check
-                            v-if="copiedStates[activeTab]"
-                            class="w-3.5 h-3.5 text-green-500"
-                          />
-                          <Copy
-                            v-else
-                            class="w-3.5 h-3.5"
-                          />
-                        </button>
-                      </div>
-                      <TabsContent value="request-headers">
+                      </template>
+                      <TabsContent
+                        v-if="activeTab === 'request-headers'"
+                        value="request-headers"
+                      >
                         <RequestHeadersContent
                           :detail="detail"
                           :view-mode="viewMode"
                           :data-source="dataSource"
-                          :current-header-data="currentHeaderData"
+                          :current-header-data="currentHeaderData ?? null"
                           :current-expand-depth="currentExpandDepth"
                           :has-provider-headers="hasProviderHeaders"
                           :header-stats="headerStats"
@@ -584,35 +739,65 @@
                         />
                       </TabsContent>
 
-                      <TabsContent value="request-body">
+                      <TabsContent
+                        v-if="activeTab === 'request-body'"
+                        value="request-body"
+                      >
                         <div
                           v-if="isRequestBodyLoading"
                           class="p-4"
                         >
                           <Skeleton class="h-32 w-full" />
                         </div>
-                        <ConversationView
+                        <div
+                          v-else-if="requestBodyLoadErrorVisible"
+                          class="m-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive"
+                        >
+                          <div class="flex items-start gap-2">
+                            <AlertTriangle class="mt-0.5 h-4 w-4 flex-shrink-0" />
+                            <span>{{ bodyLoadErrorMessage }}</span>
+                          </div>
+                          <Button
+                            v-if="canRetryBodyContentLoad"
+                            variant="outline"
+                            size="sm"
+                            class="mt-3 h-8 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            @click="retryBodyContentLoad"
+                          >
+                            <RefreshCw class="mr-1.5 h-3.5 w-3.5" />
+                            重试
+                          </Button>
+                        </div>
+                        <BodyConversationContent
                           v-else-if="contentViewMode === 'conversation'"
-                          :render-result="requestRenderResult"
+                          :body-document="currentRequestBody"
+                          kind="request"
+                          :api-format="currentRequestBodyApiFormat"
                           empty-message="无请求体信息"
+                          @load-error="handleBodyDocumentError"
                         />
                         <JsonContent
                           v-else
-                          :data="currentRequestBody"
+                          :data="null"
+                          :body-document="currentRequestBody"
                           :view-mode="viewMode"
                           :expand-depth="currentExpandDepth"
                           :is-dark="isDark"
                           empty-message="无请求体信息"
+                          @load-error="handleBodyDocumentError"
                         />
                       </TabsContent>
 
-                      <TabsContent value="response-headers">
+                      <TabsContent
+                        v-if="activeTab === 'response-headers'"
+                        value="response-headers"
+                      >
                         <RequestHeadersContent
                           v-if="viewMode === 'compare'"
                           :detail="detail"
                           :view-mode="viewMode"
                           :data-source="dataSource"
-                          :current-header-data="currentResponseHeaderData"
+                          :current-header-data="currentResponseHeaderData ?? null"
                           :current-expand-depth="currentExpandDepth"
                           :has-provider-headers="hasProviderResponseHeaders"
                           :header-stats="responseHeaderStats"
@@ -633,38 +818,68 @@
                         />
                       </TabsContent>
 
-                      <TabsContent value="response-body">
+                      <TabsContent
+                        v-if="activeTab === 'response-body'"
+                        value="response-body"
+                      >
                         <div
                           v-if="isResponseBodyLoading"
                           class="p-4"
                         >
                           <Skeleton class="h-32 w-full" />
                         </div>
-                        <ConversationView
+                        <div
+                          v-else-if="responseBodyLoadErrorVisible"
+                          class="m-4 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive"
+                        >
+                          <div class="flex items-start gap-2">
+                            <AlertTriangle class="mt-0.5 h-4 w-4 flex-shrink-0" />
+                            <span>{{ bodyLoadErrorMessage }}</span>
+                          </div>
+                          <Button
+                            v-if="canRetryBodyContentLoad"
+                            variant="outline"
+                            size="sm"
+                            class="mt-3 h-8 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            @click="retryBodyContentLoad"
+                          >
+                            <RefreshCw class="mr-1.5 h-3.5 w-3.5" />
+                            重试
+                          </Button>
+                        </div>
+                        <BodyConversationContent
                           v-else-if="contentViewMode === 'conversation'"
-                          :render-result="responseRenderResult"
+                          :body-document="currentResponseBody"
+                          kind="response"
+                          :api-format="currentResponseBodyApiFormat"
                           empty-message="无响应体信息"
+                          @load-error="handleBodyDocumentError"
                         />
                         <JsonContent
                           v-else
-                          :data="currentResponseBody"
+                          :data="null"
+                          :body-document="currentResponseBody"
                           :view-mode="viewMode"
                           :expand-depth="currentExpandDepth"
                           :is-dark="isDark"
                           empty-message="无响应体信息"
+                          @load-error="handleBodyDocumentError"
                         />
                       </TabsContent>
 
-                      <TabsContent value="metadata">
+                      <TabsContent
+                        v-if="activeTab === 'metadata'"
+                        value="metadata"
+                      >
                         <JsonContent
-                          :data="detail.metadata"
+                          :data="metadataPanelData"
                           :view-mode="viewMode"
                           :expand-depth="currentExpandDepth"
                           :is-dark="isDark"
                           empty-message="无元数据信息"
                         />
                       </TabsContent>
-                    </div>
+                    </JsonContentPanel>
                   </Tabs>
                 </div>
               </Card>
@@ -685,49 +900,149 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed, onMounted, onBeforeUnmount } from 'vue'
+import { getI18nLocale } from '@/i18n'
+import { ref, shallowRef, watch, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import axios from 'axios'
 import Button from '@/components/ui/button.vue'
 import { useEscapeKey } from '@/composables/useEscapeKey'
 import { useClipboard } from '@/composables/useClipboard'
+import { useDarkMode } from '@/composables/useDarkMode'
 import Card from '@/components/ui/card.vue'
 import Badge from '@/components/ui/badge.vue'
 import Separator from '@/components/ui/separator.vue'
 import Skeleton from '@/components/ui/skeleton.vue'
 import Tabs from '@/components/ui/tabs.vue'
 import TabsContent from '@/components/ui/tabs-content.vue'
-import { Copy, Check, Maximize2, Minimize2, Columns2, RefreshCw, X, Monitor, Server, MessageSquareText, Code2, Terminal, Play } from 'lucide-vue-next'
-import { dashboardApi, type RequestDetail } from '@/api/dashboard'
+import { AlertTriangle, Check, Columns2, RefreshCw, X, Monitor, Server, MessageSquareText, Code2, Terminal, Play } from 'lucide-vue-next'
+import { dashboardApi, type RequestBodyField, type RequestDetail } from '@/api/dashboard'
+import { formatRequestBodyLoadError, formatStoredBodyLoadError } from '../utils/body-load-error'
+import type { ImageProgress, RequestTrace } from '@/api/requestTrace'
+import type { UsageRecord } from '../types'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import {
+  formatByteSize,
+  formatCompactNumber,
+  formatShortRequestId,
+  formatTokens,
+} from '@/utils/format'
 import { log } from '@/utils/logger'
+import { getEffectiveInputTokens } from '../token-normalization'
+import {
+  formatDurationMs,
+  formatOutputRateValue,
+  getDisplayOutputRate,
+} from '../performance'
+import {
+  formatUsageStreamLabel,
+  isUsageUpstreamStream,
+  isUsageWebSocket,
+  resolveDisplayRequestStatus,
+  resolveUsageStreamLabelSegments,
+} from '../utils/status'
+import { formatUsageWebSocketTransportTitle } from '../utils/websocketTransport'
+import { isCyberPolicyError } from '../utils/cyberError'
+import {
+  mergeUsageRecordErrorMessage,
+  parseUsageTimestampMs,
+} from '../utils/recordSync'
+import {
+  formatPricePerMillion,
+  resolveProcessingTierPriceMultiplier,
+  resolveSettlementPricingSnapshot,
+  resolveSettlementPricingSourceLabel,
+  resolveSettlementPricingTiers,
+} from '../utils/settlement-pricing'
 
 // 子组件
 import RequestHeadersContent from './RequestDetailDrawer/RequestHeadersContent.vue'
 import JsonContent from './RequestDetailDrawer/JsonContent.vue'
-import ConversationView from './RequestDetailDrawer/ConversationView.vue'
+import JsonContentPanel from './JsonContentPanel.vue'
+import BodyConversationContent from './RequestDetailDrawer/BodyConversationContent.vue'
+import { BodyDocument } from '../utils/body-document'
+import { BodyDocumentError, MAX_BODY_BYTES } from '../utils/body-document-protocol'
+import { useToast } from '@/composables/useToast'
 import HorizontalRequestTimeline from './HorizontalRequestTimeline.vue'
 import ReplayDialog from './ReplayDialog.vue'
-
-// 对话解析器
+import ServiceTierFacts from './ServiceTierFacts.vue'
+import UsageModelDisplay from './UsageModelDisplay.vue'
 import {
-  renderRequest,
-  renderResponse,
-  type RenderResult,
-  type RenderBlock,
-} from '../conversation'
+  formatServiceTierFact,
+  hasServiceTierFact,
+  resolveServiceTierFacts,
+} from '../utils/service-tier'
+
+type RequestStateStatus = 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled'
 
 const props = defineProps<{
   isOpen: boolean
   requestId: string | null
+  summaryRecord?: UsageRecord | null
 }>()
 
 const emit = defineEmits<{
   close: []
+  requestState: [state: {
+    id: string
+    requestId?: string | null
+    status?: RequestStateStatus
+    statusCode?: number | null
+    inputTokens?: number | null
+    effectiveInputTokens?: number | null
+    outputTokens?: number | null
+    totalTokens?: number | null
+    cacheCreationInputTokens?: number | null
+    cacheCreationEphemeral5mInputTokens?: number | null
+    cacheCreationEphemeral1hInputTokens?: number | null
+    cacheReadInputTokens?: number | null
+    cost?: number | null
+    actualCost?: number | null
+    responseTimeMs?: number | null
+    firstByteTimeMs?: number | null
+    isStream?: boolean | null
+    isWebSocket?: boolean | null
+    websocketTransport?: string | null
+    usageAvailable?: boolean | null
+    usagePricingAvailable?: boolean | null
+    inputAudioTokens?: number | null
+    outputAudioTokens?: number | null
+    upstreamIsStream?: boolean | null
+    clientRequestedStream?: boolean | null
+    clientIsStream?: boolean | null
+    apiFormat?: string | null
+    endpointApiFormat?: string | null
+    hasFormatConversion?: boolean | null
+    targetModel?: string | null
+    requestedReasoningEffort?: string | null
+    reasoningEffort?: string | null
+    serviceTier?: string | null
+    actualServiceTier?: string | null
+    imageProgress?: ImageProgress | null
+    errorMessage?: string | null
+    updatedAt?: string | null
+  }]
 }>()
+
+const REQUEST_STATE_STATUSES = new Set<RequestStateStatus>([
+  'pending',
+  'streaming',
+  'completed',
+  'failed',
+  'cancelled',
+])
 
 const loading = ref(false)
 const error = ref<string | null>(null)
-const detail = ref<RequestDetail | null>(null)
+const detail = shallowRef<RequestDetail | null>(null)
+const detailUsageAvailable = computed(() => detail.value?.usage_available !== false)
+const detailPricingAvailable = computed(() => (
+  detailUsageAvailable.value && detail.value?.usage_pricing_available !== false
+))
+const detailTotalCostForDisplay = computed(() => (
+  detail.value ? (detailTotalCost(detail.value) ?? 0) : 0
+))
 const timelineRef = ref<InstanceType<typeof HorizontalRequestTimeline> | null>(null)
+const timelineLoaded = ref(false)
+const timelineHasTrace = ref(false)
 const activeTab = ref('request-body')
 const copiedStates = ref<Record<string, boolean>>({})
 const viewMode = ref<'compare' | 'formatted' | 'raw'>('formatted')
@@ -735,6 +1050,7 @@ const currentExpandDepth = ref(0)
 const dataSource = ref<'client' | 'provider'>('provider')
 const contentViewMode = ref<'json' | 'conversation'>('json')
 const { copyToClipboard } = useClipboard()
+const { error: showBodyError } = useToast()
 const historicalPricing = ref<{
   input_price: string
   output_price: string
@@ -750,9 +1066,361 @@ type CacheTTLPriceEntry = {
 }
 
 type PricingTierLike = {
+  up_to?: number | null
+  input_price_per_1m?: number | null
+  output_price_per_1m?: number | null
   cache_creation_price_per_1m?: number | null
   cache_read_price_per_1m?: number | null
   cache_ttl_pricing?: CacheTTLPriceEntry[] | null
+}
+
+type JsonRecord = Record<string, unknown>
+
+const METADATA_BYTE_FIELD_PATTERN = /(^bytes$|_bytes$|bytes$)/i
+
+function asRecord(value: unknown): JsonRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as JsonRecord
+}
+
+function shouldFormatMetadataByteField(key: string, value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && METADATA_BYTE_FIELD_PATTERN.test(key)
+}
+
+function formatMetadataDisplayValue(value: unknown, key = ''): unknown {
+  if (shouldFormatMetadataByteField(key, value)) {
+    return formatByteSize(value)
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => formatMetadataDisplayValue(item))
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .reduce<Record<string, unknown>>((formatted, [childKey, childValue]) => {
+        formatted[childKey] = formatMetadataDisplayValue(childValue, childKey)
+        return formatted
+      }, {})
+  }
+  return value
+}
+
+function mapTraceFinalStatusToRequestStatus(
+  status?: RequestTrace['final_status'] | null
+): RequestStateStatus | undefined {
+  switch (status) {
+    case 'success':
+      return 'completed'
+    case 'failed':
+      return 'failed'
+    case 'cancelled':
+      return 'cancelled'
+    case 'streaming':
+      return 'streaming'
+    case 'pending':
+      return 'pending'
+    default:
+      return undefined
+  }
+}
+
+function normalizeRequestStateStatus(status: unknown): RequestStateStatus | undefined {
+  const normalized = typeof status === 'string' ? status.trim().toLowerCase() : ''
+  return REQUEST_STATE_STATUSES.has(normalized as RequestStateStatus)
+    ? normalized as RequestStateStatus
+    : undefined
+}
+
+function hasRequestFailureSignal(statusCode?: number | null, errorMessage?: string | null): boolean {
+  return (typeof statusCode === 'number' && statusCode >= 400) ||
+    (typeof errorMessage === 'string' && errorMessage.trim().length > 0)
+}
+
+function resolveRequestStateStatus(
+  status: unknown,
+  statusCode?: number | null,
+  errorMessage?: string | null
+): RequestStateStatus | undefined {
+  const normalized = normalizeRequestStateStatus(status)
+  if ((normalized == null || normalized === 'pending' || normalized === 'streaming') &&
+    hasRequestFailureSignal(statusCode, errorMessage)) {
+    return 'failed'
+  }
+  return normalized
+}
+
+function resolveRequestStateStatusFromDetail(nextDetail: Pick<RequestDetail, 'status' | 'status_code' | 'error_message'>): RequestStateStatus | undefined {
+  return resolveRequestStateStatus(nextDetail.status, nextDetail.status_code, nextDetail.error_message)
+}
+
+type HeaderModelTextField =
+  | 'model'
+  | 'target_model'
+  | 'model_version'
+  | 'request_type'
+  | 'requested_reasoning_effort'
+  | 'reasoning_effort'
+  | 'service_tier'
+  | 'actual_service_tier'
+
+const FINAL_PROVIDER_HEADER_FIELDS = new Set<HeaderModelTextField>([
+  'target_model',
+  'reasoning_effort',
+  'service_tier',
+  'actual_service_tier',
+])
+
+let modelSnapshotRevision = 0
+const summaryModelRevision = ref(0)
+const detailModelRevision = ref(0)
+
+function usageSnapshotUpdatedAtMs(
+  source: UsageRecord | RequestDetail | null | undefined,
+): number | null {
+  const value = source?.updated_at
+  if (typeof value !== 'string' || !value.trim()) return null
+  return parseUsageTimestampMs(value)
+}
+
+function summaryNullIsNewerForProviderField(
+  field: HeaderModelTextField,
+  nextDetail: RequestDetail | null | undefined,
+): boolean {
+  if (!FINAL_PROVIDER_HEADER_FIELDS.has(field) || !props.summaryRecord) return false
+
+  const summaryUpdatedAt = usageSnapshotUpdatedAtMs(props.summaryRecord)
+  const detailUpdatedAt = usageSnapshotUpdatedAtMs(nextDetail)
+  if (summaryUpdatedAt != null && detailUpdatedAt != null && summaryUpdatedAt !== detailUpdatedAt) {
+    return summaryUpdatedAt > detailUpdatedAt
+  }
+
+  if (summaryModelRevision.value > detailModelRevision.value) return true
+
+  // A terminal list row is a complete final-provider snapshot. When no
+  // comparable timestamps exist, its explicit null must beat a cached detail
+  // from an earlier candidate. Non-terminal rows may still be filled by a
+  // detail request that completed after the lightweight list response.
+  return ['completed', 'failed', 'cancelled'].includes(props.summaryRecord.status ?? '')
+}
+
+function readHeaderModelTextField(
+  source: UsageRecord | RequestDetail | null | undefined,
+  field: HeaderModelTextField,
+): { resolved: boolean, value: string | null } {
+  if (!source || !Object.prototype.hasOwnProperty.call(source, field)) {
+    return { resolved: false, value: null }
+  }
+
+  const value = (source as unknown as Record<string, unknown>)[field]
+  if (value === null) return { resolved: true, value: null }
+  if (typeof value !== 'string') return { resolved: false, value: null }
+
+  const normalized = value.trim()
+  return { resolved: true, value: normalized || null }
+}
+
+function resolveHeaderModelTextField(
+  field: HeaderModelTextField,
+  nextDetail: RequestDetail | null | undefined,
+): string | null | undefined {
+  // Prefer a populated list/active fact so sparse detail cannot make the header
+  // flicker. A summary null is often only a lightweight-contract placeholder,
+  // though, so a later populated detail is still useful. Final-provider stale
+  // facts are cleared when full list/active snapshots merge into the summary.
+  const summaryValue = readHeaderModelTextField(props.summaryRecord, field)
+  if (summaryValue.value) return summaryValue.value
+
+  const detailValue = readHeaderModelTextField(nextDetail, field)
+  if (detailValue.value) {
+    if (
+      summaryValue.resolved
+      && summaryValue.value === null
+      && summaryNullIsNewerForProviderField(field, nextDetail)
+    ) return null
+    return detailValue.value
+  }
+
+  return summaryValue.resolved || detailValue.resolved ? null : undefined
+}
+
+watch(
+  () => [
+    props.requestId,
+    props.summaryRecord?.status,
+    props.summaryRecord?.updated_at,
+    props.summaryRecord?.model,
+    props.summaryRecord?.target_model,
+    props.summaryRecord?.model_version,
+    props.summaryRecord?.request_type,
+    props.summaryRecord?.requested_reasoning_effort,
+    props.summaryRecord?.reasoning_effort,
+    props.summaryRecord?.service_tier,
+    props.summaryRecord?.actual_service_tier,
+  ],
+  () => {
+    summaryModelRevision.value = ++modelSnapshotRevision
+  },
+  { immediate: true },
+)
+
+function detailTotalCost(nextDetail: RequestDetail): number | null {
+  const structuredCost = typeof nextDetail.cost === 'object' ? nextDetail.cost?.total : null
+  const totalCost = toNumber(nextDetail.total_cost)
+  const legacyCost = toNumber(nextDetail.cost)
+  return [structuredCost, totalCost, legacyCost]
+    .map(value => toNumber(value))
+    .find((value): value is number => value != null && value > 0)
+    ?? toNumber(structuredCost)
+    ?? totalCost
+    ?? legacyCost
+}
+
+function detailCacheCreation5mTokens(nextDetail: RequestDetail): number | null {
+  return toNumber(nextDetail.cache_creation_input_tokens_5m)
+    ?? toNumber(nextDetail.cache_creation_ephemeral_5m_input_tokens)
+}
+
+function detailCacheCreation1hTokens(nextDetail: RequestDetail): number | null {
+  return toNumber(nextDetail.cache_creation_input_tokens_1h)
+    ?? toNumber(nextDetail.cache_creation_ephemeral_1h_input_tokens)
+}
+
+function emitDetailRequestState(nextDetail: RequestDetail) {
+  const id = props.requestId
+  if (!id) return
+
+  const targetModel = resolveHeaderModelTextField('target_model', nextDetail)
+  const requestedReasoningEffort = resolveHeaderModelTextField(
+    'requested_reasoning_effort',
+    nextDetail,
+  )
+  const reasoningEffort = resolveHeaderModelTextField('reasoning_effort', nextDetail)
+  const serviceTier = resolveHeaderModelTextField('service_tier', nextDetail)
+  const actualServiceTier = resolveHeaderModelTextField('actual_service_tier', nextDetail)
+
+  emit('requestState', {
+    id,
+    requestId: nextDetail.request_id || nextDetail.id || null,
+    status: resolveRequestStateStatusFromDetail(nextDetail),
+    statusCode: nextDetail.status_code ?? undefined,
+    inputTokens: nextDetail.input_tokens ?? nextDetail.tokens?.input ?? null,
+    effectiveInputTokens: displayInputTokens.value,
+    outputTokens: nextDetail.output_tokens ?? nextDetail.tokens?.output ?? null,
+    totalTokens: nextDetail.total_tokens ?? nextDetail.tokens?.total ?? null,
+    cacheCreationInputTokens: nextDetail.cache_creation_input_tokens ?? null,
+    cacheCreationEphemeral5mInputTokens: detailCacheCreation5mTokens(nextDetail),
+    cacheCreationEphemeral1hInputTokens: detailCacheCreation1hTokens(nextDetail),
+    cacheReadInputTokens: nextDetail.cache_read_input_tokens ?? null,
+    cost: detailTotalCost(nextDetail),
+    actualCost: nextDetail.actual_cost ?? null,
+    responseTimeMs: nextDetail.response_time_ms ?? undefined,
+    firstByteTimeMs: nextDetail.first_byte_time_ms ?? null,
+    isStream: nextDetail.is_stream ?? null,
+    isWebSocket: nextDetail.is_websocket ?? null,
+    websocketTransport: nextDetail.websocket_transport ?? null,
+    usageAvailable: nextDetail.usage_available ?? null,
+    usagePricingAvailable: nextDetail.usage_pricing_available ?? null,
+    inputAudioTokens: nextDetail.input_audio_tokens ?? null,
+    outputAudioTokens: nextDetail.output_audio_tokens ?? null,
+    upstreamIsStream: nextDetail.upstream_is_stream ?? null,
+    clientRequestedStream: nextDetail.client_requested_stream ?? null,
+    clientIsStream: nextDetail.client_is_stream ?? null,
+    apiFormat: nextDetail.api_format ?? null,
+    endpointApiFormat: nextDetail.endpoint_api_format ?? null,
+    hasFormatConversion: nextDetail.has_format_conversion ?? null,
+    ...(targetModel ? { targetModel } : {}),
+    ...(requestedReasoningEffort ? { requestedReasoningEffort } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(serviceTier ? { serviceTier } : {}),
+    ...(actualServiceTier ? { actualServiceTier } : {}),
+    errorMessage: nextDetail.error_message ?? undefined,
+    updatedAt: nextDetail.updated_at ?? undefined,
+  })
+}
+
+function handleTraceState(state: {
+  loaded: boolean
+  hasTrace: boolean
+  finalStatus?: RequestTrace['final_status'] | null
+  statusCode?: number | null
+  latencyMs?: number | null
+  imageProgress?: ImageProgress | null
+  errorMessage?: string | null
+}) {
+  timelineLoaded.value = state.loaded
+  timelineHasTrace.value = state.hasTrace
+  const id = props.requestId
+  if (!id) return
+
+  const status = resolveRequestStateStatus(
+    mapTraceFinalStatusToRequestStatus(state.finalStatus),
+    state.statusCode,
+    state.errorMessage
+  )
+  const imageFailed = state.imageProgress?.phase === 'failed'
+  if (!status && !state.imageProgress && state.statusCode == null && state.latencyMs == null) return
+
+  emit('requestState', {
+    id,
+    requestId: detail.value?.request_id || detail.value?.id || null,
+    status: imageFailed ? 'failed' : status,
+    statusCode: state.statusCode ?? undefined,
+    responseTimeMs: state.latencyMs ?? undefined,
+    imageProgress: state.imageProgress ?? null,
+    errorMessage: state.errorMessage ?? undefined,
+  })
+}
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function getNestedValue(record: JsonRecord | null, ...path: string[]): unknown {
+  let current: unknown = record
+  for (const key of path) {
+    const object = asRecord(current)
+    if (!object) return null
+    current = object[key]
+  }
+  return current
+}
+
+function getNestedNumber(record: JsonRecord | null, ...path: string[]): number | null {
+  return toNumber(getNestedValue(record, ...path))
+}
+
+function getNestedString(record: JsonRecord | null, ...path: string[]): string | null {
+  const value = getNestedValue(record, ...path)
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function getCaseInsensitiveString(record: JsonRecord | null, key: string): string | null {
+  if (!record) return null
+  const normalizedKey = key.toLowerCase()
+  for (const [name, value] of Object.entries(record)) {
+    if (name.toLowerCase() === normalizedKey && typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return null
+}
+
+function normalizeCacheTtlPricing(value: unknown): CacheTTLPriceEntry[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => asRecord(entry))
+    .filter((entry): entry is JsonRecord => entry !== null)
+    .map((entry) => ({
+      ttl_minutes: toNumber(entry.ttl_minutes),
+      cache_creation_price_per_1m: toNumber(entry.cache_creation_price_per_1m),
+      cache_read_price_per_1m: toNumber(entry.cache_read_price_per_1m),
+    }))
 }
 const autoRefreshTimer = ref<ReturnType<typeof setInterval> | null>(null)
 const autoRefreshing = ref(false)
@@ -761,14 +1429,51 @@ const curlCopying = ref(false)
 const curlCopied = ref(false)
 const replayDialogOpen = ref(false)
 const bodyLoading = ref(false)
-const bodiesLoadedForRequestId = ref<string | null>(null)
+const bodyLoadError = ref<string | null>(null)
+const bodyDocuments = shallowRef(new Map<RequestBodyField, BodyDocument>())
+const bodyCopying = ref(false)
+const bodyLoadFailures = new Map<RequestBodyField, string>()
+let bodyLoadController: AbortController | null = null
 const showTimeline = ref(false)
 const AUTO_REFRESH_INTERVAL_MS = 1000
 const TIMELINE_MOUNT_DELAY_MS = 120
 let loadDetailRequestId = 0
 let bodyLoadRequestId = 0
 let loadDetailInFlight = false
-let timelineMountTimer: ReturnType<typeof setTimeout> | null = null
+let timelineMountTimer: number | null = null
+
+const fullRequestId = computed(() => detail.value?.request_id || detail.value?.id || '-')
+const displayRequestId = computed(() => formatShortRequestId(fullRequestId.value))
+const refreshButtonTitle = computed(() => {
+  if (autoRefreshing.value) return '停止自动刷新'
+  return isRequestCompleted() ? '刷新' : '开启自动刷新'
+})
+const displayInputTokens = computed(() => {
+  if (!detail.value) return 0
+  return getEffectiveInputTokens({
+    effective_input_tokens: detail.value.effective_input_tokens,
+    input_tokens: detail.value.input_tokens ?? detail.value.tokens?.input,
+    cache_read_input_tokens: detail.value.cache_read_input_tokens,
+    api_format: detail.value.api_format,
+    endpoint_api_format: detail.value.endpoint_api_format,
+  })
+})
+
+const detailOutputTokens = computed(() => {
+  if (!detail.value) return 0
+  return detail.value.tokens?.output ?? detail.value.output_tokens ?? 0
+})
+
+const detailOutputRate = computed(() => {
+  if (!detail.value) return null
+  return getDisplayOutputRate({
+    output_tokens: detailOutputTokens.value,
+    response_time_ms: detail.value.response_time_ms,
+    first_byte_time_ms: detail.value.first_byte_time_ms,
+    is_stream: detail.value.is_stream,
+    upstream_is_stream: detail.value.upstream_is_stream,
+  })
+})
 
 // 监听标签页切换
 watch(activeTab, (newTab) => {
@@ -780,22 +1485,196 @@ watch(activeTab, (newTab) => {
     contentViewMode.value = 'json'
   }
   dataSource.value = getDefaultDataSourceForTab(newTab)
+})
 
-  if (['request-body', 'response-body'].includes(newTab)) {
-    void ensureBodyContentLoaded()
+const { isDark } = useDarkMode()
+
+function streamBadgeVariant(isStream: boolean): 'secondary' | 'outline' {
+  if (isDark.value) {
+    return isStream ? 'outline' : 'secondary'
   }
-})
-
-// 检测暗色模式
-const isDark = computed(() => {
-  return document.documentElement.classList.contains('dark')
-})
+  return isStream ? 'secondary' : 'outline'
+}
 
 const traceRequestMetadata = computed<Record<string, unknown> | null>(() => {
   const meta = detail.value?.metadata
   if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null
   return meta as Record<string, unknown>
 })
+
+const traceRecord = computed<Record<string, unknown> | null>(() =>
+  asRecord(detail.value?.trace ?? null),
+)
+
+const traceTimelineRequestId = computed(() =>
+  getNestedString(traceRecord.value, 'trace_id')
+  ?? getNestedString(traceRequestMetadata.value, 'trace_id')
+  ?? getCaseInsensitiveString(asRecord(detail.value?.request_headers ?? null), 'x-trace-id')
+  ?? detail.value?.request_id
+  ?? detail.value?.id
+  ?? null,
+)
+
+const metadataPanelData = computed<Record<string, unknown> | null>(() => {
+  if (!detail.value) return null
+
+  const merged: Record<string, unknown> = {}
+  if (hasContent(detail.value.metadata)) {
+    Object.assign(merged, detail.value.metadata || {})
+  }
+  if (hasContent(detail.value.routing)) {
+    merged.routing = detail.value.routing
+  }
+  if (hasContent(detail.value.body_capture)) {
+    merged.body_capture = detail.value.body_capture
+  }
+  if (hasContent(detail.value.trace)) {
+    merged.trace = detail.value.trace
+  }
+  if (hasContent(detail.value.settlement)) {
+    merged.settlement = detail.value.settlement
+  }
+
+  return Object.keys(merged).length > 0
+    ? formatMetadataDisplayValue(merged) as Record<string, unknown>
+    : null
+})
+
+const detailForCurrentRequest = computed(() => (
+  detailMatchesRequestId(detail.value, props.requestId) ? detail.value : null
+))
+
+type AuthoritativeErrorSource = 'summary' | 'detail' | null
+
+function isTerminalRequestState(status: RequestStateStatus | undefined): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled'
+}
+
+function isSuccessfulTerminalRequestState(status: RequestStateStatus | undefined): boolean {
+  return status === 'completed' || status === 'cancelled'
+}
+
+const authoritativeErrorSource = computed<AuthoritativeErrorSource>(() => {
+  const summary = props.summaryRecord
+  const currentDetail = detailForCurrentRequest.value
+  if (!summary || !currentDetail) return null
+
+  const summaryStatus = resolveRequestStateStatus(
+    summary.status,
+    summary.status_code,
+    summary.error_message,
+  )
+  const detailStatus = resolveRequestStateStatusFromDetail(currentDetail)
+  const summaryUpdatedAtMs = usageSnapshotUpdatedAtMs(summary)
+  const detailUpdatedAtMs = usageSnapshotUpdatedAtMs(currentDetail)
+
+  if (summaryUpdatedAtMs != null && detailUpdatedAtMs != null &&
+    summaryUpdatedAtMs !== detailUpdatedAtMs) {
+    if (detailUpdatedAtMs > summaryUpdatedAtMs && isTerminalRequestState(detailStatus)) {
+      return 'detail'
+    }
+    if (summaryUpdatedAtMs > detailUpdatedAtMs && isTerminalRequestState(summaryStatus)) {
+      return 'summary'
+    }
+  }
+
+  // Without a comparable timestamp, a successful/cancelled terminal snapshot
+  // still has to clear a failure from the other source. Generic failed detail
+  // remains non-authoritative so opening the drawer cannot flash away a Cyber
+  // refusal already resolved by the list.
+  const detailSucceeded = isSuccessfulTerminalRequestState(detailStatus)
+  const summarySucceeded = isSuccessfulTerminalRequestState(summaryStatus)
+  if (detailSucceeded && !summarySucceeded) return 'detail'
+  if (summarySucceeded && !detailSucceeded) return 'summary'
+  if (detailSucceeded && summarySucceeded) {
+    return detailModelRevision.value >= summaryModelRevision.value ? 'detail' : 'summary'
+  }
+
+  return null
+})
+
+const headerModelRecord = computed(() => {
+  const summary = props.summaryRecord
+  const currentDetail = detailForCurrentRequest.value
+  if (!summary && !currentDetail) return null
+
+  const authoritativeSource = authoritativeErrorSource.value
+  const errorMessage = authoritativeSource === 'summary'
+    ? mergeUsageRecordErrorMessage(undefined, summary?.error_message, { authoritative: true })
+    : mergeUsageRecordErrorMessage(
+      summary?.error_message,
+      currentDetail?.error_message,
+      { authoritative: authoritativeSource === 'detail' },
+    )
+
+  return {
+    model: resolveHeaderModelTextField('model', currentDetail) ?? '-',
+    target_model: resolveHeaderModelTextField('target_model', currentDetail),
+    model_version: resolveHeaderModelTextField('model_version', currentDetail),
+    request_type: resolveHeaderModelTextField('request_type', currentDetail),
+    requested_reasoning_effort: resolveHeaderModelTextField(
+      'requested_reasoning_effort',
+      currentDetail,
+    ),
+    reasoning_effort: resolveHeaderModelTextField('reasoning_effort', currentDetail),
+    service_tier: resolveHeaderModelTextField('service_tier', currentDetail),
+    error_message: errorMessage,
+  }
+})
+const serviceTierFacts = computed(() => resolveServiceTierFacts(headerModelRecord.value))
+const hasServiceTierFacts = computed(() => hasServiceTierFact(serviceTierFacts.value))
+const settlementPricingSnapshot = computed(() => resolveSettlementPricingSnapshot(detail.value))
+const processingTierLabel = computed(() => (
+  formatServiceTierFact(serviceTierFacts.value.requested)
+  ?? formatServiceTierFact(getNestedString(settlementPricingSnapshot.value, 'billing_processing_tier'))
+  ?? '处理'
+))
+const detailCyberPolicyError = computed(() => {
+  const summaryError = props.summaryRecord?.error_message
+  const currentDetail = detailForCurrentRequest.value
+  const detailErrors = [
+    currentDetail?.error_message,
+    currentDetail?.upstream_error,
+    currentDetail?.failure_summary,
+    currentDetail?.response_body,
+  ]
+
+  if (authoritativeErrorSource.value === 'summary') {
+    return isCyberPolicyError(summaryError)
+  }
+  if (authoritativeErrorSource.value === 'detail') {
+    return isCyberPolicyError(detailErrors)
+  }
+  return isCyberPolicyError([summaryError, ...detailErrors])
+})
+const processingTierPriceMultiplier = computed(() => (
+  resolveProcessingTierPriceMultiplier(detail.value)
+))
+
+const settlementInfo = computed<JsonRecord | null>(() =>
+  asRecord(detail.value?.settlement ?? null),
+)
+
+const billingSnapshot = computed<JsonRecord | null>(() =>
+  asRecord(settlementInfo.value?.billing_snapshot)
+  ?? asRecord(traceRequestMetadata.value?.billing_snapshot),
+)
+
+const billingResolvedVariables = computed<JsonRecord | null>(() =>
+  asRecord(billingSnapshot.value?.resolved_variables),
+)
+
+const billingResolvedDimensions = computed<JsonRecord | null>(() =>
+  asRecord(billingSnapshot.value?.resolved_dimensions),
+)
+
+const billingCostBreakdown = computed<JsonRecord | null>(() =>
+  asRecord(billingSnapshot.value?.cost_breakdown),
+)
+
+const billingTierInfo = computed<JsonRecord | null>(() =>
+  asRecord(billingSnapshot.value?.tier_info),
+)
 
 function hasBodyContent(flag: boolean | undefined, data: unknown): boolean {
   return Boolean(flag) || hasContent(data)
@@ -811,12 +1690,76 @@ const hasResponseBodyAvailable = computed(() => {
     || hasBodyContent(detail.value?.has_client_response_body, detail.value?.client_response_body)
 })
 
+const requestBodyField = computed<RequestBodyField>(() => {
+  if (dataSource.value === 'provider' && hasBodyContent(detail.value?.has_provider_request_body, detail.value?.provider_request_body)) {
+    return 'provider_request_body'
+  }
+  return hasBodyContent(detail.value?.has_request_body, detail.value?.request_body)
+    ? 'request_body' : 'provider_request_body'
+})
+
+const responseBodyField = computed<RequestBodyField>(() => {
+  if (dataSource.value === 'client' && hasBodyContent(detail.value?.has_client_response_body, detail.value?.client_response_body)) {
+    return 'client_response_body'
+  }
+  return hasBodyContent(detail.value?.has_response_body, detail.value?.response_body)
+    ? 'response_body' : 'client_response_body'
+})
+
+const activeBodyField = computed(() => {
+  if (activeTab.value === 'request-body') return requestBodyField.value
+  if (activeTab.value === 'response-body') return responseBodyField.value
+  return null
+})
+
+watch([activeBodyField, () => props.isOpen, () => detail.value?.id], () => {
+  cancelBodyContentLoad()
+  void ensureBodyContentLoaded()
+})
+
 const isRequestBodyLoading = computed(() => {
   return bodyLoading.value && activeTab.value === 'request-body' && !currentRequestBody.value
 })
 
 const isResponseBodyLoading = computed(() => {
   return bodyLoading.value && activeTab.value === 'response-body' && !currentResponseBody.value
+})
+
+const requestBodyLoadFailed = computed(() => {
+  const errors = detail.value?.body_load_errors
+  return Boolean(errors?.[requestBodyField.value])
+})
+
+const responseBodyLoadFailed = computed(() => {
+  const errors = detail.value?.body_load_errors
+  return Boolean(errors?.[responseBodyField.value])
+})
+
+const bodyLoadErrorMessage = computed(() => {
+  return bodyLoadError.value || formatStoredBodyLoadError(
+    activeBodyField.value ? detail.value?.body_load_error_codes?.[activeBodyField.value] : undefined,
+  )
+})
+
+const canRetryBodyContentLoad = computed(() => {
+  const code = activeBodyField.value ? detail.value?.body_load_error_codes?.[activeBodyField.value] : undefined
+  return code !== 'too_large' && code !== 'decode_failed'
+})
+
+const requestBodyLoadErrorVisible = computed(() => {
+  return Boolean(
+    (bodyLoadError.value || requestBodyLoadFailed.value) &&
+    activeTab.value === 'request-body' &&
+    !currentRequestBody.value
+  )
+})
+
+const responseBodyLoadErrorVisible = computed(() => {
+  return Boolean(
+    (bodyLoadError.value || responseBodyLoadFailed.value) &&
+    activeTab.value === 'response-body' &&
+    !currentResponseBody.value
+  )
 })
 
 function clearTimelineMountTimer() {
@@ -917,20 +1860,28 @@ function setDataSource(source: 'client' | 'provider') {
 
 // 获取当前数据源的请求体数据
 const currentRequestBody = computed(() => {
-  if (!detail.value) return null
-  if (dataSource.value === 'provider' && detail.value.provider_request_body) {
-    return detail.value.provider_request_body
-  }
-  return detail.value.request_body
+  return bodyDocuments.value.get(requestBodyField.value) ?? null
 })
 
 // 获取当前数据源的响应体数据
 const currentResponseBody = computed(() => {
-  if (!detail.value) return null
-  if (dataSource.value === 'client' && detail.value.client_response_body) {
-    return detail.value.client_response_body
+  return bodyDocuments.value.get(responseBodyField.value) ?? null
+})
+
+const currentRequestBodyApiFormat = computed(() => {
+  if (!detail.value) return undefined
+  if (dataSource.value === 'provider') {
+    return detail.value.endpoint_api_format || detail.value.api_format
   }
-  return detail.value.response_body
+  return detail.value.api_format || detail.value.endpoint_api_format
+})
+
+const currentResponseBodyApiFormat = computed(() => {
+  if (!detail.value) return undefined
+  if (dataSource.value === 'provider') {
+    return detail.value.endpoint_api_format || detail.value.api_format
+  }
+  return detail.value.api_format || detail.value.endpoint_api_format
 })
 
 // 获取当前数据源的请求头数据
@@ -949,28 +1900,27 @@ const currentHeaderData = computed(() => {
   return detail.value.provider_request_headers
 })
 
-// 请求体渲染结果
-const requestRenderResult = computed<RenderResult>(() => {
-  const body = currentRequestBody.value
-  if (!body) {
-    return { blocks: [], isStream: false }
+const activeJsonPanelData = computed(() => {
+  switch (activeTab.value) {
+    case 'request-headers':
+      return currentHeaderData.value
+    case 'request-body':
+      return null
+    case 'response-headers':
+      return currentResponseHeaderData.value
+    case 'response-body':
+      return null
+    case 'metadata':
+      return metadataPanelData.value
+    default:
+      return null
   }
-  if (activeTab.value !== 'request-body' || contentViewMode.value !== 'conversation') {
-    return { blocks: [], isStream: false }
-  }
-  return renderRequest(body, currentResponseBody.value, detail.value?.api_format)
 })
 
-// 响应体渲染结果
-const responseRenderResult = computed<RenderResult>(() => {
-  const body = currentResponseBody.value
-  if (!body) {
-    return { blocks: [], isStream: false }
-  }
-  if (activeTab.value !== 'response-body' || contentViewMode.value !== 'conversation') {
-    return { blocks: [], isStream: false }
-  }
-  return renderResponse(body, currentRequestBody.value, detail.value?.api_format)
+const activeJsonPanelTitle = computed(() => {
+  if (viewMode.value === 'compare') return '对比'
+  if (supportsConversationView.value && contentViewMode.value === 'conversation') return 'Chat'
+  return 'JSON'
 })
 
 // 当前 Tab 是否支持对话视图
@@ -990,40 +1940,308 @@ const hasValidConversation = computed(() => {
   return false
 })
 
-// 价格来源标签
-// tiered_pricing.source 表示定价来源: 'provider' 或 'global'
+// 价格来源优先使用 v3 结算快照，旧 tiered_pricing.source 仅作回退。
 const priceSourceLabel = computed(() => {
   if (!detail.value) return '历史定价'
+  return resolveSettlementPricingSourceLabel(detail.value) ?? '历史定价'
+})
+const detailPricingLabel = computed(() => {
+  if (!detailUsageAvailable.value) return '用量不可用'
+  if (!detailPricingAvailable.value) return '音频用量未计价'
+  return priceSourceLabel.value
+})
 
-  const source = detail.value.tiered_pricing?.source
-  if (source === 'provider') {
-    return '提供商定价'
-  } else if (source === 'global') {
-    return '全局定价'
+const cacheCreationInputTokens5m = computed(() => {
+  if (!detail.value) return 0
+  return toNumber(detail.value.cache_creation_input_tokens_5m)
+    ?? getNestedNumber(detail.value as unknown as JsonRecord, 'cache_creation_ephemeral_5m_input_tokens')
+    ?? 0
+})
+
+const cacheCreationInputTokens1h = computed(() => {
+  if (!detail.value) return 0
+  return toNumber(detail.value.cache_creation_input_tokens_1h)
+    ?? getNestedNumber(detail.value as unknown as JsonRecord, 'cache_creation_ephemeral_1h_input_tokens')
+    ?? 0
+})
+
+const totalCacheCreationTokens = computed(() => {
+  if (!detail.value) return 0
+  const classified = cacheCreationInputTokens5m.value + cacheCreationInputTokens1h.value
+  const total = detail.value.cache_creation_input_tokens || 0
+  if (total === 0 && classified > 0) return classified
+  return total
+})
+
+const effectiveInputPricePer1M = computed(() =>
+  getNestedNumber(billingResolvedVariables.value, 'input_price_per_1m')
+  ?? toNumber(detail.value?.input_price_per_1m)
+)
+
+const effectiveOutputPricePer1M = computed(() =>
+  getNestedNumber(billingResolvedVariables.value, 'output_price_per_1m')
+  ?? toNumber(detail.value?.output_price_per_1m)
+)
+
+const effectiveCacheCreationPricePer1M = computed(() =>
+  getNestedNumber(billingResolvedVariables.value, 'cache_creation_price_per_1m')
+  ?? toNumber(detail.value?.cache_creation_price_per_1m)
+)
+
+const effectiveCacheReadPricePer1M = computed(() =>
+  getNestedNumber(billingResolvedVariables.value, 'cache_read_price_per_1m')
+  ?? toNumber(detail.value?.cache_read_price_per_1m)
+)
+
+const effectivePricePerRequest = computed(() =>
+  getNestedNumber(billingResolvedVariables.value, 'price_per_request')
+  ?? toNumber(detail.value?.price_per_request)
+  ?? 0,
+)
+
+const effectiveInputCost = computed(() =>
+  getNestedNumber(billingCostBreakdown.value, 'input_cost')
+  ?? toNumber(detail.value?.input_cost)
+  ?? 0,
+)
+
+const effectiveOutputCost = computed(() =>
+  getNestedNumber(billingCostBreakdown.value, 'output_cost')
+  ?? toNumber(detail.value?.output_cost)
+  ?? 0,
+)
+
+const effectiveCacheCreationCost = computed(() => {
+  const snapshotCost = [
+    getNestedNumber(billingCostBreakdown.value, 'cache_creation_uncategorized_cost'),
+    getNestedNumber(billingCostBreakdown.value, 'cache_creation_ephemeral_5m_cost'),
+    getNestedNumber(billingCostBreakdown.value, 'cache_creation_ephemeral_1h_cost'),
+  ].reduce<number>((sum, value) => sum + (value ?? 0), 0)
+  if (snapshotCost > 0) return snapshotCost
+  return toNumber(detail.value?.cache_creation_cost) ?? 0
+})
+
+const effectiveCacheReadCost = computed(() =>
+  getNestedNumber(billingCostBreakdown.value, 'cache_read_cost')
+  ?? toNumber(detail.value?.cache_read_cost)
+  ?? 0,
+)
+
+// Fast/Priority 的倍率目录是由后端从 Standard 目录物化出来的。详情页的阶梯与
+// 分项成本保留 Standard 基准值，倍率统一显示在 Token 计费标题中，避免把倍率
+// 隐藏在每个单价和每个分项成本里。
+function removeProcessingTierMultiplier(value: number): number {
+  const multiplier = processingTierPriceMultiplier.value
+  if (multiplier === null || multiplier <= 0) return value
+  return value / multiplier
+}
+
+const displayInputCost = computed(() => removeProcessingTierMultiplier(effectiveInputCost.value))
+const displayOutputCost = computed(() => removeProcessingTierMultiplier(effectiveOutputCost.value))
+const displayCacheCreationCost = computed(() => removeProcessingTierMultiplier(effectiveCacheCreationCost.value))
+const displayCacheReadCost = computed(() => removeProcessingTierMultiplier(effectiveCacheReadCost.value))
+
+const effectiveRequestCost = computed(() => {
+  const snapshotCost = getNestedNumber(billingCostBreakdown.value, 'request_cost')
+  if (snapshotCost !== null) return snapshotCost
+  if (effectivePricePerRequest.value > 0) {
+    return toNumber(detail.value?.request_cost) ?? 0
   }
+  return 0
+})
 
-  // 没有 tiered_pricing 时，使用历史价格
-  return '历史定价'
+const effectiveImageOutputCost = computed(() =>
+  getNestedNumber(billingCostBreakdown.value, 'image_output_cost')
+  ?? toNumber(detail.value?.image_output_cost)
+  ?? 0,
+)
+
+const imageOutputCostTotal = computed(() => effectiveImageOutputCost.value)
+
+const imageOutputPricePerImage = computed(() =>
+  getNestedNumber(billingResolvedVariables.value, 'image_output_price_per_image'),
+)
+
+const imageOutputCount = computed(() =>
+  getNestedNumber(billingResolvedDimensions.value, 'image_count')
+  ?? getNestedNumber(traceRequestMetadata.value, 'billing_dimensions', 'image_count')
+  ?? getNestedNumber(traceRequestMetadata.value, 'dimensions', 'image_count')
+  ?? 0,
+)
+
+const imageOutputSize = computed(() =>
+  getNestedString(billingResolvedDimensions.value, 'image_size')
+  ?? getNestedString(traceRequestMetadata.value, 'billing_dimensions', 'image_size')
+  ?? getNestedString(traceRequestMetadata.value, 'dimensions', 'image_size'),
+)
+
+const imageOutputQuality = computed(() =>
+  getNestedString(billingResolvedDimensions.value, 'image_quality')
+  ?? getNestedString(traceRequestMetadata.value, 'billing_dimensions', 'image_quality')
+  ?? getNestedString(traceRequestMetadata.value, 'dimensions', 'image_quality'),
+)
+
+const imageOutputFormat = computed(() =>
+  getNestedString(billingResolvedDimensions.value, 'image_output_format')
+  ?? getNestedString(traceRequestMetadata.value, 'billing_dimensions', 'image_output_format')
+  ?? getNestedString(traceRequestMetadata.value, 'dimensions', 'image_output_format'),
+)
+
+const imagePriceKey = computed(() => {
+  const snapshotKey = getNestedString(billingResolvedDimensions.value, 'image_price_key')
+  if (snapshotKey) return snapshotKey
+  const fallbackKey = [imageOutputSize.value, imageOutputQuality.value].filter(Boolean).join(':')
+  return fallbackKey || null
+})
+
+const imageOutputPriceBucket = computed(() =>
+  getNestedString(billingResolvedDimensions.value, 'image_output_price_bucket'),
+)
+
+const imageOutputPixels = computed(() =>
+  getNestedNumber(billingResolvedDimensions.value, 'image_pixels')
+  ?? parseImageSizePixels(imageOutputSize.value),
+)
+
+const imageOutputPricingMode = computed(() =>
+  getNestedString(billingResolvedDimensions.value, 'image_output_pricing_mode'),
+)
+
+const imageOutputPricingEnabled = computed(() =>
+  getNestedValue(billingResolvedDimensions.value, 'image_output_pricing_enabled') === true
+    || imageOutputPricingMode.value === 'matrix'
+    || imageOutputPricingMode.value === 'pixel_tiers'
+    || imageOutputPricingMode.value === 'per_image'
+    || imageOutputCostTotal.value > 0,
+)
+
+const imageOutputMatrixEnabled = computed(() => {
+  if (imageOutputPricingMode.value) return imageOutputPricingMode.value === 'matrix'
+  return getNestedValue(billingResolvedDimensions.value, 'image_output_matrix_enabled') === true
+})
+
+const imageOutputRangeEnabled = computed(() => {
+  if (imageOutputPricingMode.value) return imageOutputPricingMode.value === 'pixel_tiers'
+  return getNestedValue(billingResolvedDimensions.value, 'image_output_range_enabled') === true
+})
+
+const imageOutputBillingLabel = computed(() => {
+  if (imageOutputMatrixEnabled.value) return '矩阵计费'
+  if (imageOutputRangeEnabled.value) return '像素区间'
+  return '默认计费'
+})
+
+const imageOutputPricingDescriptor = computed(() => {
+  if (imageOutputMatrixEnabled.value && imagePriceKey.value) return imagePriceKey.value
+
+  const parts: string[] = []
+  if (imageOutputPriceBucket.value && imageOutputPriceBucket.value !== 'default') {
+    parts.push(formatImagePriceBucket(imageOutputPriceBucket.value))
+  }
+  const sizeQuality = [imageOutputSize.value, imageOutputQuality.value].filter(Boolean).join(' / ')
+  if (sizeQuality) parts.push(sizeQuality)
+  if (imageOutputRangeEnabled.value && imageOutputPixels.value !== null) {
+    parts.push(formatPixels(imageOutputPixels.value))
+  }
+  if (parts.length > 0) return parts.join(' · ')
+  if (imageOutputPriceBucket.value === 'default') return '默认价'
+  return null
+})
+
+const hasImageBillingDetail = computed(() =>
+  imageOutputPricingEnabled.value && (imageOutputCount.value > 0 || imageOutputCostTotal.value > 0),
+)
+
+const fallbackCacheTtlPricing = computed<CacheTTLPriceEntry[]>(() => {
+  const tierPricing = normalizeCacheTtlPricing(billingTierInfo.value?.cache_ttl_pricing)
+  if (tierPricing.length > 0) return tierPricing
+
+  const rows: CacheTTLPriceEntry[] = []
+  const cache5mCreationPrice = getNestedNumber(
+    billingResolvedVariables.value,
+    'cache_creation_ephemeral_5m_price_per_1m',
+  )
+  const cache1hCreationPrice = getNestedNumber(
+    billingResolvedVariables.value,
+    'cache_creation_ephemeral_1h_price_per_1m',
+  )
+
+  if (cache5mCreationPrice !== null) {
+    rows.push({
+      ttl_minutes: 5,
+      cache_creation_price_per_1m: cache5mCreationPrice,
+      cache_read_price_per_1m: effectiveCacheReadPricePer1M.value,
+    })
+  }
+  if (cache1hCreationPrice !== null) {
+    rows.push({
+      ttl_minutes: 60,
+      cache_creation_price_per_1m: cache1hCreationPrice,
+      cache_read_price_per_1m: effectiveCacheReadPricePer1M.value,
+    })
+  }
+  return rows
+})
+
+const activeCacheTtlMinutes = computed(() => {
+  const snapshotTtl = getNestedNumber(billingSnapshot.value, 'resolved_dimensions', 'cache_ttl_minutes')
+  if (snapshotTtl !== null && snapshotTtl > 0) {
+    return Math.trunc(snapshotTtl)
+  }
+  if (cacheCreationInputTokens1h.value > 0 && cacheCreationInputTokens5m.value === 0) {
+    return 60
+  }
+  if (cacheCreationInputTokens5m.value > 0 && cacheCreationInputTokens1h.value === 0) {
+    return 5
+  }
+  return null
 })
 
 // 统一的阶梯显示数据
 // 如果有 tiered_pricing，使用它；否则用历史价格构建单阶梯
+function restoreBaseTierPricing(tier: PricingTierLike): PricingTierLike {
+  const multiplier = processingTierPriceMultiplier.value
+  if (multiplier === null || multiplier <= 0) return tier
+
+  const restore = (value: number | null | undefined): number | null | undefined => {
+    if (value === null || value === undefined) return value
+    return value / multiplier
+  }
+
+  return {
+    ...tier,
+    input_price_per_1m: restore(tier.input_price_per_1m),
+    output_price_per_1m: restore(tier.output_price_per_1m),
+    cache_creation_price_per_1m: restore(tier.cache_creation_price_per_1m),
+    cache_read_price_per_1m: restore(tier.cache_read_price_per_1m),
+    cache_ttl_pricing: Array.isArray(tier.cache_ttl_pricing)
+      ? tier.cache_ttl_pricing.map(entry => ({
+          ...entry,
+          cache_creation_price_per_1m: restore(entry.cache_creation_price_per_1m),
+          cache_read_price_per_1m: restore(entry.cache_read_price_per_1m),
+        }))
+      : tier.cache_ttl_pricing,
+  }
+}
+
 const displayTiers = computed(() => {
   if (!detail.value) return []
 
-  // 如果有阶梯定价数据，直接使用
-  if (detail.value.tiered_pricing?.tiers && detail.value.tiered_pricing.tiers.length > 0) {
-    return detail.value.tiered_pricing.tiers
+  // 优先展示结算快照中已解析的价格目录，旧字段仅作回退。
+  const resolvedTiers = resolveSettlementPricingTiers(detail.value)
+  if (resolvedTiers) {
+    return (resolvedTiers as PricingTierLike[]).map(restoreBaseTierPricing)
   }
 
   // 否则用历史价格构建单阶梯（无上限）
-  return [{
+  return [restoreBaseTierPricing({
     up_to: null,
-    input_price_per_1m: detail.value.input_price_per_1m || 0,
-    output_price_per_1m: detail.value.output_price_per_1m || 0,
-    cache_creation_price_per_1m: detail.value.cache_creation_price_per_1m,
-    cache_read_price_per_1m: detail.value.cache_read_price_per_1m
-  }]
+    input_price_per_1m: effectiveInputPricePer1M.value ?? 0,
+    output_price_per_1m: effectiveOutputPricePer1M.value ?? 0,
+    cache_creation_price_per_1m: effectiveCacheCreationPricePer1M.value,
+    cache_read_price_per_1m: effectiveCacheReadPricePer1M.value,
+    cache_ttl_pricing: fallbackCacheTtlPricing.value,
+  })]
 })
 
 // 当前命中的阶梯索引
@@ -1033,6 +2251,11 @@ const currentTierIndex = computed(() => {
   // 如果有阶梯定价，使用它的 tier_index
   if (detail.value.tiered_pricing?.tier_index !== undefined) {
     return detail.value.tiered_pricing.tier_index
+  }
+
+  const snapshotTierIndex = getNestedNumber(billingSnapshot.value, 'tier_index')
+  if (snapshotTierIndex !== null) {
+    return Math.max(0, Math.trunc(snapshotTierIndex))
   }
 
   // 单阶梯时默认是第0阶
@@ -1048,9 +2271,9 @@ const currentTier = computed<PricingTierLike | null>(() => {
 const cacheCreationSummaryText = computed(() => {
   if (!detail.value) return '0'
 
-  const total = detail.value.cache_creation_input_tokens || 0
-  const cache5m = detail.value.cache_creation_input_tokens_5m || 0
-  const cache1h = detail.value.cache_creation_input_tokens_1h || 0
+  const total = totalCacheCreationTokens.value
+  const cache5m = cacheCreationInputTokens5m.value
+  const cache1h = cacheCreationInputTokens1h.value
 
   if (cache5m <= 0 && cache1h <= 0) {
     return formatNumber(total)
@@ -1075,8 +2298,8 @@ const cacheCreationSplitRows = computed(() => {
     cost: number | null
   }> = []
 
-  const cache5m = detail.value.cache_creation_input_tokens_5m || 0
-  const cache1h = detail.value.cache_creation_input_tokens_1h || 0
+  const cache5m = cacheCreationInputTokens5m.value
+  const cache1h = cacheCreationInputTokens1h.value
 
   if (cache5m > 0) {
     const pricePer1M = getActiveCachePriceForTTL(5, 'cache_creation_price_per_1m')
@@ -1114,7 +2337,7 @@ const _totalInputContext = computed(() => {
 
   // 否则手动计算
   const input = detail.value.tokens?.input || detail.value.input_tokens || 0
-  const cacheCreation = detail.value.cache_creation_input_tokens || 0
+  const cacheCreation = totalCacheCreationTokens.value
   const cacheRead = detail.value.cache_read_input_tokens || 0
   return input + cacheCreation + cacheRead
 })
@@ -1122,19 +2345,25 @@ const _totalInputContext = computed(() => {
 // Token 费用总计
 const tokenCostTotal = computed(() => {
   if (!detail.value) return 0
-  const inputCost = detail.value.cost?.input || detail.value.input_cost || 0
-  const outputCost = detail.value.cost?.output || detail.value.output_cost || 0
-  const cacheCreationCost = detail.value.cache_creation_cost || 0
-  const cacheReadCost = detail.value.cache_read_cost || 0
-  return inputCost + outputCost + cacheCreationCost + cacheReadCost
+  return effectiveInputCost.value
+    + effectiveOutputCost.value
+    + effectiveCacheCreationCost.value
+    + effectiveCacheReadCost.value
 })
+
+const tokenCostBaseTotal = computed(() => (
+  displayInputCost.value
+  + displayOutputCost.value
+  + displayCacheCreationCost.value
+  + displayCacheReadCost.value
+))
 
 // 按次计费费用（非视频任务时）
 const perRequestCost = computed(() => {
   if (!detail.value) return 0
   // 视频任务的 request_cost 实际上是视频费用，不算按次
   if (detail.value.video_billing) return 0
-  return detail.value.request_cost || 0
+  return effectiveRequestCost.value
 })
 
 // 视频/图像/音频费用
@@ -1151,7 +2380,7 @@ const hasTokenCost = computed(() => {
   if (!detail.value) return false
   const inputTokens = detail.value.tokens?.input || detail.value.input_tokens || 0
   const outputTokens = detail.value.tokens?.output || detail.value.output_tokens || 0
-  const cacheCreation = detail.value.cache_creation_input_tokens || 0
+  const cacheCreation = totalCacheCreationTokens.value
   const cacheRead = detail.value.cache_read_input_tokens || 0
   return (inputTokens + outputTokens + cacheCreation + cacheRead) > 0 || tokenCostTotal.value > 0
 })
@@ -1192,10 +2421,23 @@ function getTierCachePriceForTTL(
 
   if (ttlPricing.length === 0) return fallback
 
-  const matched = ttlPricing.find((entry) => Number(entry.ttl_minutes || 0) >= ttlMinutes)
-    || ttlPricing[ttlPricing.length - 1]
+  const matched = ttlPricing.find((entry) => Number(entry.ttl_minutes || 0) === ttlMinutes)
   const price = toFiniteNumber(matched?.[priceKey])
   return price ?? fallback
+}
+
+function getTierMatchedCachePricingEntry(
+  tier: PricingTierLike | null | undefined,
+  ttlMinutes: number,
+): CacheTTLPriceEntry | null {
+  const ttlPricing = Array.isArray(tier?.cache_ttl_pricing)
+    ? tier.cache_ttl_pricing
+        .filter((entry): entry is CacheTTLPriceEntry => !!entry && typeof entry === 'object')
+        .sort((a, b) => Number(a.ttl_minutes || 0) - Number(b.ttl_minutes || 0))
+    : []
+
+  if (ttlPricing.length === 0) return null
+  return ttlPricing.find((entry) => Number(entry.ttl_minutes || 0) === ttlMinutes) ?? null
 }
 
 function hasTierCacheCreationSplitPricing(tier: PricingTierLike | null | undefined): boolean {
@@ -1204,6 +2446,45 @@ function hasTierCacheCreationSplitPricing(tier: PricingTierLike | null | undefin
     Number(entry?.ttl_minutes || 0) >= 60
     && toFiniteNumber(entry?.cache_creation_price_per_1m) !== null,
   )
+}
+
+function formatCacheTtlLabel(ttlMinutes: number | null | undefined): string {
+  if (!ttlMinutes || ttlMinutes <= 0) return '缓存创建'
+  if (ttlMinutes >= 60) return '缓存创建(1h)'
+  if (ttlMinutes <= 5) return '缓存创建(5min)'
+  return `缓存创建(${ttlMinutes}min)`
+}
+
+function getTierActiveCacheCreationDisplay(
+  tier: PricingTierLike | null | undefined,
+): { label: string, price: number } | null {
+  if (hasTierCacheCreationSplitPricing(tier)) {
+    const activeTtl = activeCacheTtlMinutes.value
+    if (activeTtl !== null) {
+      const matchedEntry = getTierMatchedCachePricingEntry(tier, activeTtl)
+      const matchedPrice = getTierCachePriceForTTL(tier, activeTtl, 'cache_creation_price_per_1m')
+      if (matchedEntry && matchedPrice !== null) {
+        return {
+          label: formatCacheTtlLabel(matchedEntry.ttl_minutes),
+          price: matchedPrice,
+        }
+      }
+      const fallbackPrice = toFiniteNumber(tier?.cache_creation_price_per_1m)
+      if (fallbackPrice !== null) {
+        return {
+          label: '缓存创建',
+          price: fallbackPrice,
+        }
+      }
+    }
+  }
+
+  const fallbackPrice = toFiniteNumber(tier?.cache_creation_price_per_1m)
+  if (fallbackPrice === null) return null
+  return {
+    label: '缓存创建',
+    price: fallbackPrice,
+  }
 }
 
 function getActiveCachePriceForTTL(
@@ -1217,6 +2498,22 @@ function getActiveCachePriceForTTL(
     return toFiniteNumber(detail.value?.cache_creation_price_per_1m)
   }
   return toFiniteNumber(detail.value?.cache_read_price_per_1m)
+}
+
+function getTierActiveCacheReadPrice(tier: PricingTierLike | null | undefined): number | null {
+  const activeTtl = activeCacheTtlMinutes.value
+  if (activeTtl !== null) {
+    const matchedPrice = getTierCachePriceForTTL(tier, activeTtl, 'cache_read_price_per_1m')
+    if (matchedPrice !== null) return matchedPrice
+  }
+
+  return toFiniteNumber(tier?.cache_read_price_per_1m)
+    ?? effectiveCacheReadPricePer1M.value
+    ?? null
+}
+
+function shouldShowCacheReadPrice(tier: PricingTierLike | null | undefined): boolean {
+  return getTierActiveCacheReadPrice(tier) !== null
 }
 
 function getDefaultDataSourceForTab(tab: string): 'client' | 'provider' {
@@ -1284,63 +2581,131 @@ const visibleTabs = computed(() => {
       case 'response-body':
         return hasResponseBodyAvailable.value
       case 'metadata':
-        return hasContent(detail.value?.metadata)
+        return hasContent(metadataPanelData.value)
       default:
         return false
     }
   })
 })
 
-watch(() => props.requestId, async (newId) => {
-  if (newId && props.isOpen) {
-    await loadDetail(newId)
-  }
-})
-
-watch(() => props.isOpen, async (isOpen) => {
-  if (isOpen && props.requestId) {
-    await loadDetail(props.requestId)
+watch([() => props.isOpen, () => props.requestId], async ([isOpen, requestId]) => {
+  if (isOpen && requestId) {
+    if (!detailMatchesRequestId(detail.value, requestId)) {
+      detail.value = null
+    }
+    await loadDetail(requestId)
   } else if (!isOpen) {
     stopAutoRefresh()
     showTimeline.value = false
     clearTimelineMountTimer()
-    bodyLoading.value = false
-    bodiesLoadedForRequestId.value = null
+    resetBodyContentState()
+    detail.value = null
+    activeTab.value = 'request-headers'
+    ++loadDetailRequestId
+    loadDetailInFlight = false
   }
 })
 
-async function ensureBodyContentLoaded() {
-  if (!props.requestId || !detail.value) return
+function detailMatchesRequestId(
+  candidate: RequestDetail | null | undefined,
+  requestId: string | null | undefined,
+): boolean {
+  if (!candidate || !requestId) return false
+  return candidate.id === requestId || candidate.request_id === requestId
+}
 
-  const cacheKey = detail.value.request_id || detail.value.id
-  if (bodiesLoadedForRequestId.value === cacheKey || bodyLoading.value) return
-  if (!hasRequestBodyAvailable.value && !hasResponseBodyAvailable.value) return
+async function ensureBodyContentLoaded() {
+  const field = activeBodyField.value
+  const usageId = props.requestId
+  if (!props.isOpen || !usageId || !field || !detailMatchesRequestId(detail.value, usageId)) return
+  if (!detail.value || bodyLoading.value) return
+  const cached = bodyDocuments.value.get(field)
+  if (cached) {
+    const documents = new Map(bodyDocuments.value)
+    documents.delete(field)
+    documents.set(field, cached)
+    bodyDocuments.value = documents
+    return
+  }
+  if (!hasBodyContent(detail.value[`has_${field}`], detail.value[field])) return
+  const previousFailure = bodyLoadFailures.get(field)
+  if (previousFailure) {
+    bodyLoadError.value = previousFailure
+    return
+  }
 
   const requestId = ++bodyLoadRequestId
+  const controller = new AbortController()
+  bodyLoadController = controller
   bodyLoading.value = true
+  bodyLoadError.value = null
   try {
-    const response = await dashboardApi.getRequestDetail(props.requestId, { includeBodies: true })
-    if (requestId !== bodyLoadRequestId || !detail.value) return
-    detail.value = {
-      ...detail.value,
-      request_body: response.request_body,
-      provider_request_body: response.provider_request_body,
-      response_body: response.response_body,
-      client_response_body: response.client_response_body,
-      has_request_body: response.has_request_body,
-      has_provider_request_body: response.has_provider_request_body,
-      has_response_body: response.has_response_body,
-      has_client_response_body: response.has_client_response_body,
+    const response = await dashboardApi.getRequestBody(detail.value.id, field, controller.signal)
+    const document = await BodyDocument.load(response.bytes, response.encoding, controller.signal)
+    if (requestId !== bodyLoadRequestId || controller.signal.aborted || !detail.value ||
+      !props.isOpen || !detailMatchesRequestId(detail.value, usageId)) {
+      document.dispose()
+      return
     }
-    bodiesLoadedForRequestId.value = cacheKey
+    const documents = new Map(bodyDocuments.value)
+    let cachedBytes = document.byteLength
+    for (const existing of documents.values()) cachedBytes += existing.byteLength
+    for (const [cachedField, existing] of documents) {
+      if (documents.size < 2 && cachedBytes <= MAX_BODY_BYTES) break
+      existing.dispose()
+      documents.delete(cachedField)
+      cachedBytes -= existing.byteLength
+    }
+    documents.set(field, document)
+    bodyDocuments.value = documents
+    detail.value = { ...detail.value, body_load_errors: { ...detail.value.body_load_errors, [field]: false }, body_load_error_codes: { ...detail.value.body_load_error_codes, [field]: undefined } }
   } catch (err) {
-    if (requestId !== bodyLoadRequestId) return
+    if (requestId !== bodyLoadRequestId || controller.signal.aborted || axios.isCancel(err)) return
     log.error('Failed to load request bodies:', err)
+    bodyLoadError.value = formatRequestBodyLoadError(err)
+    bodyLoadFailures.set(field, bodyLoadError.value)
+    const code = err instanceof BodyDocumentError ? err.code : axios.isAxiosError(err) ? err.response?.headers?.['x-aether-body-error'] : undefined
+    if ((code === 'too_large' || code === 'decode_failed') && detail.value) {
+      detail.value = { ...detail.value, body_load_error_codes: { ...detail.value.body_load_error_codes, [field]: code } }
+    }
   } finally {
     if (requestId === bodyLoadRequestId) {
       bodyLoading.value = false
+      bodyLoadController = null
     }
   }
+}
+
+function handleBodyDocumentError(error: unknown) {
+  const field = activeBodyField.value
+  if (!field) return
+  const documents = new Map(bodyDocuments.value)
+  documents.get(field)?.dispose()
+  documents.delete(field)
+  bodyDocuments.value = documents
+  bodyLoadError.value = formatRequestBodyLoadError(error)
+  bodyLoadFailures.set(field, bodyLoadError.value)
+}
+
+function retryBodyContentLoad() {
+  if (activeBodyField.value) bodyLoadFailures.delete(activeBodyField.value)
+  bodyLoadError.value = null
+  void ensureBodyContentLoaded()
+}
+
+function cancelBodyContentLoad() {
+  ++bodyLoadRequestId
+  bodyLoadController?.abort()
+  bodyLoadController = null
+  bodyLoading.value = false
+  bodyLoadError.value = null
+}
+
+function resetBodyContentState() {
+  cancelBodyContentLoad()
+  for (const document of bodyDocuments.value.values()) document.dispose()
+  bodyDocuments.value = new Map()
+  bodyLoadFailures.clear()
 }
 
 async function loadDetail(id: string, silent = false) {
@@ -1350,30 +2715,53 @@ async function loadDetail(id: string, silent = false) {
   const requestId = ++loadDetailRequestId
   loadDetailInFlight = true
   if (!silent) {
+    if (!detailMatchesRequestId(detail.value, id)) {
+      detail.value = null
+    }
     loading.value = true
     historicalPricing.value = null
+    timelineLoaded.value = false
+    timelineHasTrace.value = false
     showTimeline.value = false
     clearTimelineMountTimer()
-    ++bodyLoadRequestId
-    bodyLoading.value = false
+    resetBodyContentState()
   }
   error.value = null
   try {
-    const response = await dashboardApi.getRequestDetail(id, { includeBodies: false })
+    const response = await dashboardApi.getRequestDetail(id, {
+      includeBodies: false,
+      cacheTtlMs: silent ? 0 : 5_000
+    })
     if (requestId !== loadDetailRequestId) return
 
     const previousDetail = detail.value
     const prevKey = previousDetail?.request_id || previousDetail?.id
     const currKey = response.request_id || response.id
     const sameRequest = !!prevKey && prevKey === currKey
-    detail.value = {
+    const bodySnapshotChanged = sameRequest && previousDetail != null &&
+      ['pending', 'streaming'].includes(previousDetail.status ?? '') && previousDetail.status !== response.status
+    const preserveBodies = sameRequest && !bodySnapshotChanged
+    const nextDetail: RequestDetail = {
       ...response,
-      request_body: sameRequest ? previousDetail?.request_body : undefined,
-      provider_request_body: sameRequest ? previousDetail?.provider_request_body : undefined,
-      response_body: sameRequest ? previousDetail?.response_body : undefined,
-      client_response_body: sameRequest ? previousDetail?.client_response_body : undefined,
+      status: resolveRequestStateStatusFromDetail(response) ?? response.status,
+      request_body: preserveBodies ? previousDetail?.request_body : undefined,
+      provider_request_body: preserveBodies ? previousDetail?.provider_request_body : undefined,
+      response_body: preserveBodies ? previousDetail?.response_body : undefined,
+      client_response_body: preserveBodies ? previousDetail?.client_response_body : undefined,
+      body_load_errors: preserveBodies ? previousDetail?.body_load_errors : response.body_load_errors,
+      body_load_error_codes: preserveBodies ? previousDetail?.body_load_error_codes : response.body_load_error_codes,
+      request_error: response.request_error,
+      upstream_error: response.upstream_error,
+      client_error: response.client_error,
+      failure_summary: response.failure_summary,
+      errors: response.errors,
+      error_flow: response.error_flow,
+      scheduling_failure: response.scheduling_failure,
     }
-    bodiesLoadedForRequestId.value = sameRequest ? bodiesLoadedForRequestId.value : null
+    detailModelRevision.value = ++modelSnapshotRevision
+    detail.value = nextDetail
+    if (!sameRequest || bodySnapshotChanged) resetBodyContentState()
+    emitDetailRequestState(nextDetail)
 
     // 首次加载时优先停留在轻量 tab，避免默认触发大 body 加载
     if (!silent) {
@@ -1395,7 +2783,8 @@ async function loadDetail(id: string, silent = false) {
     }
 
     // 根据当前 Tab 的数据可用性自动选择默认数据源
-    dataSource.value = getDefaultDataSourceForTab(activeTab.value)
+    if (!silent || !sameRequest) dataSource.value = getDefaultDataSourceForTab(activeTab.value)
+    if (bodySnapshotChanged) void nextTick().then(ensureBodyContentLoaded)
 
     // 使用请求记录中保存的历史价格
     if (detail.value.input_price_per_1m || detail.value.output_price_per_1m || detail.value.price_per_request) {
@@ -1413,11 +2802,10 @@ async function loadDetail(id: string, silent = false) {
       timelineRef.value?.refresh()
     }
 
-    // 抽屉打开时，对进行中请求自动保持刷新，保证详情实时更新
     if (props.isOpen) {
       if (isRequestCompleted()) {
         stopAutoRefresh()
-      } else {
+      } else if (!silent) {
         startAutoRefresh()
       }
     }
@@ -1444,7 +2832,8 @@ function handleClose() {
 
 function isRequestCompleted(): boolean {
   if (!detail.value?.status) return true
-  return !['pending', 'streaming'].includes(detail.value.status)
+  const displayStatus = resolveDisplayRequestStatus(detail.value)
+  return displayStatus !== 'pending' && displayStatus !== 'streaming'
 }
 
 function stopAutoRefresh() {
@@ -1508,10 +2897,6 @@ function handleVisibilityChange() {
   isPageVisible.value = !document.hidden
   if (!isPageVisible.value) {
     stopAutoRefresh()
-    return
-  }
-  if (props.isOpen && props.requestId && !isRequestCompleted()) {
-    startAutoRefresh()
   }
 }
 
@@ -1525,12 +2910,13 @@ onBeforeUnmount(() => {
   clearTimelineMountTimer()
   loadDetailRequestId += 1
   loadDetailInFlight = false
+  resetBodyContentState()
 })
 
 function formatDateTime(dateStr: string | null | undefined): string {
   if (!dateStr) return 'N/A'
   const date = new Date(dateStr)
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(getI18nLocale(), {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -1570,20 +2956,29 @@ function getTaskTypeLabel(taskType: string): string {
 }
 
 function formatNumber(num: number): string {
-  if (num >= 1_000_000) {
-    return `${(num / 1_000_000).toFixed(1)  }M`
-  } else if (num >= 1_000) {
-    return `${(num / 1_000).toFixed(1)  }K`
-  }
-  return num.toLocaleString()
+  return formatTokens(num)
 }
 
-// 格式化响应时间，自动选择合适的单位
-function formatResponseTime(ms: number): { value: string; unit: string } {
-  if (ms >= 1_000) {
-    return { value: (ms / 1_000).toFixed(2), unit: 's' }
-  }
-  return { value: ms.toString(), unit: 'ms' }
+function parseImageSizePixels(size: string | null): number | null {
+  if (!size) return null
+  const normalized = size.trim().toLowerCase().replace(/\s+/g, '').replace(/×/g, 'x')
+  const [widthText, heightText] = normalized.split('x')
+  const width = Number(widthText)
+  const height = Number(heightText)
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
+  return Math.trunc(width * height)
+}
+
+function formatImagePriceBucket(bucket: string): string {
+  if (bucket === 'default') return '默认价'
+  if (bucket === 'unbounded') return '无上限'
+  const match = bucket.match(/^<=([0-9]+)px$/)
+  if (match) return `<= ${formatPixels(Number(match[1]))}`
+  return bucket
+}
+
+function formatPixels(value: number): string {
+  return `${formatCompactNumber(value)} px`
 }
 
 // 格式化价格，修复浮点数精度问题
@@ -1608,108 +3003,37 @@ function getTierRangeText(tier: { up_to?: number | null }, index: number, tiers:
   return `> ${formatNumber(start)} tokens`
 }
 
-/** 将 RenderResult 格式化为可复制的文本 */
-function formatRenderResultAsText(result: RenderResult): string {
-  if (result.error) {
-    return `[Error] ${result.error}`
-  }
-
-  const parts: string[] = []
-
-  for (const block of result.blocks) {
-    const text = formatBlockAsText(block)
-    if (text) {
-      parts.push(text)
+async function copyContent(tabName: string) {
+  if (!detail.value || viewMode.value === 'compare' || bodyCopying.value) return
+  const usageId = detail.value.id
+  const document = tabName === 'request-body' ? currentRequestBody.value
+    : tabName === 'response-body' ? currentResponseBody.value : null
+  bodyCopying.value = true
+  try {
+    let text: string
+    if (document) {
+      text = await document.copy(contentViewMode.value === 'conversation' ? {
+        kind: tabName === 'request-body' ? 'request' : 'response',
+        apiFormat: tabName === 'request-body' ? currentRequestBodyApiFormat.value : currentResponseBodyApiFormat.value,
+      } : undefined)
+    } else {
+      const data = tabName === 'request-headers' ? (dataSource.value === 'provider' ? detail.value.provider_request_headers : detail.value.request_headers)
+        : tabName === 'response-headers' ? currentResponseHeaderData.value
+          : tabName === 'metadata' ? metadataPanelData.value : null
+      if (data == null) return
+      text = JSON.stringify(data, null, 2)
     }
-  }
-
-  return parts.join('\n\n---\n\n')
-}
-
-/** 将单个 RenderBlock 格式化为文本 */
-function formatBlockAsText(block: RenderBlock): string {
-  switch (block.type) {
-    case 'text':
-      return block.content
-    case 'code':
-      return block.language
-        ? `\`\`\`${block.language}\n${block.code}\n\`\`\``
-        : `\`\`\`\n${block.code}\n\`\`\``
-    case 'collapsible':
-      return `[${block.title}]\n${block.content.map(formatBlockAsText).filter(Boolean).join('\n')}`
-    case 'error':
-      return `[Error${block.code ? `: ${block.code}` : ''}] ${block.message}`
-    case 'image':
-      return `[Image: ${block.mimeType || block.alt || 'unknown'}]`
-    case 'tool_use':
-      return `[Tool: ${block.toolName}]\n${block.input}`
-    case 'tool_result':
-      return `[Tool Result${block.isError ? ' (Error)' : ''}]\n${block.content}`
-    case 'message': {
-      const roleLabel = block.roleLabel || block.role
-      const contentText = block.content.map(formatBlockAsText).filter(Boolean).join('\n\n')
-      return `[${roleLabel}]\n${contentText}`
+    if (!props.isOpen || detail.value?.id !== usageId) return
+    if (await copyToClipboard(text, false)) {
+      copiedStates.value[tabName] = true
+      setTimeout(() => { copiedStates.value[tabName] = false }, 2000)
+    } else {
+      showBodyError('复制失败，请检查剪贴板权限后重试。')
     }
-    case 'container':
-      return block.children.map(formatBlockAsText).filter(Boolean).join('\n')
-    case 'label':
-      return `${block.label}: ${block.value}`
-    case 'divider':
-      return '---'
-    case 'badge':
-      return ''
-    default:
-      return ''
-  }
-}
-
-// 复制内容（支持 JSON 和对话两种模式）
-function copyContent(tabName: string) {
-  if (!detail.value) return
-  if (viewMode.value === 'compare') return
-
-  let textToCopy = ''
-
-  // 对话视图模式：复制格式化的对话文本
-  if (contentViewMode.value === 'conversation') {
-    if (tabName === 'request-body') {
-      textToCopy = formatRenderResultAsText(requestRenderResult.value)
-    } else if (tabName === 'response-body') {
-      textToCopy = formatRenderResultAsText(responseRenderResult.value)
-    }
-  } else {
-    // JSON 视图模式：复制原始 JSON
-    let data: unknown = null
-    switch (tabName) {
-      case 'request-headers':
-        data = dataSource.value === 'provider'
-          ? detail.value.provider_request_headers
-          : detail.value.request_headers
-        break
-      case 'request-body':
-        data = currentRequestBody.value
-        break
-      case 'response-headers':
-        data = currentResponseHeaderData.value
-        break
-      case 'response-body':
-        data = currentResponseBody.value
-        break
-      case 'metadata':
-        data = detail.value.metadata
-        break
-    }
-    if (data) {
-      textToCopy = JSON.stringify(data, null, 2)
-    }
-  }
-
-  if (textToCopy) {
-    copyToClipboard(textToCopy, false)
-    copiedStates.value[tabName] = true
-    setTimeout(() => {
-      copiedStates.value[tabName] = false
-    }, 2000)
+  } catch (error) {
+    if (props.isOpen && detail.value?.id === usageId) showBodyError(formatRequestBodyLoadError(error))
+  } finally {
+    bodyCopying.value = false
   }
 }
 
@@ -1722,14 +3046,6 @@ function toggleContentView() {
   } else {
     contentViewMode.value = 'json'
   }
-}
-
-function expandAll() {
-  currentExpandDepth.value = 999
-}
-
-function collapseAll() {
-  currentExpandDepth.value = 0
 }
 
 // 复制 cURL 命令

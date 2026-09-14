@@ -127,17 +127,20 @@
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="current">
-            Current
+          <SelectItem value="body">
+            请求体
           </SelectItem>
           <SelectItem value="original">
-            Original
+            原始请求体
+          </SelectItem>
+          <SelectItem value="request_headers">
+            请求头
           </SelectItem>
         </SelectContent>
       </Select>
       <Input
         :model-value="modelValue.path"
-        :placeholder="pathHint || '字段路径'"
+        :placeholder="modelValue.source === 'request_headers' ? 'Header 名称' : (pathHint || '字段路径')"
         size="sm"
         class="flex-1 min-w-[120px] h-7 text-xs"
         @update:model-value="(value) => updateLeafField('path', value)"
@@ -229,6 +232,7 @@ function updateLeafField(field: keyof EditableConditionLeaf, rawValue: string): 
     next.source = rawValue as ConditionSource
   } else if (field === 'path' || field === 'value') {
     next[field] = rawValue
+    if (field === 'value') next.retainValue = false
   }
 
   emit('update:modelValue', next)

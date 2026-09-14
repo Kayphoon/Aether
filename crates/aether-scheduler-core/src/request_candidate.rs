@@ -1,0 +1,1478 @@
+use aether_contracts::{ExecutionError, ExecutionPlan};
+use aether_data_contracts::repository::candidates::{
+    RequestCandidateStatus, StoredRequestCandidate, UpsertRequestCandidateRecord,
+};
+use serde_json::{Map, Value};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SchedulerRequestCandidateReportContext {
+    pub request_id: Option<String>,
+    pub candidate_id: Option<String>,
+    pub user_id: Option<String>,
+    pub api_key_id: Option<String>,
+    pub candidate_index: Option<u32>,
+    pub retry_index: u32,
+    pub provider_id: Option<String>,
+    pub endpoint_id: Option<String>,
+    pub key_id: Option<String>,
+    pub client_api_format: Option<String>,
+    pub provider_api_format: Option<String>,
+    pub request_path: Option<String>,
+    pub request_query_string: Option<String>,
+    pub request_path_and_query: Option<String>,
+    pub upstream_url: Option<String>,
+    pub mapped_model: Option<String>,
+    pub key_name: Option<String>,
+    pub header_rules: Option<Value>,
+    pub body_rules: Option<Value>,
+    pub upstream_response: Option<Value>,
+    pub proxy: Option<Value>,
+    pub error_flow: Option<Value>,
+    pub candidate_group_id: Option<String>,
+    pub pool_key_index: Option<u32>,
+    pub ranking_mode: Option<String>,
+    pub priority_mode: Option<String>,
+    pub ranking_index: Option<u32>,
+    pub priority_slot: Option<i32>,
+    pub promoted_by: Option<String>,
+    pub demoted_by: Option<String>,
+    pub routing_trace: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SchedulerResolvedReportRequestCandidateSlot {
+    pub id: String,
+    pub request_id: String,
+    pub user_id: Option<String>,
+    pub api_key_id: Option<String>,
+    pub candidate_index: u32,
+    pub retry_index: u32,
+    pub provider_id: Option<String>,
+    pub endpoint_id: Option<String>,
+    pub key_id: Option<String>,
+    pub extra_data: Option<Value>,
+    pub created_at_unix_ms: u64,
+    pub started_at_unix_ms: Option<u64>,
+    pub finished_at_unix_ms: Option<u64>,
+}
+
+pub struct SchedulerExecutionRequestCandidateSeed {
+    pub upsert_record: UpsertRequestCandidateRecord,
+    pub report_context: Value,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReportCandidateExtraDataInput {
+    client_api_format: Option<String>,
+    provider_api_format: Option<String>,
+    request_path: Option<String>,
+    request_query_string: Option<String>,
+    request_path_and_query: Option<String>,
+    upstream_url: Option<String>,
+    mapped_model: Option<String>,
+    key_name: Option<String>,
+    header_rules: Option<Value>,
+    body_rules: Option<Value>,
+    upstream_response: Option<Value>,
+    proxy: Option<Value>,
+    error_flow: Option<Value>,
+    candidate_group_id: Option<String>,
+    pool_key_index: Option<u32>,
+    ranking_mode: Option<String>,
+    priority_mode: Option<String>,
+    ranking_index: Option<u32>,
+    priority_slot: Option<i32>,
+    promoted_by: Option<String>,
+    demoted_by: Option<String>,
+    routing_trace: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchedulerRequestCandidateStatusUpdate {
+    pub status: RequestCandidateStatus,
+    pub status_code: Option<u16>,
+    pub error_type: Option<String>,
+    pub error_message: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub started_at_unix_ms: Option<u64>,
+    pub finished_at_unix_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalRequestCandidateStatusRecordInput<'a> {
+    pub plan: &'a ExecutionPlan,
+    pub report_context: Option<&'a Value>,
+    pub status_update: SchedulerRequestCandidateStatusUpdate,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReportRequestCandidateStatusRecordInput {
+    pub slot: SchedulerResolvedReportRequestCandidateSlot,
+    pub status_update: SchedulerRequestCandidateStatusUpdate,
+    pub now_unix_ms: u64,
+}
+
+pub fn execution_error_details(
+    error: Option<&ExecutionError>,
+    body_json: Option<&Value>,
+) -> (Option<String>, Option<String>) {
+    match error {
+        Some(error) => (
+            Some(format!("{:?}", error.kind)),
+            Some(error.message.trim().to_string()).filter(|value| !value.is_empty()),
+        ),
+        None => (
+            None,
+            body_json
+                .and_then(extract_error_message)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+        ),
+    }
+}
+
+pub fn parse_request_candidate_report_context(
+    report_context: Option<&Value>,
+) -> Option<SchedulerRequestCandidateReportContext> {
+    let report_context = report_context?;
+    Some(SchedulerRequestCandidateReportContext {
+        request_id: string_field(report_context, "request_id"),
+        candidate_id: string_field(report_context, "candidate_id"),
+        user_id: string_field(report_context, "user_id"),
+        api_key_id: string_field(report_context, "api_key_id"),
+        candidate_index: u32_field(report_context, "candidate_index"),
+        retry_index: u32_field(report_context, "retry_index").unwrap_or_default(),
+        provider_id: string_field(report_context, "provider_id"),
+        endpoint_id: string_field(report_context, "endpoint_id"),
+        key_id: string_field(report_context, "key_id"),
+        client_api_format: string_field(report_context, "client_api_format"),
+        provider_api_format: string_field(report_context, "provider_api_format"),
+        request_path: string_field(report_context, "request_path"),
+        request_query_string: string_field(report_context, "request_query_string"),
+        request_path_and_query: string_field(report_context, "request_path_and_query"),
+        upstream_url: string_field(report_context, "upstream_url"),
+        mapped_model: string_field(report_context, "mapped_model"),
+        key_name: string_field(report_context, "key_name"),
+        header_rules: report_context
+            .get("header_rules")
+            .cloned()
+            .filter(|value| !value.is_null()),
+        body_rules: report_context
+            .get("body_rules")
+            .cloned()
+            .filter(|value| !value.is_null()),
+        upstream_response: report_context
+            .get("upstream_response")
+            .cloned()
+            .filter(|value| !value.is_null()),
+        proxy: report_context
+            .get("proxy")
+            .cloned()
+            .filter(|value| !value.is_null()),
+        error_flow: report_context
+            .get("error_flow")
+            .cloned()
+            .filter(|value| !value.is_null()),
+        candidate_group_id: string_field(report_context, "candidate_group_id"),
+        pool_key_index: u32_field(report_context, "pool_key_index"),
+        ranking_mode: string_field(report_context, "ranking_mode"),
+        priority_mode: string_field(report_context, "priority_mode"),
+        ranking_index: u32_field(report_context, "ranking_index"),
+        priority_slot: i32_field(report_context, "priority_slot"),
+        promoted_by: string_field(report_context, "promoted_by"),
+        demoted_by: string_field(report_context, "demoted_by"),
+        routing_trace: report_context
+            .get("routing_trace")
+            .cloned()
+            .filter(|value| !value.is_null()),
+    })
+}
+
+pub fn resolve_report_request_candidate_slot(
+    existing_candidates: &[StoredRequestCandidate],
+    metadata: SchedulerRequestCandidateReportContext,
+    now_unix_ms: u64,
+    generated_candidate_id: String,
+) -> Option<SchedulerResolvedReportRequestCandidateSlot> {
+    let matched_candidate = match_existing_report_candidate(existing_candidates, &metadata);
+    let SchedulerRequestCandidateReportContext {
+        request_id,
+        candidate_id,
+        user_id,
+        api_key_id,
+        candidate_index: metadata_candidate_index,
+        retry_index,
+        provider_id,
+        endpoint_id,
+        key_id,
+        client_api_format,
+        provider_api_format,
+        request_path,
+        request_query_string,
+        request_path_and_query,
+        upstream_url,
+        mapped_model,
+        key_name,
+        header_rules,
+        body_rules,
+        upstream_response,
+        proxy,
+        error_flow,
+        candidate_group_id,
+        pool_key_index,
+        ranking_mode,
+        priority_mode,
+        ranking_index,
+        priority_slot,
+        promoted_by,
+        demoted_by,
+        routing_trace,
+    } = metadata;
+    let request_id = request_id?;
+    let synthesized_extra_data = build_report_candidate_extra_data(ReportCandidateExtraDataInput {
+        client_api_format,
+        provider_api_format,
+        request_path,
+        request_query_string,
+        request_path_and_query,
+        upstream_url,
+        mapped_model,
+        key_name,
+        header_rules,
+        body_rules,
+        upstream_response,
+        proxy,
+        error_flow,
+        candidate_group_id,
+        pool_key_index,
+        ranking_mode,
+        priority_mode,
+        ranking_index,
+        priority_slot,
+        promoted_by,
+        demoted_by,
+        routing_trace,
+    });
+    let created_at_unix_ms = matched_candidate
+        .as_ref()
+        .map(|candidate| candidate.created_at_unix_ms)
+        .unwrap_or(now_unix_ms);
+    let candidate_index = matched_candidate
+        .as_ref()
+        .map(|candidate| candidate.candidate_index)
+        .or(metadata_candidate_index)
+        .unwrap_or_else(|| next_candidate_index(existing_candidates));
+    let retry_index = matched_candidate
+        .as_ref()
+        .map(|candidate| candidate.retry_index)
+        .unwrap_or(retry_index);
+
+    Some(SchedulerResolvedReportRequestCandidateSlot {
+        id: matched_candidate
+            .as_ref()
+            .map(|candidate| candidate.id.clone())
+            .or(candidate_id)
+            .unwrap_or(generated_candidate_id),
+        request_id,
+        user_id: matched_candidate
+            .as_ref()
+            .and_then(|candidate| candidate.user_id.clone())
+            .or(user_id),
+        api_key_id: matched_candidate
+            .as_ref()
+            .and_then(|candidate| candidate.api_key_id.clone())
+            .or(api_key_id),
+        candidate_index,
+        retry_index,
+        provider_id: matched_candidate
+            .as_ref()
+            .and_then(|candidate| candidate.provider_id.clone())
+            .or(provider_id),
+        endpoint_id: matched_candidate
+            .as_ref()
+            .and_then(|candidate| candidate.endpoint_id.clone())
+            .or(endpoint_id),
+        key_id: matched_candidate
+            .as_ref()
+            .and_then(|candidate| candidate.key_id.clone())
+            .or(key_id),
+        extra_data: merge_request_candidate_extra_data(
+            matched_candidate
+                .as_ref()
+                .and_then(|candidate| candidate.extra_data.clone()),
+            synthesized_extra_data,
+        ),
+        created_at_unix_ms,
+        started_at_unix_ms: matched_candidate
+            .as_ref()
+            .and_then(|candidate| candidate.started_at_unix_ms),
+        finished_at_unix_ms: matched_candidate
+            .as_ref()
+            .and_then(|candidate| candidate.finished_at_unix_ms),
+    })
+}
+
+pub fn build_execution_request_candidate_seed(
+    plan: &ExecutionPlan,
+    report_context: Option<&Value>,
+    started_at_unix_ms: u64,
+    generated_candidate_id: String,
+) -> SchedulerExecutionRequestCandidateSeed {
+    let mut context = report_context
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let request_id =
+        string_field_from_object(&context, "request_id").unwrap_or_else(|| plan.request_id.clone());
+    let candidate_index = u32_field_from_object(&context, "candidate_index").unwrap_or(0);
+    let retry_index = u32_field_from_object(&context, "retry_index").unwrap_or(0);
+    let candidate_id =
+        string_field_from_object(&context, "candidate_id").unwrap_or(generated_candidate_id);
+    let user_id = string_field_from_object(&context, "user_id");
+    let api_key_id = string_field_from_object(&context, "api_key_id");
+
+    context.insert("request_id".to_string(), Value::String(request_id.clone()));
+    context.insert(
+        "candidate_id".to_string(),
+        Value::String(candidate_id.clone()),
+    );
+    context.insert(
+        "candidate_index".to_string(),
+        Value::Number(candidate_index.into()),
+    );
+    context.insert(
+        "provider_id".to_string(),
+        Value::String(plan.provider_id.clone()),
+    );
+    context.insert(
+        "endpoint_id".to_string(),
+        Value::String(plan.endpoint_id.clone()),
+    );
+    context.insert("key_id".to_string(), Value::String(plan.key_id.clone()));
+    let mut extra_data = parse_request_candidate_report_context(Some(&Value::Object(
+        context.clone(),
+    )))
+    .and_then(|metadata| {
+        build_report_candidate_extra_data(ReportCandidateExtraDataInput {
+            client_api_format: metadata.client_api_format,
+            provider_api_format: metadata.provider_api_format,
+            request_path: metadata.request_path,
+            request_query_string: metadata.request_query_string,
+            request_path_and_query: metadata.request_path_and_query,
+            upstream_url: metadata.upstream_url,
+            mapped_model: metadata.mapped_model,
+            key_name: metadata.key_name,
+            header_rules: metadata.header_rules,
+            body_rules: metadata.body_rules,
+            upstream_response: metadata.upstream_response,
+            proxy: metadata.proxy,
+            error_flow: metadata.error_flow,
+            candidate_group_id: metadata.candidate_group_id,
+            pool_key_index: metadata.pool_key_index,
+            ranking_mode: metadata.ranking_mode,
+            priority_mode: metadata.priority_mode,
+            ranking_index: metadata.ranking_index,
+            priority_slot: metadata.priority_slot,
+            promoted_by: metadata.promoted_by,
+            demoted_by: metadata.demoted_by,
+            routing_trace: metadata.routing_trace,
+        })
+    });
+    append_seed_extra_data_from_report_context(&mut extra_data, &context);
+
+    SchedulerExecutionRequestCandidateSeed {
+        upsert_record: UpsertRequestCandidateRecord {
+            id: candidate_id,
+            request_id,
+            user_id,
+            api_key_id,
+            username: None,
+            api_key_name: None,
+            candidate_index,
+            retry_index,
+            provider_id: Some(plan.provider_id.clone()),
+            endpoint_id: Some(plan.endpoint_id.clone()),
+            key_id: Some(plan.key_id.clone()),
+            status: RequestCandidateStatus::Pending,
+            skip_reason: None,
+            is_cached: Some(false),
+            status_code: None,
+            error_type: None,
+            error_message: None,
+            latency_ms: None,
+            concurrent_requests: None,
+            extra_data,
+            required_capabilities: None,
+            created_at_unix_ms: Some(started_at_unix_ms),
+            started_at_unix_ms: Some(started_at_unix_ms),
+            finished_at_unix_ms: None,
+        },
+        report_context: Value::Object(context),
+    }
+}
+
+fn append_seed_extra_data_from_report_context(
+    extra_data: &mut Option<Value>,
+    context: &Map<String, Value>,
+) {
+    const PASSTHROUGH_FIELDS: &[&str] = &[
+        "execution_strategy",
+        "conversion_mode",
+        "client_contract",
+        "provider_contract",
+        "transport_diagnostics",
+    ];
+
+    let mut object = extra_data
+        .take()
+        .and_then(|value| match value {
+            Value::Object(object) => Some(object),
+            _ => None,
+        })
+        .unwrap_or_default();
+    for field in PASSTHROUGH_FIELDS {
+        if let Some(value) = context.get(*field).filter(|value| !value.is_null()) {
+            object.insert((*field).to_string(), value.clone());
+        }
+    }
+    *extra_data = (!object.is_empty()).then_some(Value::Object(object));
+}
+
+pub fn build_local_request_candidate_status_record(
+    input: LocalRequestCandidateStatusRecordInput<'_>,
+) -> Option<UpsertRequestCandidateRecord> {
+    let LocalRequestCandidateStatusRecordInput {
+        plan,
+        report_context,
+        status_update,
+    } = input;
+    let SchedulerRequestCandidateStatusUpdate {
+        status,
+        status_code,
+        error_type,
+        error_message,
+        latency_ms,
+        started_at_unix_ms,
+        finished_at_unix_ms,
+    } = status_update;
+
+    let candidate_id = plan
+        .candidate_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let metadata = parse_request_candidate_report_context(report_context);
+    let candidate_index = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.candidate_index)
+        .unwrap_or(0);
+    let retry_index = metadata
+        .as_ref()
+        .map(|metadata| metadata.retry_index)
+        .unwrap_or(0);
+    let extra_data = build_local_request_candidate_extra_data(plan, metadata.as_ref());
+    let extra_data = mark_request_candidate_stream_completed_if_success(status, extra_data);
+    let created_at_unix_ms = started_at_unix_ms.or(finished_at_unix_ms);
+
+    Some(UpsertRequestCandidateRecord {
+        id: candidate_id.to_string(),
+        request_id: plan.request_id.clone(),
+        user_id: metadata
+            .as_ref()
+            .and_then(|metadata| metadata.user_id.clone()),
+        api_key_id: metadata
+            .as_ref()
+            .and_then(|metadata| metadata.api_key_id.clone()),
+        username: None,
+        api_key_name: None,
+        candidate_index,
+        retry_index,
+        provider_id: Some(plan.provider_id.clone()),
+        endpoint_id: Some(plan.endpoint_id.clone()),
+        key_id: Some(plan.key_id.clone()),
+        status,
+        skip_reason: None,
+        is_cached: None,
+        status_code,
+        error_type,
+        error_message,
+        latency_ms,
+        concurrent_requests: None,
+        extra_data,
+        required_capabilities: None,
+        created_at_unix_ms,
+        started_at_unix_ms,
+        finished_at_unix_ms,
+    })
+}
+
+fn build_local_request_candidate_extra_data(
+    plan: &ExecutionPlan,
+    metadata: Option<&SchedulerRequestCandidateReportContext>,
+) -> Option<Value> {
+    build_report_candidate_extra_data(ReportCandidateExtraDataInput {
+        client_api_format: metadata
+            .and_then(|metadata| metadata.client_api_format.clone())
+            .or_else(|| non_empty_string(plan.client_api_format.as_str())),
+        provider_api_format: metadata
+            .and_then(|metadata| metadata.provider_api_format.clone())
+            .or_else(|| non_empty_string(plan.provider_api_format.as_str())),
+        request_path: metadata.and_then(|metadata| metadata.request_path.clone()),
+        request_query_string: metadata.and_then(|metadata| metadata.request_query_string.clone()),
+        request_path_and_query: metadata
+            .and_then(|metadata| metadata.request_path_and_query.clone()),
+        upstream_url: metadata
+            .and_then(|metadata| metadata.upstream_url.clone())
+            .or_else(|| non_empty_string(plan.url.as_str())),
+        mapped_model: metadata
+            .and_then(|metadata| metadata.mapped_model.clone())
+            .or_else(|| plan.model_name.as_deref().and_then(non_empty_string)),
+        key_name: metadata.and_then(|metadata| metadata.key_name.clone()),
+        header_rules: metadata.and_then(|metadata| metadata.header_rules.clone()),
+        body_rules: metadata.and_then(|metadata| metadata.body_rules.clone()),
+        upstream_response: metadata.and_then(|metadata| metadata.upstream_response.clone()),
+        proxy: metadata.and_then(|metadata| metadata.proxy.clone()),
+        error_flow: metadata.and_then(|metadata| metadata.error_flow.clone()),
+        candidate_group_id: metadata.and_then(|metadata| metadata.candidate_group_id.clone()),
+        pool_key_index: metadata.and_then(|metadata| metadata.pool_key_index),
+        ranking_mode: metadata.and_then(|metadata| metadata.ranking_mode.clone()),
+        priority_mode: metadata.and_then(|metadata| metadata.priority_mode.clone()),
+        ranking_index: metadata.and_then(|metadata| metadata.ranking_index),
+        priority_slot: metadata.and_then(|metadata| metadata.priority_slot),
+        promoted_by: metadata.and_then(|metadata| metadata.promoted_by.clone()),
+        demoted_by: metadata.and_then(|metadata| metadata.demoted_by.clone()),
+        routing_trace: metadata.and_then(|metadata| metadata.routing_trace.clone()),
+    })
+}
+
+pub fn build_report_request_candidate_status_record(
+    input: ReportRequestCandidateStatusRecordInput,
+) -> UpsertRequestCandidateRecord {
+    let ReportRequestCandidateStatusRecordInput {
+        slot,
+        status_update,
+        now_unix_ms,
+    } = input;
+    let SchedulerRequestCandidateStatusUpdate {
+        status,
+        status_code,
+        error_type,
+        error_message,
+        latency_ms,
+        started_at_unix_ms,
+        finished_at_unix_ms,
+    } = status_update;
+
+    let terminal_unix_secs = finished_at_unix_ms.unwrap_or(now_unix_ms);
+    let started_at_unix_ms = started_at_unix_ms
+        .or(slot.started_at_unix_ms)
+        .or_else(|| status.is_attempted(None).then_some(terminal_unix_secs));
+    let finished_at_unix_ms = finished_at_unix_ms
+        .or(slot.finished_at_unix_ms)
+        .or_else(|| is_terminal_candidate_status(status).then_some(terminal_unix_secs));
+    let created_at_unix_ms = non_epoch_unix_ms(slot.created_at_unix_ms)
+        .or_else(|| started_at_unix_ms.and_then(non_epoch_unix_ms))
+        .or_else(|| finished_at_unix_ms.and_then(non_epoch_unix_ms))
+        .unwrap_or(terminal_unix_secs);
+
+    UpsertRequestCandidateRecord {
+        id: slot.id,
+        request_id: slot.request_id,
+        user_id: slot.user_id,
+        api_key_id: slot.api_key_id,
+        username: None,
+        api_key_name: None,
+        candidate_index: slot.candidate_index,
+        retry_index: slot.retry_index,
+        provider_id: slot.provider_id,
+        endpoint_id: slot.endpoint_id,
+        key_id: slot.key_id,
+        status,
+        skip_reason: None,
+        is_cached: None,
+        status_code,
+        error_type,
+        error_message,
+        latency_ms,
+        concurrent_requests: None,
+        extra_data: mark_request_candidate_stream_completed_if_success(status, slot.extra_data),
+        required_capabilities: None,
+        created_at_unix_ms: Some(created_at_unix_ms),
+        started_at_unix_ms,
+        finished_at_unix_ms,
+    }
+}
+
+fn non_epoch_unix_ms(value: u64) -> Option<u64> {
+    (value > 1000).then_some(value)
+}
+
+pub fn finalize_execution_request_candidate_report_context(
+    report_context: Value,
+    candidate_id: &str,
+) -> Value {
+    let mut context = match report_context {
+        Value::Object(context) => context,
+        _ => Map::new(),
+    };
+    let candidate_id = candidate_id.trim();
+    if !candidate_id.is_empty() {
+        context.insert(
+            "candidate_id".to_string(),
+            Value::String(candidate_id.to_string()),
+        );
+    }
+    Value::Object(context)
+}
+
+pub fn is_terminal_candidate_status(status: RequestCandidateStatus) -> bool {
+    matches!(
+        status,
+        RequestCandidateStatus::Unused
+            | RequestCandidateStatus::Success
+            | RequestCandidateStatus::Failed
+            | RequestCandidateStatus::Cancelled
+            | RequestCandidateStatus::Skipped
+    )
+}
+
+fn extract_error_message(body_json: &Value) -> Option<&str> {
+    body_json
+        .get("error")
+        .and_then(|error| {
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .or_else(|| error.as_str())
+        })
+        .or_else(|| body_json.get("message").and_then(Value::as_str))
+}
+
+fn string_field(value: &Value, key: &str) -> Option<String> {
+    value
+        .as_object()
+        .and_then(|object| string_field_from_object(object, key))
+}
+
+fn string_field_from_object(object: &Map<String, Value>, key: &str) -> Option<String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn u32_field(value: &Value, key: &str) -> Option<u32> {
+    value
+        .as_object()
+        .and_then(|object| u32_field_from_object(object, key))
+}
+
+fn u32_field_from_object(object: &Map<String, Value>, key: &str) -> Option<u32> {
+    object
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+}
+
+fn i32_field(value: &Value, key: &str) -> Option<i32> {
+    value
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok())
+}
+
+fn match_existing_report_candidate<'a>(
+    candidates: &'a [StoredRequestCandidate],
+    metadata: &SchedulerRequestCandidateReportContext,
+) -> Option<&'a StoredRequestCandidate> {
+    if let Some(candidate_id) = metadata.candidate_id.as_deref() {
+        if let Some(candidate) = candidates
+            .iter()
+            .find(|candidate| candidate.id == candidate_id)
+        {
+            return Some(candidate);
+        }
+    }
+
+    if let Some(candidate_index) = metadata.candidate_index {
+        if let Some(candidate) = candidates.iter().find(|candidate| {
+            candidate.candidate_index == candidate_index
+                && candidate.retry_index == metadata.retry_index
+        }) {
+            return Some(candidate);
+        }
+    }
+
+    candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.provider_id.as_deref() == metadata.provider_id.as_deref()
+                && candidate.endpoint_id.as_deref() == metadata.endpoint_id.as_deref()
+                && candidate.key_id.as_deref() == metadata.key_id.as_deref()
+        })
+        .max_by_key(|candidate| {
+            (
+                candidate.retry_index,
+                candidate.candidate_index,
+                candidate.created_at_unix_ms,
+            )
+        })
+}
+
+fn next_candidate_index(candidates: &[StoredRequestCandidate]) -> u32 {
+    candidates
+        .iter()
+        .map(|candidate| candidate.candidate_index)
+        .max()
+        .map(|value| value.saturating_add(1))
+        .unwrap_or_default()
+}
+
+fn build_report_candidate_extra_data(input: ReportCandidateExtraDataInput) -> Option<Value> {
+    let ReportCandidateExtraDataInput {
+        client_api_format,
+        provider_api_format,
+        request_path,
+        request_query_string,
+        request_path_and_query,
+        upstream_url,
+        mapped_model,
+        key_name,
+        header_rules,
+        body_rules,
+        upstream_response,
+        proxy,
+        error_flow,
+        candidate_group_id,
+        pool_key_index,
+        ranking_mode,
+        priority_mode,
+        ranking_index,
+        priority_slot,
+        promoted_by,
+        demoted_by,
+        routing_trace,
+    } = input;
+    let mut extra_data = Map::with_capacity(8);
+    extra_data.insert("gateway_execution_runtime".to_string(), Value::Bool(true));
+    extra_data.insert("phase".to_string(), Value::String("3c_trial".to_string()));
+    if let Some(client_api_format) = client_api_format {
+        extra_data.insert(
+            "client_api_format".to_string(),
+            Value::String(client_api_format),
+        );
+    }
+    if let Some(provider_api_format) = provider_api_format {
+        extra_data.insert(
+            "provider_api_format".to_string(),
+            Value::String(provider_api_format),
+        );
+    }
+    if let Some(request_path) = request_path {
+        extra_data.insert("request_path".to_string(), Value::String(request_path));
+    }
+    if let Some(request_query_string) = request_query_string {
+        extra_data.insert(
+            "request_query_string".to_string(),
+            Value::String(request_query_string),
+        );
+    }
+    if let Some(request_path_and_query) = request_path_and_query {
+        extra_data.insert(
+            "request_path_and_query".to_string(),
+            Value::String(request_path_and_query),
+        );
+    }
+    if let Some(upstream_url) = upstream_url {
+        extra_data.insert("upstream_url".to_string(), Value::String(upstream_url));
+    }
+    if let Some(mapped_model) = mapped_model {
+        extra_data.insert("mapped_model".to_string(), Value::String(mapped_model));
+    }
+    if let Some(key_name) = key_name {
+        extra_data.insert("key_name".to_string(), Value::String(key_name));
+    }
+    if let Some(header_rules) = header_rules {
+        extra_data.insert("header_rules".to_string(), header_rules);
+    }
+    if let Some(body_rules) = body_rules {
+        extra_data.insert("body_rules".to_string(), body_rules);
+    }
+    if let Some(upstream_response) = upstream_response {
+        extra_data.insert("upstream_response".to_string(), upstream_response);
+    }
+    if let Some(proxy) = proxy {
+        extra_data.insert("proxy".to_string(), proxy);
+    }
+    if let Some(error_flow) = error_flow {
+        extra_data.insert("error_flow".to_string(), error_flow);
+    }
+    if let Some(candidate_group_id) = candidate_group_id {
+        extra_data.insert(
+            "candidate_group_id".to_string(),
+            Value::String(candidate_group_id.clone()),
+        );
+        extra_data.insert(
+            "pool_group_id".to_string(),
+            Value::String(candidate_group_id),
+        );
+    }
+    if let Some(pool_key_index) = pool_key_index {
+        extra_data.insert(
+            "pool_key_index".to_string(),
+            Value::Number(pool_key_index.into()),
+        );
+    }
+    if let Some(ranking_mode) = ranking_mode {
+        extra_data.insert("ranking_mode".to_string(), Value::String(ranking_mode));
+    }
+    if let Some(priority_mode) = priority_mode {
+        extra_data.insert("priority_mode".to_string(), Value::String(priority_mode));
+    }
+    if let Some(ranking_index) = ranking_index {
+        extra_data.insert(
+            "ranking_index".to_string(),
+            Value::Number(ranking_index.into()),
+        );
+    }
+    if let Some(priority_slot) = priority_slot {
+        extra_data.insert(
+            "priority_slot".to_string(),
+            Value::Number(priority_slot.into()),
+        );
+    }
+    if let Some(promoted_by) = promoted_by {
+        extra_data.insert("promoted_by".to_string(), Value::String(promoted_by));
+    }
+    if let Some(demoted_by) = demoted_by {
+        extra_data.insert("demoted_by".to_string(), Value::String(demoted_by));
+    }
+    if let Some(routing_trace) = routing_trace {
+        extra_data.insert("routing_trace".to_string(), routing_trace);
+    }
+    (!extra_data.is_empty()).then_some(Value::Object(extra_data))
+}
+
+fn mark_request_candidate_stream_completed_if_success(
+    status: RequestCandidateStatus,
+    extra_data: Option<Value>,
+) -> Option<Value> {
+    if status != RequestCandidateStatus::Success {
+        return extra_data;
+    }
+
+    let mut object = match extra_data {
+        Some(Value::Object(object)) => object,
+        Some(other) => return Some(other),
+        None => Map::new(),
+    };
+    object.insert("stream_completed".to_string(), Value::Bool(true));
+    Some(Value::Object(object))
+}
+
+fn merge_request_candidate_extra_data(
+    existing: Option<Value>,
+    overlay: Option<Value>,
+) -> Option<Value> {
+    match (existing, overlay) {
+        (Some(Value::Object(mut existing_object)), Some(Value::Object(overlay_object))) => {
+            existing_object.extend(overlay_object);
+            Some(Value::Object(existing_object))
+        }
+        (Some(existing), None) => Some(existing),
+        (None, Some(overlay)) => Some(overlay),
+        (Some(existing), Some(_overlay)) => Some(existing),
+        (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aether_contracts::{
+        ExecutionError, ExecutionErrorKind, ExecutionPhase, ExecutionPlan, RequestBody,
+    };
+    use aether_data_contracts::repository::candidates::{
+        RequestCandidateStatus, StoredRequestCandidate,
+    };
+    use serde_json::{json, Value};
+
+    use super::{
+        build_execution_request_candidate_seed, build_local_request_candidate_status_record,
+        build_report_request_candidate_status_record, execution_error_details,
+        finalize_execution_request_candidate_report_context,
+        parse_request_candidate_report_context, resolve_report_request_candidate_slot,
+        LocalRequestCandidateStatusRecordInput, ReportRequestCandidateStatusRecordInput,
+        SchedulerRequestCandidateStatusUpdate, SchedulerResolvedReportRequestCandidateSlot,
+    };
+
+    fn sample_candidate(
+        id: &str,
+        candidate_index: u32,
+        retry_index: u32,
+    ) -> StoredRequestCandidate {
+        StoredRequestCandidate::new(
+            id.to_string(),
+            "req-1".to_string(),
+            Some("user-1".to_string()),
+            Some("key-1".to_string()),
+            None,
+            None,
+            candidate_index as i32,
+            retry_index as i32,
+            Some("provider-1".to_string()),
+            Some("endpoint-1".to_string()),
+            Some("catalog-key-1".to_string()),
+            RequestCandidateStatus::Pending,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            100_000,
+            Some(110_000),
+            None,
+        )
+        .expect("candidate should build")
+    }
+
+    fn sample_plan() -> ExecutionPlan {
+        ExecutionPlan {
+            request_id: "req-1".to_string(),
+            candidate_id: None,
+            provider_name: Some("openai".to_string()),
+            provider_id: "provider-1".to_string(),
+            endpoint_id: "endpoint-1".to_string(),
+            key_id: "key-1".to_string(),
+            method: "POST".to_string(),
+            url: "https://example.com/v1/chat/completions".to_string(),
+            headers: Default::default(),
+            content_type: Some("application/json".to_string()),
+            content_encoding: None,
+            body: RequestBody::from_json(json!({"model": "gpt-5"})),
+            stream: false,
+            client_api_format: "openai:chat".to_string(),
+            provider_api_format: "openai:chat".to_string(),
+            model_name: Some("gpt-5".to_string()),
+            proxy: None,
+            transport_profile: None,
+            timeouts: None,
+        }
+    }
+
+    #[test]
+    fn parses_report_context_and_resolves_existing_candidate_slot() {
+        let metadata = parse_request_candidate_report_context(Some(&json!({
+            "request_id": "req-1",
+            "candidate_index": 1,
+            "retry_index": 2,
+            "provider_id": "provider-1",
+            "endpoint_id": "endpoint-1",
+            "key_id": "catalog-key-1",
+            "client_api_format": "openai:chat"
+        })))
+        .expect("metadata");
+        let slot = resolve_report_request_candidate_slot(
+            &[sample_candidate("cand-1", 1, 2)],
+            metadata,
+            123,
+            "generated-1".to_string(),
+        )
+        .expect("slot");
+
+        assert_eq!(slot.id, "cand-1");
+        assert_eq!(slot.candidate_index, 1);
+        assert_eq!(slot.retry_index, 2);
+        assert_eq!(slot.request_id, "req-1");
+    }
+
+    #[test]
+    fn merges_proxy_trace_info_into_existing_candidate_extra_data() {
+        let mut existing = sample_candidate("cand-1", 1, 0);
+        existing.extra_data = Some(json!({
+            "provider_name": "Provider One"
+        }));
+
+        let metadata = parse_request_candidate_report_context(Some(&json!({
+            "request_id": "req-1",
+            "candidate_index": 1,
+            "retry_index": 0,
+            "provider_id": "provider-1",
+            "endpoint_id": "endpoint-1",
+            "key_id": "catalog-key-1",
+            "client_api_format": "openai:chat",
+            "provider_api_format": "openai:responses",
+            "header_rules": [
+                {"op": "set", "name": "x-test", "value": "1"}
+            ],
+            "body_rules": [
+                {"op": "remove", "path": "/store"}
+            ],
+            "upstream_response": {
+                "status_code": 503,
+                "headers": {"retry-after": "2"},
+                "body": {"error": {"message": "overloaded"}}
+            },
+            "proxy": {
+                "node_id": "proxy-node-1",
+                "node_name": "edge-1",
+                "source": "provider"
+            },
+            "error_flow": {
+                "classification": "retry_upstream_failure",
+                "decision": "retry_next_candidate",
+                "propagation": "suppressed"
+            },
+            "candidate_group_id": "pool-group-1",
+            "pool_key_index": 2
+        })))
+        .expect("metadata");
+
+        let slot = resolve_report_request_candidate_slot(
+            &[existing],
+            metadata,
+            123,
+            "generated-1".to_string(),
+        )
+        .expect("slot");
+
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("provider_name")),
+            Some(&json!("Provider One"))
+        );
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("proxy"))
+                .and_then(|value| value.get("node_id")),
+            Some(&json!("proxy-node-1"))
+        );
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("proxy"))
+                .and_then(|value| value.get("source")),
+            Some(&json!("provider"))
+        );
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("header_rules"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("body_rules"))
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("upstream_response"))
+                .and_then(|value| value.get("status_code")),
+            Some(&json!(503))
+        );
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("error_flow"))
+                .and_then(|value| value.get("propagation")),
+            Some(&json!("suppressed"))
+        );
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("candidate_group_id")),
+            Some(&json!("pool-group-1"))
+        );
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("pool_group_id")),
+            Some(&json!("pool-group-1"))
+        );
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("pool_key_index")),
+            Some(&json!(2))
+        );
+    }
+
+    #[test]
+    fn resolves_error_details_from_execution_error_or_body_json() {
+        let error = ExecutionError {
+            kind: ExecutionErrorKind::Upstream5xx,
+            phase: ExecutionPhase::FirstByte,
+            message: " upstream failed ".to_string(),
+            upstream_status: Some(502),
+            retryable: true,
+            failover_recommended: true,
+        };
+        assert_eq!(
+            execution_error_details(Some(&error), None),
+            (
+                Some("Upstream5xx".to_string()),
+                Some("upstream failed".to_string())
+            )
+        );
+        assert_eq!(
+            execution_error_details(None, Some(&json!({"error": {"message": "bad request"}}))),
+            (None, Some("bad request".to_string()))
+        );
+    }
+
+    #[test]
+    fn builds_execution_request_candidate_seed_and_finalizes_report_context() {
+        let seed = build_execution_request_candidate_seed(
+            &sample_plan(),
+            Some(&json!({
+                "request_id": "req-override",
+                "candidate_index": 3,
+                "retry_index": 2,
+                "user_id": "user-1",
+                "api_key_id": "api-key-1",
+                "client_api_format": "openai:chat"
+            })),
+            123,
+            "generated-1".to_string(),
+        );
+
+        assert_eq!(seed.upsert_record.id, "generated-1");
+        assert_eq!(seed.upsert_record.request_id, "req-override");
+        assert_eq!(seed.upsert_record.candidate_index, 3);
+        assert_eq!(seed.upsert_record.retry_index, 2);
+        assert_eq!(seed.upsert_record.user_id.as_deref(), Some("user-1"));
+        assert_eq!(
+            seed.report_context
+                .get("provider_id")
+                .and_then(Value::as_str),
+            Some("provider-1")
+        );
+
+        let finalized =
+            finalize_execution_request_candidate_report_context(seed.report_context, "cand-final");
+        assert_eq!(
+            finalized.get("candidate_id").and_then(Value::as_str),
+            Some("cand-final")
+        );
+    }
+
+    #[test]
+    fn builds_local_request_candidate_status_record() {
+        let mut plan = sample_plan();
+        plan.candidate_id = Some("cand-1".to_string());
+
+        let record =
+            build_local_request_candidate_status_record(LocalRequestCandidateStatusRecordInput {
+                plan: &plan,
+                report_context: Some(&json!({
+                    "candidate_index": 1,
+                    "retry_index": 2,
+                    "user_id": "user-1",
+                    "api_key_id": "api-key-1",
+                    "client_api_format": "openai:chat",
+                    "provider_api_format": "openai:responses",
+                    "request_path": "/v1/responses",
+                    "request_query_string": "debug=true",
+                    "upstream_url": "https://example.com/v1/responses",
+                    "mapped_model": "gpt-5-upstream",
+                    "key_name": "primary",
+                    "ranking_mode": "CacheAffinity",
+                    "priority_mode": "Provider",
+                    "ranking_index": 2,
+                    "priority_slot": 7,
+                    "promoted_by": "cached_affinity",
+                    "demoted_by": "cross_format",
+                    "routing_trace": {
+                        "group_id": "routing-group-1",
+                        "pool_expansion": [{
+                            "pool_group_id": "pool-1",
+                            "key_id": "key-1",
+                            "selected_order": 0
+                        }]
+                    }
+                })),
+                status_update: SchedulerRequestCandidateStatusUpdate {
+                    status: RequestCandidateStatus::Failed,
+                    status_code: Some(500),
+                    error_type: Some("Upstream5xx".to_string()),
+                    error_message: Some("boom".to_string()),
+                    latency_ms: Some(42),
+                    started_at_unix_ms: Some(100),
+                    finished_at_unix_ms: Some(101),
+                },
+            })
+            .expect("record should build");
+
+        assert_eq!(record.id, "cand-1");
+        assert_eq!(record.candidate_index, 1);
+        assert_eq!(record.retry_index, 2);
+        assert_eq!(record.user_id.as_deref(), Some("user-1"));
+        assert_eq!(record.status, RequestCandidateStatus::Failed);
+        assert_eq!(record.created_at_unix_ms, Some(100));
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("provider_api_format")),
+            Some(&json!("openai:responses"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("request_path")),
+            Some(&json!("/v1/responses"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("request_query_string")),
+            Some(&json!("debug=true"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("mapped_model")),
+            Some(&json!("gpt-5-upstream"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("ranking_mode")),
+            Some(&json!("CacheAffinity"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("priority_mode")),
+            Some(&json!("Provider"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("ranking_index")),
+            Some(&json!(2))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("priority_slot")),
+            Some(&json!(7))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("promoted_by")),
+            Some(&json!("cached_affinity"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("demoted_by")),
+            Some(&json!("cross_format"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("routing_trace"))
+                .and_then(|value| value.get("group_id")),
+            Some(&json!("routing-group-1"))
+        );
+    }
+
+    #[test]
+    fn builds_local_request_candidate_status_record_without_report_context() {
+        let mut plan = sample_plan();
+        plan.candidate_id = Some("cand-plan-only".to_string());
+
+        let record =
+            build_local_request_candidate_status_record(LocalRequestCandidateStatusRecordInput {
+                plan: &plan,
+                report_context: None,
+                status_update: SchedulerRequestCandidateStatusUpdate {
+                    status: RequestCandidateStatus::Failed,
+                    status_code: Some(401),
+                    error_type: Some("Unauthorized".to_string()),
+                    error_message: Some("oauth refresh failed".to_string()),
+                    latency_ms: Some(12),
+                    started_at_unix_ms: Some(1_000),
+                    finished_at_unix_ms: Some(1_012),
+                },
+            })
+            .expect("record should build from plan fields");
+
+        assert_eq!(record.id, "cand-plan-only");
+        assert_eq!(record.request_id, "req-1");
+        assert_eq!(record.candidate_index, 0);
+        assert_eq!(record.retry_index, 0);
+        assert_eq!(record.provider_id.as_deref(), Some("provider-1"));
+        assert_eq!(record.endpoint_id.as_deref(), Some("endpoint-1"));
+        assert_eq!(record.key_id.as_deref(), Some("key-1"));
+        assert_eq!(record.status, RequestCandidateStatus::Failed);
+        assert_eq!(record.status_code, Some(401));
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("client_api_format")),
+            Some(&json!("openai:chat"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("upstream_url")),
+            Some(&json!("https://example.com/v1/chat/completions"))
+        );
+    }
+
+    #[test]
+    fn builds_report_request_candidate_status_record_with_terminal_timestamps() {
+        let record =
+            build_report_request_candidate_status_record(ReportRequestCandidateStatusRecordInput {
+                slot: SchedulerResolvedReportRequestCandidateSlot {
+                    id: "cand-1".to_string(),
+                    request_id: "req-1".to_string(),
+                    user_id: Some("user-1".to_string()),
+                    api_key_id: Some("api-key-1".to_string()),
+                    candidate_index: 1,
+                    retry_index: 0,
+                    provider_id: Some("provider-1".to_string()),
+                    endpoint_id: Some("endpoint-1".to_string()),
+                    key_id: Some("key-1".to_string()),
+                    extra_data: None,
+                    created_at_unix_ms: 10,
+                    started_at_unix_ms: None,
+                    finished_at_unix_ms: None,
+                },
+                status_update: SchedulerRequestCandidateStatusUpdate {
+                    status: RequestCandidateStatus::Success,
+                    status_code: Some(200),
+                    error_type: None,
+                    error_message: None,
+                    latency_ms: Some(12),
+                    started_at_unix_ms: None,
+                    finished_at_unix_ms: None,
+                },
+                now_unix_ms: 123,
+            });
+
+        assert_eq!(record.started_at_unix_ms, Some(123));
+        assert_eq!(record.finished_at_unix_ms, Some(123));
+        assert_eq!(record.created_at_unix_ms, Some(123));
+        assert_eq!(record.status, RequestCandidateStatus::Success);
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("stream_completed")),
+            Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn local_success_status_marks_stream_completed_for_pending_cleanup_recovery() {
+        let mut plan = sample_plan();
+        plan.candidate_id = Some("cand-1".to_string());
+        let report_context = json!({
+            "request_id": "req-1",
+            "candidate_id": "cand-1",
+            "candidate_index": 0,
+            "retry_index": 0,
+            "user_id": "user-1",
+            "api_key_id": "api-key-1",
+            "client_api_format": "openai:responses",
+            "provider_api_format": "openai:responses",
+        });
+
+        let record =
+            build_local_request_candidate_status_record(LocalRequestCandidateStatusRecordInput {
+                plan: &plan,
+                report_context: Some(&report_context),
+                status_update: SchedulerRequestCandidateStatusUpdate {
+                    status: RequestCandidateStatus::Success,
+                    status_code: Some(200),
+                    error_type: None,
+                    error_message: None,
+                    latency_ms: Some(25),
+                    started_at_unix_ms: Some(1_000),
+                    finished_at_unix_ms: Some(1_025),
+                },
+            })
+            .expect("success status record should build");
+
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("stream_completed")),
+            Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn report_request_candidate_status_record_repairs_epoch_created_at() {
+        let record =
+            build_report_request_candidate_status_record(ReportRequestCandidateStatusRecordInput {
+                slot: SchedulerResolvedReportRequestCandidateSlot {
+                    id: "cand-epoch".to_string(),
+                    request_id: "req-epoch".to_string(),
+                    user_id: None,
+                    api_key_id: None,
+                    candidate_index: 0,
+                    retry_index: 0,
+                    provider_id: Some("provider-1".to_string()),
+                    endpoint_id: Some("endpoint-1".to_string()),
+                    key_id: Some("key-1".to_string()),
+                    extra_data: None,
+                    created_at_unix_ms: 0,
+                    started_at_unix_ms: None,
+                    finished_at_unix_ms: None,
+                },
+                status_update: SchedulerRequestCandidateStatusUpdate {
+                    status: RequestCandidateStatus::Success,
+                    status_code: Some(200),
+                    error_type: None,
+                    error_message: None,
+                    latency_ms: Some(12),
+                    started_at_unix_ms: Some(2_000),
+                    finished_at_unix_ms: Some(3_000),
+                },
+                now_unix_ms: 4_000,
+            });
+
+        assert_eq!(record.created_at_unix_ms, Some(2_000));
+        assert_eq!(record.started_at_unix_ms, Some(2_000));
+        assert_eq!(record.finished_at_unix_ms, Some(3_000));
+    }
+}

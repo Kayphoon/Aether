@@ -1,0 +1,492 @@
+use aether_ai_serving::{
+    run_ai_sync_execution_path, AiPlanFallbackReason, AiServingExecutionOutcome,
+    AiSyncExecutionPathPort, AiSyncExecutionStep, OriginalRequestPayload,
+};
+use async_trait::async_trait;
+use axum::body::{Body, Bytes};
+use axum::http::Response;
+use std::collections::BTreeMap;
+
+use crate::ai_serving::api::{
+    is_matching_stream_request, resolve_execution_runtime_stream_plan_kind,
+    resolve_execution_runtime_sync_plan_kind, supports_sync_execution_decision_kind, AiSyncAttempt,
+    GEMINI_VIDEO_CANCEL_SYNC_PLAN_KIND, OPENAI_VIDEO_CANCEL_SYNC_PLAN_KIND,
+    OPENAI_VIDEO_DELETE_SYNC_PLAN_KIND, OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND,
+};
+use crate::api::response::build_client_response_from_parts;
+use crate::control::resolve_execution_runtime_auth_context;
+use crate::control::GatewayControlDecision;
+use crate::state::VideoTaskRouteAccess;
+use crate::{AppState, GatewayError, GatewayFallbackReason};
+
+use super::{
+    build_direct_plan_bypass_cache_key, execute_sync_plan_and_reports_with_transfer_tracker,
+    maybe_execute_sync_via_local_decision, maybe_execute_sync_via_local_gemini_files_decision,
+    maybe_execute_sync_via_local_image_decision,
+    maybe_execute_sync_via_local_openai_responses_decision,
+    maybe_execute_sync_via_local_same_format_provider_decision,
+    maybe_execute_sync_via_local_standard_decision, maybe_execute_sync_via_local_video_decision,
+    maybe_execute_sync_via_plan_fallback, maybe_execute_sync_via_remote_decision,
+    parse_local_request_body, should_skip_direct_plan, LocalExecutionRequestOutcome,
+    ProviderTransferTracker,
+};
+
+pub(crate) async fn maybe_execute_via_sync_decision_path(
+    state: &AppState,
+    parts: &http::request::Parts,
+    body_bytes: &Bytes,
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
+    if let LocalExecutionRequestOutcome::Responded(response) =
+        maybe_build_local_video_task_read_response(state, parts, trace_id, decision).await?
+    {
+        return Ok(LocalExecutionRequestOutcome::Responded(response));
+    }
+
+    let Some(plan_kind) = resolve_execution_runtime_sync_plan_kind(parts, decision) else {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    };
+
+    let Some((body_json, body_base64)) = parse_local_request_body(parts, body_bytes) else {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    };
+
+    let mut planning_parts = parts.clone();
+    if crate::ai_serving::is_json_request(&planning_parts.headers) {
+        if let Ok(decoded_body) = crate::ai_serving::decoded_request_body_bytes(
+            &planning_parts.headers,
+            body_bytes.as_ref(),
+        ) {
+            planning_parts
+                .extensions
+                .insert(OriginalRequestPayload::from_parsed_json(
+                    body_json.clone(),
+                    decoded_body.as_ref(),
+                ));
+        }
+    }
+    let parts = &planning_parts;
+
+    if let Some(stream_plan_kind) = resolve_execution_runtime_stream_plan_kind(parts, decision) {
+        if is_matching_stream_request(stream_plan_kind, parts, &body_json, body_base64.as_deref()) {
+            return Ok(LocalExecutionRequestOutcome::NoPath);
+        }
+    }
+
+    let bypass_cache_key =
+        build_direct_plan_bypass_cache_key(plan_kind, parts, body_bytes, decision);
+    if should_skip_direct_plan(state, &bypass_cache_key) {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    }
+
+    let port = GatewaySyncExecutionPathPort {
+        state,
+        parts,
+        trace_id,
+        decision,
+        body_json: &body_json,
+        body_base64,
+        body_is_empty: body_bytes.is_empty(),
+        plan_kind,
+        bypass_cache_key,
+        scheduler_supported: supports_sync_execution_decision_kind(plan_kind),
+        transfer_tracker: ProviderTransferTracker::for_request(parts),
+    };
+
+    Ok(from_ai_serving_outcome(
+        run_ai_sync_execution_path(&port).await?,
+    ))
+}
+
+struct GatewaySyncExecutionPathPort<'a> {
+    state: &'a AppState,
+    parts: &'a http::request::Parts,
+    trace_id: &'a str,
+    decision: &'a GatewayControlDecision,
+    body_json: &'a serde_json::Value,
+    body_base64: Option<String>,
+    body_is_empty: bool,
+    plan_kind: &'a str,
+    bypass_cache_key: String,
+    scheduler_supported: bool,
+    transfer_tracker: ProviderTransferTracker,
+}
+
+#[async_trait]
+impl AiSyncExecutionPathPort for GatewaySyncExecutionPathPort<'_> {
+    type Response = Response<Body>;
+    type Exhaustion = super::LocalExecutionExhaustion;
+    type Error = GatewayError;
+
+    fn scheduler_decision_supported(&self) -> bool {
+        self.scheduler_supported
+    }
+
+    async fn execute_sync_step(
+        &self,
+        step: AiSyncExecutionStep,
+    ) -> Result<AiServingExecutionOutcome<Self::Response, Self::Exhaustion>, Self::Error> {
+        let outcome = match step {
+            AiSyncExecutionStep::VideoTaskFollowUp => {
+                maybe_execute_local_video_task_follow_up_sync(
+                    self.state,
+                    self.parts,
+                    self.body_json,
+                    self.trace_id,
+                    self.decision,
+                    self.plan_kind,
+                    &self.transfer_tracker,
+                )
+                .await?
+            }
+            AiSyncExecutionStep::LocalVideo => {
+                maybe_execute_sync_via_local_video_decision(
+                    self.state,
+                    self.parts,
+                    self.body_json,
+                    self.trace_id,
+                    self.decision,
+                    self.plan_kind,
+                    &self.transfer_tracker,
+                )
+                .await?
+            }
+            AiSyncExecutionStep::LocalImage => {
+                maybe_execute_sync_via_local_image_decision(
+                    self.state,
+                    self.parts,
+                    self.body_json,
+                    self.body_base64.as_deref(),
+                    self.trace_id,
+                    self.decision,
+                    self.plan_kind,
+                    &self.transfer_tracker,
+                )
+                .await?
+            }
+            AiSyncExecutionStep::LocalOpenAiChat => {
+                maybe_execute_sync_via_local_decision(
+                    self.state,
+                    self.parts,
+                    self.trace_id,
+                    self.decision,
+                    self.body_json,
+                    self.plan_kind,
+                    &self.transfer_tracker,
+                )
+                .await?
+            }
+            AiSyncExecutionStep::LocalOpenAiResponses => {
+                maybe_execute_sync_via_local_openai_responses_decision(
+                    self.state,
+                    self.parts,
+                    self.trace_id,
+                    self.decision,
+                    self.body_json,
+                    self.plan_kind,
+                    &self.transfer_tracker,
+                )
+                .await?
+            }
+            AiSyncExecutionStep::LocalStandardFamily => {
+                maybe_execute_sync_via_local_standard_decision(
+                    self.state,
+                    self.parts,
+                    self.trace_id,
+                    self.decision,
+                    self.body_json,
+                    self.plan_kind,
+                    &self.transfer_tracker,
+                )
+                .await?
+            }
+            AiSyncExecutionStep::LocalSameFormatProvider => {
+                maybe_execute_sync_via_local_same_format_provider_decision(
+                    self.state,
+                    self.parts,
+                    self.trace_id,
+                    self.decision,
+                    self.body_json,
+                    self.plan_kind,
+                    &self.transfer_tracker,
+                )
+                .await?
+            }
+            AiSyncExecutionStep::LocalGeminiFiles => {
+                maybe_execute_sync_via_local_gemini_files_decision(
+                    self.state,
+                    self.parts,
+                    self.body_json,
+                    self.body_base64.as_deref(),
+                    self.body_is_empty,
+                    self.trace_id,
+                    self.decision,
+                    self.plan_kind,
+                    &self.transfer_tracker,
+                )
+                .await?
+            }
+            AiSyncExecutionStep::RemoteDecision => {
+                if let Some(response) = maybe_execute_sync_via_remote_decision(
+                    self.state,
+                    self.parts,
+                    self.trace_id,
+                    self.decision,
+                    self.body_json,
+                    self.plan_kind,
+                )
+                .await?
+                {
+                    LocalExecutionRequestOutcome::Responded(response)
+                } else {
+                    LocalExecutionRequestOutcome::NoPath
+                }
+            }
+        };
+        Ok(to_ai_serving_outcome(outcome))
+    }
+
+    async fn execute_sync_plan_fallback(
+        &self,
+        reason: AiPlanFallbackReason,
+    ) -> Result<AiServingExecutionOutcome<Self::Response, Self::Exhaustion>, Self::Error> {
+        let outcome = maybe_execute_sync_via_plan_fallback(
+            self.state,
+            self.parts,
+            self.trace_id,
+            self.decision,
+            self.body_json,
+            self.body_base64.clone(),
+            self.plan_kind,
+            self.bypass_cache_key.clone(),
+            gateway_fallback_reason(reason),
+            &self.transfer_tracker,
+        )
+        .await?;
+        Ok(to_ai_serving_outcome(outcome))
+    }
+}
+
+fn to_ai_serving_outcome(
+    outcome: LocalExecutionRequestOutcome,
+) -> AiServingExecutionOutcome<Response<Body>, super::LocalExecutionExhaustion> {
+    match outcome {
+        LocalExecutionRequestOutcome::Responded(response) => {
+            if super::is_deferred_upstream_response(&response) {
+                AiServingExecutionOutcome::Deferred(response)
+            } else {
+                AiServingExecutionOutcome::Responded(response)
+            }
+        }
+        LocalExecutionRequestOutcome::Exhausted(outcome) => {
+            AiServingExecutionOutcome::Exhausted(outcome)
+        }
+        LocalExecutionRequestOutcome::NoPath => AiServingExecutionOutcome::NoPath,
+    }
+}
+
+fn from_ai_serving_outcome(
+    outcome: AiServingExecutionOutcome<Response<Body>, super::LocalExecutionExhaustion>,
+) -> LocalExecutionRequestOutcome {
+    match outcome {
+        AiServingExecutionOutcome::Responded(response) => {
+            LocalExecutionRequestOutcome::Responded(response)
+        }
+        AiServingExecutionOutcome::Deferred(response) => {
+            LocalExecutionRequestOutcome::Responded(response)
+        }
+        AiServingExecutionOutcome::Exhausted(outcome) => {
+            LocalExecutionRequestOutcome::Exhausted(outcome)
+        }
+        AiServingExecutionOutcome::NoPath => LocalExecutionRequestOutcome::NoPath,
+    }
+}
+
+fn gateway_fallback_reason(reason: AiPlanFallbackReason) -> GatewayFallbackReason {
+    match reason {
+        AiPlanFallbackReason::RemoteDecisionMiss => GatewayFallbackReason::RemoteDecisionMiss,
+        AiPlanFallbackReason::SchedulerDecisionUnsupported => {
+            GatewayFallbackReason::SchedulerDecisionUnsupported
+        }
+    }
+}
+
+async fn maybe_build_local_video_task_read_response(
+    state: &AppState,
+    parts: &http::request::Parts,
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
+    if parts.method != http::Method::GET || decision.route_kind.as_deref() != Some("video") {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    }
+
+    if crate::video_tasks::resolve_video_task_read_lookup_key(
+        decision.route_family.as_deref(),
+        parts.uri.path(),
+    )
+    .is_none()
+    {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    }
+
+    let Some(user_id) = decision
+        .auth_context
+        .as_ref()
+        .filter(|auth_context| auth_context.access_allowed)
+        .map(|auth_context| auth_context.user_id.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return build_video_task_not_found_outcome(trace_id, decision);
+    };
+
+    if state
+        .hydrate_video_task_for_route_for_user(
+            decision.route_family.as_deref(),
+            parts.uri.path(),
+            user_id,
+        )
+        .await?
+        == VideoTaskRouteAccess::Denied
+    {
+        return build_video_task_not_found_outcome(trace_id, decision);
+    }
+
+    let refresh_plan = state.video_tasks.prepare_read_refresh_sync_plan_for_user(
+        decision.route_family.as_deref(),
+        parts.uri.path(),
+        user_id,
+        trace_id,
+    );
+
+    if let Some(refresh_plan) = refresh_plan {
+        state.execute_video_task_refresh_plan(&refresh_plan).await?;
+    }
+
+    let read_response = state.video_tasks.read_response_for_user(
+        decision.route_family.as_deref(),
+        parts.uri.path(),
+        user_id,
+    );
+    let read_response = match read_response {
+        Some(read_response) => Some(read_response),
+        None => {
+            state
+                .read_data_backed_video_task_response_for_user(
+                    decision.route_family.as_deref(),
+                    parts.uri.path(),
+                    user_id,
+                )
+                .await?
+        }
+    };
+    let Some(read_response) = read_response else {
+        return build_video_task_not_found_outcome(trace_id, decision);
+    };
+
+    let body_bytes = serde_json::to_vec(&read_response.body_json)
+        .map_err(|err| GatewayError::Internal(err.to_string()))?;
+    let mut headers = BTreeMap::new();
+    headers.insert("content-type".to_string(), "application/json".to_string());
+    headers.insert("content-length".to_string(), body_bytes.len().to_string());
+
+    Ok(LocalExecutionRequestOutcome::Responded(
+        build_client_response_from_parts(
+            read_response.status_code,
+            &headers,
+            Body::from(body_bytes),
+            trace_id,
+            Some(decision),
+        )?,
+    ))
+}
+
+async fn maybe_execute_local_video_task_follow_up_sync(
+    state: &AppState,
+    parts: &http::request::Parts,
+    body_json: &serde_json::Value,
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    plan_kind: &str,
+    transfer_tracker: &ProviderTransferTracker,
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
+    if !matches!(
+        plan_kind,
+        OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND
+            | OPENAI_VIDEO_CANCEL_SYNC_PLAN_KIND
+            | OPENAI_VIDEO_DELETE_SYNC_PLAN_KIND
+            | GEMINI_VIDEO_CANCEL_SYNC_PLAN_KIND
+    ) {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    }
+
+    let auth_context = resolve_execution_runtime_auth_context(
+        state,
+        decision,
+        &parts.headers,
+        &parts.uri,
+        trace_id,
+    )
+    .await?;
+    let Some(auth_context) = auth_context.filter(|auth_context| {
+        auth_context.access_allowed && !auth_context.user_id.trim().is_empty()
+    }) else {
+        return build_video_task_not_found_outcome(trace_id, decision);
+    };
+    if state
+        .hydrate_video_task_for_route_for_user(
+            decision.route_family.as_deref(),
+            parts.uri.path(),
+            &auth_context.user_id,
+        )
+        .await?
+        != VideoTaskRouteAccess::Allowed
+    {
+        return build_video_task_not_found_outcome(trace_id, decision);
+    }
+    let Some(follow_up) = state.video_tasks.prepare_follow_up_sync_plan_for_user(
+        plan_kind,
+        parts.uri.path(),
+        Some(body_json),
+        Some(&auth_context),
+        trace_id,
+    ) else {
+        return build_video_task_not_found_outcome(trace_id, decision);
+    };
+
+    execute_sync_plan_and_reports_with_transfer_tracker(
+        state,
+        parts,
+        trace_id,
+        decision,
+        plan_kind,
+        vec![AiSyncAttempt {
+            plan: follow_up.plan,
+            report_kind: follow_up.report_kind,
+            report_context: follow_up.report_context,
+        }],
+        transfer_tracker,
+    )
+    .await
+}
+
+fn build_video_task_not_found_outcome(
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
+    let body_bytes = serde_json::to_vec(&crate::video_tasks::not_found_body())
+        .map_err(|err| GatewayError::Internal(err.to_string()))?;
+    let mut headers = BTreeMap::new();
+    headers.insert("content-type".to_string(), "application/json".to_string());
+    headers.insert("content-length".to_string(), body_bytes.len().to_string());
+    Ok(LocalExecutionRequestOutcome::Responded(
+        build_client_response_from_parts(
+            404,
+            &headers,
+            Body::from(body_bytes),
+            trace_id,
+            Some(decision),
+        )?,
+    ))
+}

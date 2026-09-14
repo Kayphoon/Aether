@@ -1,8 +1,13 @@
 import client from '../client'
 import type { EndpointAPIKey, AllowedModels } from './types'
+import type { QuotaStatusSnapshot } from './types'
 
 // Re-export types for convenience
 export type { EndpointAPIKey, AllowedModels }
+
+interface KeyRequestOptions {
+  timeout?: number
+}
 
 /**
  * 能力定义类型
@@ -32,7 +37,7 @@ export interface ModelCapabilitiesResponse {
  * 获取所有能力定义
  */
 export async function getAllCapabilities(): Promise<CapabilityDefinition[]> {
-  const response = await client.get('/api/capabilities')
+  const response = await client.get<{ capabilities: CapabilityDefinition[] }>('/api/capabilities')
   return response.data.capabilities
 }
 
@@ -40,7 +45,7 @@ export async function getAllCapabilities(): Promise<CapabilityDefinition[]> {
  * 获取用户可配置的能力列表
  */
 export async function getUserConfigurableCapabilities(): Promise<CapabilityDefinition[]> {
-  const response = await client.get('/api/capabilities/user-configurable')
+  const response = await client.get<{ capabilities: CapabilityDefinition[] }>('/api/capabilities/user-configurable')
   return response.data.capabilities
 }
 
@@ -48,7 +53,7 @@ export async function getUserConfigurableCapabilities(): Promise<CapabilityDefin
  * 获取指定模型支持的能力列表
  */
 export async function getModelCapabilities(modelName: string): Promise<ModelCapabilitiesResponse> {
-  const response = await client.get(`/api/capabilities/model/${encodeURIComponent(modelName)}`)
+  const response = await client.get<ModelCapabilitiesResponse>(`/api/capabilities/model/${encodeURIComponent(modelName)}`)
   return response.data
 }
 
@@ -56,14 +61,14 @@ export async function getModelCapabilities(modelName: string): Promise<ModelCapa
  * 获取完整的 API Key（用于查看和复制）
  */
 export interface RevealKeyResult {
-  auth_type: 'api_key' | 'service_account' | 'oauth'
+  auth_type: 'api_key' | 'service_account' | 'oauth' | 'bearer'
   api_key?: string
   refresh_token?: string
   auth_config?: string | Record<string, unknown>
 }
 
 export async function revealEndpointKey(keyId: string): Promise<RevealKeyResult> {
-  const response = await client.get(`/api/admin/endpoints/keys/${keyId}/reveal`)
+  const response = await client.get<RevealKeyResult>(`/api/admin/endpoints/keys/${keyId}/reveal`)
   return response.data
 }
 
@@ -71,7 +76,7 @@ export async function revealEndpointKey(keyId: string): Promise<RevealKeyResult>
  * 导出 OAuth Key 凭据（扁平 JSON，用于跨实例迁移）
  */
 export async function exportKey(keyId: string): Promise<Record<string, unknown>> {
-  const response = await client.get(`/api/admin/endpoints/keys/${keyId}/export`)
+  const response = await client.get<Record<string, unknown>>(`/api/admin/endpoints/keys/${keyId}/export`)
   return response.data
 }
 
@@ -79,7 +84,7 @@ export async function exportKey(keyId: string): Promise<Record<string, unknown>>
  * 删除 Key
  */
 export async function deleteEndpointKey(keyId: string): Promise<{ message: string }> {
-  const response = await client.delete(`/api/admin/endpoints/keys/${keyId}`)
+  const response = await client.delete<{ message: string }>(`/api/admin/endpoints/keys/${keyId}`)
   return response.data
 }
 
@@ -93,7 +98,7 @@ export interface BatchDeleteKeysResult {
 }
 
 export async function batchDeleteEndpointKeys(ids: string[]): Promise<BatchDeleteKeysResult> {
-  const response = await client.post('/api/admin/endpoints/keys/batch-delete', { ids })
+  const response = await client.post<BatchDeleteKeysResult>('/api/admin/endpoints/keys/batch-delete', { ids })
   return response.data
 }
 
@@ -104,6 +109,64 @@ export async function batchDeleteEndpointKeys(ids: string[]): Promise<BatchDelet
 /**
  * 获取 Provider 的所有 Keys
  */
+export interface ProviderKeysPageResponse {
+  total: number
+  page: number
+  page_size: number
+  keys: EndpointAPIKey[]
+}
+
+export interface ProviderKeysPageQuery {
+  page?: number
+  page_size?: number
+}
+
+type ProviderKeysPagePayload = ProviderKeysPageResponse | EndpointAPIKey[]
+
+function normalizeProviderKeysPage(
+  value: ProviderKeysPagePayload,
+  page: number,
+  pageSize: number,
+): ProviderKeysPageResponse {
+  if (Array.isArray(value)) {
+    const start = value.length > pageSize ? (page - 1) * pageSize : 0
+    const keys = value.slice(start, start + pageSize)
+    return {
+      total: value.length,
+      page,
+      page_size: pageSize,
+      keys,
+    }
+  }
+
+  const keys = Array.isArray(value.keys) ? value.keys : []
+  return {
+    total: typeof value.total === 'number' && Number.isFinite(value.total)
+      ? value.total
+      : keys.length,
+    page: typeof value.page === 'number' && Number.isFinite(value.page)
+      ? value.page
+      : page,
+    page_size: typeof value.page_size === 'number' && Number.isFinite(value.page_size)
+      ? value.page_size
+      : pageSize,
+    keys,
+  }
+}
+
+export async function getProviderKeysPage(
+  providerId: string,
+  params: ProviderKeysPageQuery = {},
+): Promise<ProviderKeysPageResponse> {
+  const page = params.page ?? 1
+  const pageSize = params.page_size ?? 20
+  const response = await client.get<ProviderKeysPagePayload>(
+    `/api/admin/endpoints/providers/${providerId}/keys`,
+    { params: { page, page_size: pageSize } },
+  )
+  return normalizeProviderKeysPage(response.data, page, pageSize)
+}
+
 export async function getProviderKeys(providerId: string): Promise<EndpointAPIKey[]> {
   // 后端默认 limit=100，这里主动分页拉取，避免账号数 >100 时前端被截断
   const pageSize = 1000
@@ -133,12 +196,15 @@ export async function addProviderKey(
   data: {
     api_formats: string[]  // 支持的 API 格式列表（必填）
     api_key: string
-    auth_type?: 'api_key' | 'service_account' | 'oauth'  // 认证类型
+    auth_type?: 'api_key' | 'service_account' | 'oauth' | 'bearer'  // 认证类型
+    auth_type_by_format?: Record<string, 'api_key' | 'bearer'> | null
+    allow_auth_channel_mismatch_formats?: string[] | null
     auth_config?: Record<string, unknown>  // 认证配置（Vertex AI Service Account JSON）
     name: string
     rate_multipliers?: Record<string, number> | null  // 按 API 格式的成本倍率
     internal_priority?: number
     rpm_limit?: number | null  // RPM 限制（留空=自适应模式）
+    concurrent_limit?: number | null  // 并发请求上限（留空或 0=不限制）
     cache_ttl_minutes?: number
     max_probe_interval_minutes?: number
     allowed_models?: AllowedModels
@@ -149,7 +215,7 @@ export async function addProviderKey(
     model_exclude_patterns?: string[]  // 模型排除规则
   }
 ): Promise<EndpointAPIKey> {
-  const response = await client.post(`/api/admin/endpoints/providers/${providerId}/keys`, data)
+  const response = await client.post<EndpointAPIKey>(`/api/admin/endpoints/providers/${providerId}/keys`, data)
   return response.data
 }
 
@@ -161,13 +227,16 @@ export async function updateProviderKey(
   data: Partial<{
     api_formats: string[]  // 支持的 API 格式列表
     api_key: string
-    auth_type: 'api_key' | 'service_account' | 'oauth'  // 认证类型
+    auth_type: 'api_key' | 'service_account' | 'oauth' | 'bearer'  // 认证类型
+    auth_type_by_format: Record<string, 'api_key' | 'bearer'> | null
+    allow_auth_channel_mismatch_formats: string[] | null
     auth_config: Record<string, unknown>  // 认证配置（Vertex AI Service Account JSON）
     name: string
     rate_multipliers: Record<string, number> | null  // 按 API 格式的成本倍率
     internal_priority: number
     global_priority_by_format: Record<string, number> | null  // 按 API 格式的全局优先级
     rpm_limit: number | null  // RPM 限制（留空=自适应模式）
+    concurrent_limit: number | null  // 并发请求上限（留空或 0=不限制）
     cache_ttl_minutes: number
     max_probe_interval_minutes: number
     allowed_models: AllowedModels
@@ -179,9 +248,14 @@ export async function updateProviderKey(
     model_include_patterns: string[]  // 模型包含规则
     model_exclude_patterns: string[]  // 模型排除规则
     proxy: import('./types').ProxyConfig | null  // Key 级别代理配置
-  }>
+  }>,
+  requestOptions?: KeyRequestOptions,
 ): Promise<EndpointAPIKey> {
-  const response = await client.put(`/api/admin/endpoints/keys/${keyId}`, data)
+  const response = await client.put<EndpointAPIKey>(
+    `/api/admin/endpoints/keys/${keyId}`,
+    data,
+    requestOptions,
+  )
   return response.data
 }
 
@@ -189,7 +263,23 @@ export async function updateProviderKey(
  * 清除 Key 的 OAuth 失效标记
  */
 export async function clearOAuthInvalid(keyId: string): Promise<{ message: string }> {
-  const response = await client.post(`/api/admin/endpoints/keys/${keyId}/clear-oauth-invalid`)
+  const response = await client.post<{ message: string }>(`/api/admin/endpoints/keys/${keyId}/clear-oauth-invalid`)
+  return response.data
+}
+
+/**
+ * 重置 Key 的当前周期统计起点（Codex 号池）
+ */
+export async function resetProviderKeyCycleStats(keyId: string): Promise<{
+  message: string
+  reset_at: number
+  windows: number
+}> {
+  const response = await client.post<{
+  message: string
+  reset_at: number
+  windows: number
+}>(`/api/admin/endpoints/keys/${keyId}/reset-cycle-stats`)
   return response.data
 }
 
@@ -203,9 +293,18 @@ export interface RefreshQuotaResult {
   results: Array<{
     key_id: string
     key_name: string
-    status: 'success' | 'no_metadata' | 'error'
-    // Codex: 额度字段为扁平结构；Antigravity: 返回 { antigravity: { quota_by_model: ... } }
+    status:
+      | 'success'
+      | 'no_metadata'
+      | 'quota_exhausted'
+      | 'workspace_deactivated'
+      | 'auth_invalid'
+      | 'forbidden'
+      | 'banned'
+      | 'error'
+    // provider 级 bucket 数据；前端应按当前 provider_type 包装回 upstream_metadata.<provider_type>
     metadata?: Record<string, unknown>
+    quota_snapshot?: QuotaStatusSnapshot
     message?: string
     status_code?: number
   }>
@@ -216,9 +315,48 @@ export async function refreshProviderQuota(
   keyIds?: string[],
 ): Promise<RefreshQuotaResult> {
   const body = keyIds && keyIds.length > 0 ? { key_ids: keyIds } : undefined
-  const response = await client.post(
+  const response = await client.post<RefreshQuotaResult>(
     `/api/admin/endpoints/providers/${providerId}/refresh-quota`,
     body,
+    { timeout: 5 * 60 * 1000 },
+  )
+  return response.data
+}
+
+export interface ConsumeCodexResetCreditPayload {
+  idempotency_key: string
+  expected_credential_generation: string | null
+}
+
+export interface ConsumeCodexResetCreditResult {
+  key_id: string
+  status: 'success' | 'noop' | 'unknown' | 'error' | string
+  outcome:
+    | 'reset'
+    | 'already_redeemed'
+    | 'nothing_to_reset'
+    | 'no_credit'
+    | 'historical_replay'
+    | 'credential_changed'
+    | 'unknown'
+    | 'error'
+    | string
+  idempotency_key: string
+  refresh_status?: 'success' | 'failed' | string
+  refresh_error?: string | null
+  metadata?: Record<string, unknown>
+  quota_snapshot?: QuotaStatusSnapshot
+  message?: string
+  status_code?: number
+}
+
+export async function consumeCodexResetCredit(
+  keyId: string,
+  payload: ConsumeCodexResetCreditPayload,
+): Promise<ConsumeCodexResetCreditResult> {
+  const response = await client.post<ConsumeCodexResetCreditResult>(
+    `/api/admin/endpoints/keys/${keyId}/codex-reset-credit/consume`,
+    payload,
     { timeout: 5 * 60 * 1000 },
   )
   return response.data
@@ -249,7 +387,7 @@ export async function batchImportOAuth(
   credentials: string,
   proxyNodeId?: string
 ): Promise<BatchImportResult> {
-  const response = await client.post(`/api/admin/provider-oauth/providers/${providerId}/batch-import`, {
+  const response = await client.post<BatchImportResult>(`/api/admin/provider-oauth/providers/${providerId}/batch-import`, {
     credentials,
     proxy_node_id: proxyNodeId || undefined,
   })

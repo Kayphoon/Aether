@@ -5,7 +5,9 @@ import { formatBalanceExtraFromSchema, type CredentialsSchema } from '@/features
 import type { BalanceExtraItem } from '@/features/providers/auth-templates'
 import { log } from '@/utils/logger'
 
-const MAX_BALANCE_RETRIES = 3
+const MAX_BALANCE_RETRIES = 2
+const PENDING_BALANCE_RETRY_BASE_DELAY_MS = 12_000
+const PENDING_BALANCE_RETRY_MAX_DELAY_MS = 60_000
 
 export function useProviderBalance() {
   // 余额数据缓存 {providerId: ActionResultResponse}
@@ -46,7 +48,7 @@ export function useProviderBalance() {
       const schemas: Record<string, CredentialsSchema> = {}
       for (const arch of archs) {
         if (arch.credentials_schema) {
-          schemas[arch.architecture_id] = arch.credentials_schema as CredentialsSchema
+          schemas[arch.architecture_id] = arch.credentials_schema
         }
       }
       architectureSchemas.value = schemas
@@ -57,7 +59,7 @@ export function useProviderBalance() {
   }
 
   // 异步加载余额数据（使用批量接口）
-  async function loadBalances(providers: ProviderWithEndpointsSummary[], fullReload = true) {
+  async function loadBalances(providers: Pick<ProviderWithEndpointsSummary, 'id' | 'ops_configured'>[], fullReload = true) {
     if (fullReload) {
       balanceCache.value = {}
     }
@@ -86,7 +88,7 @@ export function useProviderBalance() {
         }
       }
 
-      // 如果有 pending 状态的 provider，3秒后自动重试
+      // 如果有 pending 状态的 provider，延后重试，避免把后台刷新队列打成高频轮询
       if (pendingProviderIds.length > 0) {
         const timerId = setTimeout(() => {
           pendingTimers.delete(timerId)
@@ -94,7 +96,7 @@ export function useProviderBalance() {
           if (currentVersion === balanceLoadVersion) {
             retryPendingBalances(pendingProviderIds, currentVersion, 0)
           }
-        }, 3000)
+        }, PENDING_BALANCE_RETRY_BASE_DELAY_MS)
         pendingTimers.add(timerId)
       }
     } catch (e) {
@@ -106,6 +108,7 @@ export function useProviderBalance() {
   async function retryPendingBalances(providerIds: string[], loadVersion: number, retryCount: number) {
     try {
       const results = await batchQueryBalance(providerIds)
+      if (loadVersion !== balanceLoadVersion) return
       const stillPending: string[] = []
 
       for (const [providerId, result] of Object.entries(results)) {
@@ -118,7 +121,10 @@ export function useProviderBalance() {
 
       // 如果还有 pending 且未达到最大重试次数，继续重试（指数退避）
       if (stillPending.length > 0 && retryCount < MAX_BALANCE_RETRIES) {
-        const delay = 3000 * Math.pow(1.5, retryCount) // 3s, 4.5s, 6.75s
+        const delay = Math.min(
+          PENDING_BALANCE_RETRY_BASE_DELAY_MS * Math.pow(2, retryCount),
+          PENDING_BALANCE_RETRY_MAX_DELAY_MS,
+        )
         const timerId = setTimeout(() => {
           pendingTimers.delete(timerId)
           // 检查版本号，确保没有新的加载请求
@@ -168,14 +174,16 @@ export function useProviderBalance() {
       return null
     }
     const data = result.data as Record<string, unknown>
-    const extra = data.extra
-    if (!extra || extra.balance === undefined || extra.points === undefined) {
+    const extra = typeof data.extra === 'object' && data.extra !== null
+      ? data.extra as Record<string, unknown>
+      : null
+    if (!extra || typeof extra.balance !== 'number' || typeof extra.points !== 'number') {
       return null
     }
     return {
       balance: extra.balance,
       points: extra.points,
-      currency: data.currency || 'USD',
+      currency: typeof data.currency === 'string' && data.currency ? data.currency : 'USD',
     }
   }
 
@@ -219,13 +227,15 @@ export function useProviderBalance() {
       return null
     }
     const data = result.data as Record<string, unknown>
-    const extra = data.extra
-    if (!extra || extra.checkin_success === undefined) {
+    const extra = typeof data.extra === 'object' && data.extra !== null
+      ? data.extra as Record<string, unknown>
+      : null
+    if (!extra || (extra.checkin_success !== null && typeof extra.checkin_success !== 'boolean')) {
       return null
     }
     return {
       success: extra.checkin_success,
-      message: extra.checkin_message || '',
+      message: typeof extra.checkin_message === 'string' ? extra.checkin_message : '',
     }
   }
 
@@ -239,13 +249,15 @@ export function useProviderBalance() {
       return null
     }
     const data = result.data as Record<string, unknown>
-    const extra = data.extra
+    const extra = typeof data.extra === 'object' && data.extra !== null
+      ? data.extra as Record<string, unknown>
+      : null
     if (!extra || !extra.cookie_expired) {
       return null
     }
     return {
       expired: true,
-      message: extra.cookie_expired_message || 'Cookie 已失效',
+      message: typeof extra.cookie_expired_message === 'string' ? extra.cookie_expired_message : 'Cookie 已失效',
     }
   }
 
@@ -291,7 +303,9 @@ export function useProviderBalance() {
     }
 
     const data = result.data as Record<string, unknown>
-    const extra = data.extra
+    const extra = typeof data.extra === 'object' && data.extra !== null
+      ? data.extra as Record<string, unknown>
+      : null
     if (!extra) return []
 
     // 从 schema 缓存中获取格式化配置
@@ -314,6 +328,7 @@ export function useProviderBalance() {
 
   // 组件卸载时清理
   function cleanup() {
+    balanceLoadVersion++
     stopTick()
     pendingTimers.forEach(clearTimeout)
     pendingTimers.clear()

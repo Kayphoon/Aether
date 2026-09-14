@@ -1,6 +1,39 @@
 import apiClient from './client'
-import { cachedRequest, buildCacheKey } from '@/utils/cache'
+import type { ModelTestCapabilities } from './endpoints/types'
+import axios, { type AxiosRequestConfig } from 'axios'
+import { cache, cachedRequest, buildCacheKey } from '@/utils/cache'
 import type { BillingSummary } from './auth'
+import type { ApiKeyInstallSession, InstallSessionTargetSystem, InstallTargetCli } from './me'
+
+const SYSTEM_DATA_IMPORT_TIMEOUT_MS = 10 * 60 * 1000
+const ALL_SYSTEM_CONFIGS_CACHE_KEY = 'admin:system:configs'
+
+export interface AdminTimeSeriesPoint extends Record<string, unknown> {
+  date: string
+  total_cost: number
+}
+
+export interface AdminSystemConfigItem {
+  key: string
+  value: unknown
+  description?: string
+  is_set?: boolean
+}
+
+export interface SystemDataImportOptions {
+  onUploadProgress?: AxiosRequestConfig['onUploadProgress']
+}
+
+function extractConflictPayload(error: unknown): ManualUsageCleanupConflict | null {
+  if (!axios.isAxiosError(error) || error.response?.status !== 409) {
+    return null
+  }
+  const data = error.response.data as ManualUsageCleanupConflict | undefined
+  if (!data || data.detail !== 'usage_cleanup_already_running') {
+    return null
+  }
+  return data
+}
 
 // LDAP 配置导出结构
 export interface LDAPConfigExport {
@@ -73,52 +106,167 @@ export interface ProxyNodeExport {
 export interface UsersExportData {
   version: string
   exported_at: string
+  user_groups?: UserGroupExport[]
   users: UserExport[]
   standalone_keys?: StandaloneKeyExport[]
+  usage_aggregates?: UsageAggregateSnapshot
+}
+
+export interface AggregateExportData {
+  version: string
+  exported_at: string
+  config_data: ConfigExportData
+  user_data: UsersExportData
+}
+
+export type S3BackupScope = 'config' | 'users' | 'data'
+
+export interface S3BackupRunResponse {
+  message: string
+  task: {
+    id: string
+    task_key: string
+    status: string
+    progress_message?: string
+  }
+}
+
+export interface UserGroupExport {
+  id?: string
+  name: string
+  description?: string | null
+  allowed_providers?: string[] | null
+  allowed_providers_mode?: 'inherit' | 'unrestricted' | 'specific' | 'deny_all'
+  allowed_api_formats?: string[] | null
+  allowed_api_formats_mode?: 'inherit' | 'unrestricted' | 'specific' | 'deny_all'
+  allowed_models?: string[] | null
+  allowed_models_mode?: 'inherit' | 'unrestricted' | 'specific' | 'deny_all'
+  rate_limit?: number | null
+  rate_limit_mode?: 'inherit' | 'system' | 'custom'
 }
 
 export interface UserExport {
+  id?: string
   email: string
   email_verified?: boolean
   username: string
-  password_hash: string
+  password_hash?: string | null
   role: string
   allowed_providers?: string[] | null
+  allowed_providers_mode?: 'inherit' | 'unrestricted' | 'specific' | 'deny_all'
   allowed_api_formats?: string[] | null
+  allowed_api_formats_mode?: 'inherit' | 'unrestricted' | 'specific' | 'deny_all'
   allowed_models?: string[] | null
+  allowed_models_mode?: 'inherit' | 'unrestricted' | 'specific' | 'deny_all'
   rate_limit?: number | null  // null = 跟随系统默认，0 = 不限制
+  rate_limit_mode?: 'inherit' | 'system' | 'custom'
   model_capability_settings?: Record<string, Record<string, boolean>>
+  feature_settings?: Record<string, unknown> | null
+  group_ids?: string[]
+  group_names?: string[]
   unlimited?: boolean
   wallet?: BillingSummary | null
   is_active: boolean
+  request_count?: number
+  total_tokens?: number
   api_keys: UserApiKeyExport[]
 }
 
 export interface UserApiKeyExport {
+  api_key_id?: string
+  // Legacy 1.3-1.5 import-only credential fields. Version 1.6 exports omit them.
   key?: string | null
-  key_hash: string
+  key_hash?: string | null
   key_encrypted?: string | null
+  credential_state?: 'not_exported'
   name?: string | null
   is_standalone: boolean
   allowed_providers?: string[] | null
   allowed_api_formats?: string[] | null
   allowed_models?: string[] | null
+  ip_rules?: string[] | null
   rate_limit?: number | null  // legacy/null 兼容；1.3+ standalone null = 跟随系统默认
   concurrent_limit?: number | null
   force_capabilities?: Record<string, boolean>
+  feature_settings?: Record<string, unknown> | null
   is_active: boolean
   expires_at?: string | null
   auto_delete_on_expiry?: boolean
   total_requests?: number
+  total_tokens?: number
   total_cost_usd?: number
 }
 
 // 独立余额 Key 导出结构（与 UserApiKeyExport 相同，但不包含 is_standalone）
 export type StandaloneKeyExport = Omit<UserApiKeyExport, 'is_standalone'>
 
+export interface StatsDailyAggregateExport {
+  date_unix_secs: number
+  total_requests: number
+  success_requests: number
+  error_requests: number
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  total_cost: number
+  actual_total_cost: number
+  is_complete: boolean
+  aggregated_at_unix_secs?: number | null
+}
+
+export interface StatsUserDailyAggregateExport {
+  user_id: string
+  username?: string | null
+  date_unix_secs: number
+  total_requests: number
+  success_requests: number
+  error_requests: number
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  total_cost: number
+}
+
+export interface StatsDailyApiKeyAggregateExport {
+  api_key_id: string
+  api_key_name?: string | null
+  date_unix_secs: number
+  total_requests: number
+  success_requests: number
+  error_requests: number
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  total_cost: number
+}
+
+export interface UsageAggregateSnapshot {
+  stats_daily?: StatsDailyAggregateExport[]
+  stats_user_daily?: StatsUserDailyAggregateExport[]
+  stats_daily_api_key?: StatsDailyApiKeyAggregateExport[]
+}
+
+export interface UsageAggregateImportCounter {
+  created: number
+  updated: number
+  skipped: number
+}
+
+export interface UsageAggregateImportSummary {
+  stats_daily: UsageAggregateImportCounter
+  stats_user_daily: UsageAggregateImportCounter
+  stats_daily_api_key: UsageAggregateImportCounter
+  skipped_unmapped_user_daily: number
+  skipped_unmapped_api_key_daily: number
+}
+
 export interface GlobalModelExport {
   name: string
   display_name: string
+  usage_count?: number | null
   default_price_per_request?: number | null
   default_tiered_pricing: Record<string, unknown>
   supported_capabilities?: string[] | null
@@ -173,6 +321,8 @@ export interface ProviderKeyExport {
   rate_multipliers?: Record<string, number> | null
   internal_priority?: number
   global_priority_by_format?: Record<string, number> | null
+  auth_type_by_format?: Record<string, 'api_key' | 'bearer'> | null
+  allow_auth_channel_mismatch_formats?: string[] | null
   rpm_limit?: number | null
   allowed_models?: string[] | null
   capabilities?: Record<string, boolean>
@@ -198,6 +348,7 @@ export interface ModelExport {
   supports_streaming?: boolean | null
   supports_extended_thinking?: boolean | null
   supports_image_generation?: boolean | null
+  supports_embedding?: boolean | null
   is_active: boolean
   config?: Record<string, unknown>
 }
@@ -233,14 +384,161 @@ export interface EmailTemplateResetResponse {
   }
 }
 
+export interface CleanupRunRecord {
+  id: string
+  kind: string
+  trigger: string
+  status: 'processing' | 'completed' | 'failed'
+  message: string
+  started_at_unix_secs: number
+  completed_at_unix_secs: number | null
+  duration_ms: number | null
+  summary: Record<string, unknown>
+  error: string | null
+}
+
+export interface CleanupRunListResponse {
+  items: CleanupRunRecord[]
+}
+
+export interface CleanupTaskResponse {
+  message: string
+  task: CleanupRunRecord
+}
+
+export interface ManualUsageCleanupSummary {
+  body_externalized: number
+  legacy_body_refs_migrated: number
+  body_cleaned: number
+  header_cleaned: number
+  keys_cleaned: number
+  records_deleted: number
+}
+
+export type ManualUsageCleanupMode = 'policy' | 'older_than_days' | 'before_now'
+export type ManualUsageCleanupTarget = 'detail_body' | 'compressed_body' | 'headers' | 'records'
+
+export interface ManualUsageCleanupTargets {
+  detail_body: boolean
+  compressed_body: boolean
+  headers: boolean
+  records: boolean
+  expired_keys: boolean
+}
+
+export interface ManualUsageCleanupRequest {
+  mode?: ManualUsageCleanupMode
+  older_than_days?: number
+  targets?: ManualUsageCleanupTarget[]
+}
+
+export interface ManualUsageCleanupTaskResponse {
+  message: string
+  mode: ManualUsageCleanupMode
+  requested_older_than_days: number | null
+  targets: ManualUsageCleanupTargets
+  task: CleanupRunRecord
+}
+
+export interface ManualUsageCleanupPreview {
+  mode: ManualUsageCleanupMode
+  requested_older_than_days: number | null
+  targets: ManualUsageCleanupTargets
+  effective_cutoffs: {
+    detail: string
+    compressed: string
+    header: string
+    log: string
+  }
+  counts: {
+    detail: number
+    compressed: number
+    header: number
+    log: number
+  }
+}
+
+export interface ManualUsageCleanupConflict {
+  detail: 'usage_cleanup_already_running'
+  message: string
+}
+
 // 检查更新响应
 export interface CheckUpdateResponse {
   current_version: string
   latest_version: string | null
   has_update: boolean
+  updatable: boolean
+  update_blocker: string | null
   release_url: string | null
   release_notes: string | null
   published_at: string | null
+  error: string | null
+}
+
+export interface SystemUpdateCapabilityResponse {
+  supported: boolean
+  build_type: string
+  update_strategy?: 'self' | 'docker' | 'manual' | string
+  strategy?: 'self' | 'docker' | 'manual' | string
+  deployment_topology?: 'single-node' | 'multi-node' | string
+  topology?: 'single-node' | 'multi-node' | string
+  enabled: boolean
+  rollback_available: boolean
+  task_status: string
+  task_error: string | null
+  install_root?: string
+  base_dir?: string
+  data_dir?: string
+  logs_dir?: string
+  docker_update_command?: string | null
+  message: string
+}
+
+export interface UpdateTaskStatusResponse {
+  phase: string
+  error: string | null
+  output: string | null
+  progress_label?: string | null
+  downloaded_bytes?: number | null
+  total_bytes?: number | null
+  progress_percent?: number | null
+}
+
+export interface UpdateHistoryEntry {
+  timestamp: string
+  operation: string
+  success: boolean
+  error: string | null
+  output_tail: string | null
+}
+
+export interface UpdateHistoryResponse {
+  entries: UpdateHistoryEntry[]
+}
+
+export interface ApplySystemUpdateResponse {
+  message: string
+  started: boolean
+  need_restart: boolean
+}
+
+export interface ReleaseEntry {
+  version: string
+  release_url: string | null
+  release_notes: string | null
+  published_at: string | null
+  tarball_url?: string | null
+  sha256sums_url?: string | null
+  is_current: boolean
+  is_newer: boolean
+  updatable: boolean
+  update_blocker: string | null
+}
+
+export interface ReleasesListResponse {
+  current_version: string
+  releases: ReleaseEntry[]
   error: string | null
 }
 
@@ -293,8 +591,11 @@ export interface ProviderModelsQueryResponse {
       owned_by?: string
       display_name?: string
       api_format?: string
+      api_formats?: string[]
+      model_test_capabilities?: ModelTestCapabilities | null
     }>
     error?: string
+    warning?: string
     from_cache?: boolean
   }
   provider: {
@@ -315,11 +616,23 @@ export interface UsersImportRequest extends UsersExportData {
 export interface UsersImportResponse {
   message: string
   stats: {
+    user_groups?: { created: number; updated: number; skipped: number }
     users: { created: number; updated: number; skipped: number }
-    api_keys: { created: number; skipped: number }
-    standalone_keys?: { created: number; skipped: number }
+    api_keys: { created: number; updated?: number; skipped: number }
+    standalone_keys?: { created: number; updated?: number; skipped: number }
+    usage_aggregates?: UsageAggregateImportSummary
     errors: string[]
   }
+}
+
+export interface AggregateImportRequest extends AggregateExportData {
+  merge_mode: 'skip' | 'overwrite' | 'error'
+}
+
+export interface AggregateImportResponse {
+  message: string
+  config: ConfigImportResponse
+  users: UsersImportResponse
 }
 
 export interface ConfigImportResponse {
@@ -333,6 +646,7 @@ export interface ConfigImportResponse {
     models: { created: number; updated: number; skipped: number }
     ldap?: { created: number; updated: number; skipped: number }
     oauth?: { created: number; updated: number; skipped: number }
+    system_configs?: { created: number; updated: number; skipped: number }
     errors: string[]
   }
 }
@@ -348,17 +662,21 @@ export interface AdminApiKey {
   is_active: boolean
   is_standalone: boolean  // 是否为独立余额Key
   total_requests?: number
-  total_tokens?: number
+  total_tokens?: number | null
   total_cost_usd?: number
   rate_limit?: number | null  // null = 跟随系统默认，0 = 不限制
+  concurrent_limit?: number | null  // null = 跟随系统默认，0 = 不限制
   allowed_providers?: string[] | null  // 允许的提供商列表
   allowed_api_formats?: string[] | null  // 允许的 API 格式列表
   allowed_models?: string[] | null  // 允许的模型列表
+  ip_rules?: string[] | null  // IP 限制规则
+  feature_settings?: Record<string, unknown> | null
   auto_delete_on_expiry?: boolean  // 过期后是否自动删除
   last_used_at?: string
   expires_at?: string
   created_at: string
   updated_at?: string
+  wallet?: BillingSummary | null
 }
 
 export interface CreateStandaloneApiKeyRequest {
@@ -366,11 +684,14 @@ export interface CreateStandaloneApiKeyRequest {
   allowed_providers?: string[] | null
   allowed_api_formats?: string[] | null
   allowed_models?: string[] | null
+  ip_rules?: string[] | null
   rate_limit?: number | null  // null = 跟随系统默认，0 = 不限制
-  expires_at?: string | null  // ISO 日期字符串，如 "2025-12-31"，null = 永不过期
+  concurrent_limit?: number | null  // null = 跟随系统默认，0 = 不限制
+  expires_at?: string | null  // RFC3339 时间，null = 永不过期
   initial_balance_usd: number | null  // 初始余额，null = 无限制
   unlimited_balance?: boolean | null  // 编辑时仅切换额度模式，不调整余额数值
   auto_delete_on_expiry?: boolean  // 过期后是否自动删除
+  feature_settings?: Record<string, unknown> | null
 }
 
 export interface AdminApiKeysResponse {
@@ -430,6 +751,10 @@ export interface QuotaUsageResponse {
   providers: QuotaUsageProvider[]
 }
 
+export interface AdminAnalyticsRequestOptions {
+  skipCache?: boolean
+}
+
 export interface PercentileItem {
   date: string
   p50_response_time_ms?: number | null
@@ -438,6 +763,62 @@ export interface PercentileItem {
   p50_first_byte_time_ms?: number | null
   p90_first_byte_time_ms?: number | null
   p99_first_byte_time_ms?: number | null
+}
+
+export interface ProviderPerformanceSummary {
+  request_count: number
+  success_rate: number
+  avg_output_tps: number | null
+  avg_first_byte_time_ms: number | null
+  avg_response_time_ms: number | null
+  p90_response_time_ms?: number | null
+  p99_response_time_ms?: number | null
+  p90_first_byte_time_ms?: number | null
+  p99_first_byte_time_ms?: number | null
+  tps_sample_count?: number
+  response_time_sample_count?: number
+  first_byte_sample_count?: number
+  slow_request_count?: number
+}
+
+export interface ProviderPerformanceItem {
+  provider_id: string
+  provider: string
+  request_count: number
+  success_count: number
+  error_count: number
+  success_rate: number
+  output_tokens: number
+  avg_output_tps: number | null
+  avg_first_byte_time_ms: number | null
+  avg_response_time_ms: number | null
+  p90_response_time_ms: number | null
+  p99_response_time_ms?: number | null
+  p90_first_byte_time_ms: number | null
+  p99_first_byte_time_ms?: number | null
+  tps_sample_count: number
+  response_time_sample_count?: number
+  first_byte_sample_count: number
+  slow_request_count?: number
+}
+
+export interface ProviderPerformanceTimelineItem {
+  date: string
+  provider_id: string
+  provider: string
+  request_count: number
+  output_tokens: number
+  avg_output_tps: number | null
+  avg_first_byte_time_ms: number | null
+  avg_response_time_ms: number | null
+  success_rate: number
+  slow_request_count?: number
+}
+
+export interface ProviderPerformanceResponse {
+  summary: ProviderPerformanceSummary
+  providers: ProviderPerformanceItem[]
+  timeline: ProviderPerformanceTimelineItem[]
 }
 
 export interface ErrorDistributionItem {
@@ -500,6 +881,7 @@ export const adminApi = {
     skip?: number
     limit?: number
     is_active?: boolean
+    include_usage_summary?: boolean
   }): Promise<AdminApiKeysResponse> {
     const response = await apiClient.get<AdminApiKeysResponse>('/api/admin/api-keys', {
       params
@@ -570,31 +952,66 @@ export const adminApi = {
     return response.data
   },
 
-  // 系统配置相关
-  // 获取所有系统配置
-  async getAllSystemConfigs(): Promise<Array<{ key: string; value: unknown; description?: string }>> {
-    const response = await apiClient.get<Array<{ key: string; value: unknown; description?: string }>>('/api/admin/system/configs')
+  // 创建独立余额 Key 的 CLI 安装会话
+  async createApiKeyInstallSession(
+    keyId: string,
+    data: { target_cli: InstallTargetCli; target_system: InstallSessionTargetSystem }
+  ): Promise<ApiKeyInstallSession> {
+    const response = await apiClient.post<ApiKeyInstallSession>(
+      `/api/admin/api-keys/${keyId}/install-sessions`,
+      data
+    )
     return response.data
   },
 
-  // 获取特定系统配置
-  async getSystemConfig(key: string): Promise<{ key: string; value: unknown }> {
-    const response = await apiClient.get<{ key: string; value: unknown }>(
-      `/api/admin/system/configs/${key}`
+  // 系统配置相关
+  // 获取所有系统配置
+  async getAllSystemConfigs(
+    options: { cacheTtlMs?: number } = {},
+  ): Promise<AdminSystemConfigItem[]> {
+    return cachedRequest(
+      ALL_SYSTEM_CONFIGS_CACHE_KEY,
+      async () => {
+        const response = await apiClient.get<AdminSystemConfigItem[]>('/api/admin/system/configs')
+        return response.data
+      },
+      options.cacheTtlMs ?? 0,
     )
-    return response.data
+  },
+
+  // 获取特定系统配置
+  async getSystemConfig(
+    key: string,
+    options: { cacheTtlMs?: number } = {},
+  ): Promise<{ key: string; value: unknown; is_set?: boolean }> {
+    const cacheTtlMs = options.cacheTtlMs ?? 0
+    const cacheKey = buildCacheKey('admin:system:config', { key })
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<{ key: string; value: unknown; is_set?: boolean }>(
+          `/api/admin/system/configs/${key}`
+        )
+        return response.data
+      },
+      cacheTtlMs,
+    )
   },
 
   // 更新系统配置
   async updateSystemConfig(
     key: string,
     value: unknown,
-    description?: string
+    description?: string,
+    requestConfig?: Parameters<typeof apiClient.put>[2],
   ): Promise<{ key: string; value: unknown; description?: string }> {
     const response = await apiClient.put<{ key: string; value: unknown; description?: string }>(
       `/api/admin/system/configs/${key}`,
-      { value, description }
+      { value, description },
+      requestConfig,
     )
+    cache.delete(ALL_SYSTEM_CONFIGS_CACHE_KEY)
+    cache.delete(buildCacheKey('admin:system:config', { key }))
     return response.data
   },
 
@@ -603,6 +1020,8 @@ export const adminApi = {
     const response = await apiClient.delete<{ message: string }>(
       `/api/admin/system/configs/${key}`
     )
+    cache.delete(ALL_SYSTEM_CONFIGS_CACHE_KEY)
+    cache.delete(buildCacheKey('admin:system:config', { key }))
     return response.data
   },
 
@@ -627,11 +1046,13 @@ export const adminApi = {
   },
 
   // 导入配置
-  async importConfig(data: ConfigImportRequest): Promise<ConfigImportResponse> {
+  async importConfig(data: ConfigImportRequest, options: SystemDataImportOptions = {}): Promise<ConfigImportResponse> {
     const response = await apiClient.post<ConfigImportResponse>(
       '/api/admin/system/config/import',
-      data
+      data,
+      { timeout: SYSTEM_DATA_IMPORT_TIMEOUT_MS, ...options }
     )
+    cache.clear()
     return response.data
   },
 
@@ -642,10 +1063,36 @@ export const adminApi = {
   },
 
   // 导入用户数据
-  async importUsers(data: UsersImportRequest): Promise<UsersImportResponse> {
+  async importUsers(data: UsersImportRequest, options: SystemDataImportOptions = {}): Promise<UsersImportResponse> {
     const response = await apiClient.post<UsersImportResponse>(
       '/api/admin/system/users/import',
-      data
+      data,
+      { timeout: SYSTEM_DATA_IMPORT_TIMEOUT_MS, ...options }
+    )
+    return response.data
+  },
+
+  // 导出完整备份（配置数据 + 用户数据）
+  async exportAggregateData(): Promise<AggregateExportData> {
+    const response = await apiClient.get<AggregateExportData>('/api/admin/system/data/export')
+    return response.data
+  },
+
+  // 导入完整备份（配置数据 + 用户数据）
+  async importAggregateData(data: AggregateImportRequest, options: SystemDataImportOptions = {}): Promise<AggregateImportResponse> {
+    const response = await apiClient.post<AggregateImportResponse>(
+      '/api/admin/system/data/import',
+      data,
+      { timeout: SYSTEM_DATA_IMPORT_TIMEOUT_MS, ...options }
+    )
+    cache.clear()
+    return response.data
+  },
+
+  // 立即执行 S3 备份
+  async runS3Backup(): Promise<S3BackupRunResponse> {
+    const response = await apiClient.post<S3BackupRunResponse>(
+      '/api/admin/system/backups/s3/run'
     )
     return response.data
   },
@@ -659,12 +1106,37 @@ export const adminApi = {
     return response.data
   },
 
+  async queryProviderModelsForKeys(providerId: string, apiKeyIds: string[], forceRefresh = false): Promise<ProviderModelsQueryResponse> {
+    const response = await apiClient.post<ProviderModelsQueryResponse>(
+      '/api/admin/provider-query/models',
+      { provider_id: providerId, api_key_ids: apiKeyIds, force_refresh: forceRefresh }
+    )
+    return response.data
+  },
+
   // 测试 SMTP 连接，支持传入未保存的配置
   async testSmtpConnection(config: Record<string, unknown> = {}): Promise<{ success: boolean; message: string }> {
     const response = await apiClient.post<{ success: boolean; message: string }>(
       '/api/admin/system/smtp/test',
       config
     )
+    return response.data
+  },
+
+  async testImportantNotification(options: 'all' | 'email' | 'server_chan' | 'bark' | {
+    channel?: 'all' | 'email' | 'server_chan' | 'bark'
+    item_key?: string
+  } = 'all'): Promise<{
+    success: boolean
+    message: string
+    channels: Array<{ channel: string; success: boolean; message: string }>
+  }> {
+    const payload = typeof options === 'string' ? { channel: options } : options
+    const response = await apiClient.post<{
+      success: boolean
+      message: string
+      channels: Array<{ channel: string; success: boolean; message: string }>
+    }>('/api/admin/system/important-notification/test', payload)
     return response.data
   },
 
@@ -724,9 +1196,67 @@ export const adminApi = {
   },
 
   // 检查系统更新
-  async checkUpdate(): Promise<CheckUpdateResponse> {
+  async checkUpdate(force = false): Promise<CheckUpdateResponse> {
     const response = await apiClient.get<CheckUpdateResponse>(
-      '/api/admin/system/check-update'
+      '/api/admin/system/check-update',
+      force ? { params: { force: 'true' } } : undefined
+    )
+    return response.data
+  },
+
+  async getSystemReleases(force = false): Promise<ReleasesListResponse> {
+    const response = await apiClient.get<ReleasesListResponse>(
+      '/api/admin/system/releases',
+      force ? { params: { force: 'true' } } : undefined
+    )
+    return response.data
+  },
+
+  // 获取一键更新能力
+  async getSystemUpdateCapability(): Promise<SystemUpdateCapabilityResponse> {
+    const response = await apiClient.get<SystemUpdateCapabilityResponse>(
+      '/api/admin/system/update-capability'
+    )
+    return response.data
+  },
+
+  // 准备系统一键更新（下载并校验 release 包）
+  async prepareSystemUpdate(version?: string | null): Promise<ApplySystemUpdateResponse> {
+    const response = await apiClient.post<ApplySystemUpdateResponse>(
+      '/api/admin/system/prepare-update',
+      version ? { version } : undefined
+    )
+    return response.data
+  },
+
+  // 触发系统一键重启（切换 release 并退出等待进程管理器拉起）
+  async applySystemUpdate(version?: string | null): Promise<ApplySystemUpdateResponse> {
+    const response = await apiClient.post<ApplySystemUpdateResponse>(
+      '/api/admin/system/apply-update',
+      version ? { version } : undefined
+    )
+    return response.data
+  },
+
+  // 回滚到上一个版本
+  async rollbackSystemUpdate(): Promise<ApplySystemUpdateResponse> {
+    const response = await apiClient.post<ApplySystemUpdateResponse>(
+      '/api/admin/system/rollback'
+    )
+    return response.data
+  },
+
+  // 查询更新任务状态
+  async getUpdateStatus(): Promise<UpdateTaskStatusResponse> {
+    const response = await apiClient.get<UpdateTaskStatusResponse>(
+      '/api/admin/system/update-status'
+    )
+    return response.data
+  },
+
+  async getUpdateHistory(): Promise<UpdateHistoryResponse> {
+    const response = await apiClient.get<UpdateHistoryResponse>(
+      '/api/admin/system/update-history'
     )
     return response.data
   },
@@ -891,13 +1421,16 @@ export const adminApi = {
     )
   },
 
-  async getPercentiles(params?: {
-    start_date?: string
-    end_date?: string
-    preset?: string
-    timezone?: string
-    tz_offset_minutes?: number
-  }): Promise<PercentileItem[]> {
+  async getPercentiles(
+    params?: {
+      start_date?: string
+      end_date?: string
+      preset?: string
+      timezone?: string
+      tz_offset_minutes?: number
+    },
+    options?: AdminAnalyticsRequestOptions
+  ): Promise<PercentileItem[]> {
     const cacheKey = buildCacheKey('admin:stats:performance:percentiles', params)
     return cachedRequest(
       cacheKey,
@@ -907,17 +1440,53 @@ export const adminApi = {
         })
         return response.data
       },
-      20 * 1000
+      options?.skipCache ? 0 : 20 * 1000
     )
   },
 
-  async getErrorDistribution(params?: {
-    start_date?: string
-    end_date?: string
-    preset?: string
-    timezone?: string
-    tz_offset_minutes?: number
-  }): Promise<ErrorDistributionResponse> {
+  async getProviderPerformance(
+    params?: {
+      start_date?: string
+      end_date?: string
+      preset?: string
+      timezone?: string
+      tz_offset_minutes?: number
+      granularity?: 'day' | 'hour'
+      include_timeline?: boolean
+      limit?: number
+      provider_id?: string
+      model?: string
+      api_format?: string
+      endpoint_kind?: string
+      is_stream?: boolean
+      has_format_conversion?: boolean
+      slow_threshold_ms?: number
+    },
+    options?: AdminAnalyticsRequestOptions
+  ): Promise<ProviderPerformanceResponse> {
+    const cacheKey = buildCacheKey('admin:stats:performance:providers', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<ProviderPerformanceResponse>('/api/admin/stats/performance/providers', {
+          params
+        })
+        return response.data
+      },
+      options?.skipCache ? 0 : 20 * 1000
+    )
+  },
+
+  async getErrorDistribution(
+    params?: {
+      start_date?: string
+      end_date?: string
+      preset?: string
+      timezone?: string
+      tz_offset_minutes?: number
+    },
+    options?: AdminAnalyticsRequestOptions
+  ): Promise<ErrorDistributionResponse> {
     const cacheKey = buildCacheKey('admin:stats:errors:distribution', params)
     return cachedRequest(
       cacheKey,
@@ -927,7 +1496,7 @@ export const adminApi = {
         })
         return response.data
       },
-      20 * 1000
+      options?.skipCache ? 0 : 20 * 1000
     )
   },
 
@@ -945,32 +1514,100 @@ export const adminApi = {
   },
 
   // 数据清空
-  purgeConfig: () => purge<{ message: string; deleted: Record<string, number> }>('config'),
-  purgeUsers: () => purge<{ message: string; deleted: Record<string, number> }>('users'),
-  purgeUsage: () => purge<{ message: string; deleted: Record<string, number> }>('usage'),
-  purgeAuditLogs: () => purge<{ message: string; deleted: Record<string, number> }>('audit-logs'),
-  purgeRequestBodies: () => purge<{ message: string; cleaned: Record<string, number> }>('request-bodies'),
-  purgeStats: () => purge<{ message: string }>('stats'),
+  purgeConfig: () => purge<CleanupTaskResponse>('config'),
+  purgeUsers: () => purge<CleanupTaskResponse>('users'),
+  async purgeUsage(): Promise<CleanupTaskResponse> {
+    const response = await apiClient.post<CleanupTaskResponse>('/api/admin/system/purge/usage')
+    return response.data
+  },
+  async purgeAuditLogs(): Promise<CleanupTaskResponse> {
+    const response = await apiClient.post<CleanupTaskResponse>('/api/admin/system/purge/audit-logs')
+    return response.data
+  },
+  purgeRequestBodies: () => purge<CleanupTaskResponse>('request-bodies'),
+  async purgeRequestBodiesAsync(): Promise<CleanupTaskResponse> {
+    const response = await apiClient.post<CleanupTaskResponse>('/api/admin/system/purge/request-bodies/task')
+    return response.data
+  },
+  async purgeStats(): Promise<CleanupTaskResponse> {
+    const response = await apiClient.post<CleanupTaskResponse>('/api/admin/system/purge/stats')
+    return response.data
+  },
+  async getCleanupRuns(): Promise<CleanupRunListResponse> {
+    const response = await apiClient.get<CleanupRunListResponse>('/api/admin/system/cleanup/runs')
+    return response.data
+  },
 
-  async getTimeSeries(params?: {
-    start_date?: string
-    end_date?: string
-    preset?: string
-    granularity?: 'hour' | 'day' | 'week' | 'month'
-    timezone?: string
-    tz_offset_minutes?: number
-    user_id?: string
-    model?: string
-    provider_name?: string
-  }): Promise<Array<Record<string, unknown>>> {
+  async runManualUsageCleanup(
+    params: ManualUsageCleanupRequest = {}
+  ): Promise<ManualUsageCleanupTaskResponse | ManualUsageCleanupConflict> {
+    const body: ManualUsageCleanupRequest = {}
+    if (params.mode) {
+      body.mode = params.mode
+    }
+    if (typeof params.older_than_days === 'number') {
+      body.older_than_days = params.older_than_days
+    }
+    if (params.targets?.length) {
+      body.targets = params.targets
+    }
+    try {
+      const response = await apiClient.post<ManualUsageCleanupTaskResponse>(
+        '/api/admin/system/cleanup/usage/manual',
+        body
+      )
+      return response.data
+    } catch (error) {
+      const conflict = extractConflictPayload(error)
+      if (conflict) {
+        return conflict
+      }
+      throw error
+    }
+  },
+
+  async previewManualUsageCleanup(
+    params: ManualUsageCleanupRequest = {}
+  ): Promise<ManualUsageCleanupPreview> {
+    const query: Record<string, string | number> = {}
+    if (params.mode) {
+      query.mode = params.mode
+    }
+    if (typeof params.older_than_days === 'number') {
+      query.older_than_days = params.older_than_days
+    }
+    if (params.targets?.length) {
+      query.targets = params.targets.join(',')
+    }
+    const response = await apiClient.get<ManualUsageCleanupPreview>(
+      '/api/admin/system/cleanup/usage/preview',
+      { params: query }
+    )
+    return response.data
+  },
+
+  async getTimeSeries(
+    params?: {
+      start_date?: string
+      end_date?: string
+      preset?: string
+      granularity?: 'hour' | 'day' | 'week' | 'month'
+      timezone?: string
+      tz_offset_minutes?: number
+      user_id?: string
+      model?: string
+      provider_name?: string
+    },
+    options?: AdminAnalyticsRequestOptions
+  ): Promise<AdminTimeSeriesPoint[]> {
     const cacheKey = buildCacheKey('admin:stats:time-series', params)
     return cachedRequest(
       cacheKey,
       async () => {
-        const response = await apiClient.get<Array<Record<string, unknown>>>('/api/admin/stats/time-series', { params })
+        const response = await apiClient.get<AdminTimeSeriesPoint[]>('/api/admin/stats/time-series', { params })
         return response.data
       },
-      20 * 1000
+      options?.skipCache ? 0 : 20 * 1000
     )
   },
 

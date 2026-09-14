@@ -1,0 +1,1437 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::constants::{BUILTIN_DEFAULT_USER_GROUP_ID, DEFAULT_USER_GROUP_CONFIG_KEY};
+use crate::{AppState, GatewayError};
+use std::time::Duration;
+
+// Membership changes should propagate promptly across gateway instances. The
+// routing fast path skips this lookup entirely when no bindings exist.
+const USER_GROUPS_FOR_USER_CACHE_TTL: Duration = Duration::from_secs(30);
+
+impl AppState {
+    pub(crate) async fn assign_default_group_to_self_registered_user(
+        &self,
+        user_id: &str,
+    ) -> Result<(), GatewayError> {
+        let group_id = self.effective_default_user_group_id().await?;
+        let Some(group_id) = group_id else {
+            return Ok(());
+        };
+        if !self.add_user_to_group(&group_id, user_id).await? {
+            return Err(GatewayError::Internal(format!(
+                "failed to add user {user_id} to default group {group_id}"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn configured_default_user_group_id(
+        &self,
+    ) -> Result<Option<String>, GatewayError> {
+        Ok(self
+            .read_system_config_json_value(DEFAULT_USER_GROUP_CONFIG_KEY)
+            .await?
+            .and_then(|value| value.as_str().map(str::to_string))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()))
+    }
+
+    pub(crate) async fn effective_default_user_group_id(
+        &self,
+    ) -> Result<Option<String>, GatewayError> {
+        if let Some(group_id) = self.configured_default_user_group_id().await? {
+            if self.find_user_group_by_id(&group_id).await?.is_none() {
+                return Err(GatewayError::Internal(format!(
+                    "{DEFAULT_USER_GROUP_CONFIG_KEY} points to missing group: {group_id}"
+                )));
+            }
+            return Ok(Some(group_id));
+        }
+        if self
+            .find_user_group_by_id(BUILTIN_DEFAULT_USER_GROUP_ID)
+            .await?
+            .is_some()
+        {
+            return Ok(Some(BUILTIN_DEFAULT_USER_GROUP_ID.to_string()));
+        }
+        Ok(None)
+    }
+
+    pub(crate) async fn include_default_user_group_ids(
+        &self,
+        group_ids: &[String],
+    ) -> Result<Vec<String>, GatewayError> {
+        self.include_default_user_group_ids_for_role(group_ids, "user")
+            .await
+    }
+
+    pub(crate) async fn include_default_user_group_ids_for_role(
+        &self,
+        group_ids: &[String],
+        role: &str,
+    ) -> Result<Vec<String>, GatewayError> {
+        let mut group_ids = normalized_user_group_ids(group_ids);
+        if crate::roles::can_access_admin_console(role) {
+            if let Some(default_group_id) = self.configured_default_user_group_id().await? {
+                group_ids.remove(&default_group_id);
+            }
+            group_ids.remove(BUILTIN_DEFAULT_USER_GROUP_ID);
+            return Ok(group_ids.into_iter().collect());
+        }
+        if let Some(default_group_id) = self.effective_default_user_group_id().await? {
+            group_ids.insert(default_group_id);
+        }
+        Ok(group_ids.into_iter().collect())
+    }
+
+    pub(crate) async fn add_all_users_to_group(&self, group_id: &str) -> Result<(), GatewayError> {
+        for user in self.list_non_admin_export_users().await? {
+            let has_other_group = self
+                .list_user_groups_for_user(&user.id)
+                .await?
+                .into_iter()
+                .any(|group| group.id != group_id);
+            if has_other_group {
+                continue;
+            }
+            self.add_user_to_group(group_id, &user.id).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn resolve_auth_user_summaries_by_ids(
+        &self,
+        user_ids: &[String],
+    ) -> Result<BTreeMap<String, aether_data::repository::users::StoredUserSummary>, GatewayError>
+    {
+        let user_ids = user_ids
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if user_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        let mut users = BTreeMap::new();
+        if self.has_user_data_reader() {
+            for user in self.list_users_by_ids(&user_ids).await? {
+                users.insert(user.id.clone(), user);
+            }
+        }
+
+        for user_id in &user_ids {
+            if users.contains_key(user_id) {
+                continue;
+            }
+            let Some(user) = self.find_user_auth_by_id(user_id).await? else {
+                continue;
+            };
+            let summary = user
+                .to_summary()
+                .map_err(|err| GatewayError::Internal(err.to_string()))?;
+            users.insert(summary.id.clone(), summary);
+        }
+
+        Ok(users)
+    }
+
+    pub(crate) async fn search_auth_user_summaries_by_username(
+        &self,
+        username_search: &str,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserSummary>, GatewayError> {
+        let username_search = username_search.trim();
+        if username_search.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut users = BTreeMap::new();
+        if self.has_user_data_reader() {
+            for user in self
+                .data
+                .list_users_by_username_search(username_search)
+                .await
+                .map_err(|err| GatewayError::Internal(err.to_string()))?
+            {
+                users.insert(user.id.clone(), user);
+            }
+        }
+
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let username_search = username_search.to_ascii_lowercase();
+            for user in store.lock().expect("auth user store should lock").values() {
+                if user
+                    .username
+                    .to_ascii_lowercase()
+                    .contains(&username_search)
+                {
+                    let summary = user
+                        .to_summary()
+                        .map_err(|err| GatewayError::Internal(err.to_string()))?;
+                    users.entry(summary.id.clone()).or_insert(summary);
+                }
+            }
+        }
+
+        Ok(users.into_values().collect())
+    }
+
+    pub(crate) async fn find_user_auth_by_id(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<aether_data::repository::users::StoredUserAuthRecord>, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            if let Some(user) = store
+                .lock()
+                .expect("auth user store should lock")
+                .get(user_id)
+                .cloned()
+            {
+                return Ok(Some(user));
+            }
+        }
+        self.data
+            .find_user_auth_by_id(user_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn find_user_auth_by_identifier(
+        &self,
+        identifier: &str,
+    ) -> Result<Option<aether_data::repository::users::StoredUserAuthRecord>, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let identifier = identifier.trim();
+            if !identifier.is_empty() {
+                if let Some(user) = store
+                    .lock()
+                    .expect("auth user store should lock")
+                    .values()
+                    .find(|user| {
+                        user.username == identifier || user.email.as_deref() == Some(identifier)
+                    })
+                    .cloned()
+                {
+                    return Ok(Some(user));
+                }
+            }
+        }
+        self.data
+            .find_user_auth_by_identifier(identifier)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn list_user_groups(
+        &self,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, GatewayError> {
+        self.data
+            .list_user_groups()
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn find_user_group_by_id(
+        &self,
+        group_id: &str,
+    ) -> Result<Option<aether_data::repository::users::StoredUserGroup>, GatewayError> {
+        self.data
+            .find_user_group_by_id(group_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn list_user_groups_by_ids(
+        &self,
+        group_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, GatewayError> {
+        self.data
+            .list_user_groups_by_ids(group_ids)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn create_user_group(
+        &self,
+        record: aether_data::repository::users::UpsertUserGroupRecord,
+    ) -> Result<Option<aether_data::repository::users::StoredUserGroup>, GatewayError> {
+        let group = self
+            .data
+            .create_user_group(record)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if group.is_some() {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(group)
+    }
+
+    pub(crate) async fn update_user_group(
+        &self,
+        group_id: &str,
+        record: aether_data::repository::users::UpsertUserGroupRecord,
+    ) -> Result<Option<aether_data::repository::users::StoredUserGroup>, GatewayError> {
+        let group = self
+            .data
+            .update_user_group(group_id, record)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if group.is_some() {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(group)
+    }
+
+    pub(crate) async fn restore_user_group_if_matches(
+        &self,
+        expected: &aether_data::repository::users::StoredUserGroup,
+        restored: &aether_data::repository::users::StoredUserGroup,
+    ) -> Result<bool, GatewayError> {
+        let restored = self
+            .data
+            .restore_user_group_if_matches(expected, restored)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if restored {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(restored)
+    }
+
+    pub(crate) async fn delete_user_group(&self, group_id: &str) -> Result<bool, GatewayError> {
+        let deleted = self
+            .data
+            .delete_user_group(group_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if deleted {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(deleted)
+    }
+
+    pub(crate) async fn list_user_group_members(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroupMember>, GatewayError> {
+        self.data
+            .list_user_group_members(group_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn replace_user_group_members(
+        &self,
+        group_id: &str,
+        user_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroupMember>, GatewayError> {
+        let members = self
+            .data
+            .replace_user_group_members(group_id, user_ids)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        self.invalidate_auth_context_cache();
+        Ok(members)
+    }
+
+    pub(crate) async fn list_user_groups_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, GatewayError> {
+        let user_id = user_id.trim();
+        if user_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let cache_key = user_id.to_string();
+        self.user_groups_for_user_cache
+            .get_or_load(cache_key, USER_GROUPS_FOR_USER_CACHE_TTL, || async move {
+                self.data
+                    .list_user_groups_for_user(user_id)
+                    .await
+                    .map(Some)
+                    .map_err(|err| GatewayError::Internal(err.to_string()))
+            })
+            .await
+            .map(|value| value.unwrap_or_default())
+    }
+
+    pub(crate) async fn list_user_group_memberships_by_user_ids(
+        &self,
+        user_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroupMembership>, GatewayError> {
+        self.data
+            .list_user_group_memberships_by_user_ids(user_ids)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn replace_user_groups_for_user(
+        &self,
+        user_id: &str,
+        group_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, GatewayError> {
+        let groups = self
+            .data
+            .replace_user_groups_for_user(user_id, group_ids)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        self.invalidate_auth_context_cache();
+        Ok(groups)
+    }
+
+    pub(crate) async fn restore_user_groups_if_matches(
+        &self,
+        user_id: &str,
+        expected_group_ids: &[String],
+        restored_group_ids: &[String],
+    ) -> Result<bool, GatewayError> {
+        let restored = self
+            .data
+            .restore_user_groups_if_matches(user_id, expected_group_ids, restored_group_ids)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if restored {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(restored)
+    }
+
+    pub(crate) async fn add_user_to_group(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<bool, GatewayError> {
+        let added = self
+            .data
+            .add_user_to_group(group_id, user_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if added {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(added)
+    }
+
+    pub(crate) async fn is_other_user_auth_email_taken(
+        &self,
+        email: &str,
+        user_id: &str,
+    ) -> Result<bool, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            if store
+                .lock()
+                .expect("auth user store should lock")
+                .values()
+                .any(|user| user.id != user_id && user.email.as_deref() == Some(email))
+            {
+                return Ok(true);
+            }
+        }
+
+        self.data
+            .is_other_user_auth_email_taken(email, user_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn is_other_user_auth_username_taken(
+        &self,
+        username: &str,
+        user_id: &str,
+    ) -> Result<bool, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            if store
+                .lock()
+                .expect("auth user store should lock")
+                .values()
+                .any(|user| user.id != user_id && user.username == username)
+            {
+                return Ok(true);
+            }
+        }
+
+        self.data
+            .is_other_user_auth_username_taken(username, user_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn update_local_auth_user_profile(
+        &self,
+        user_id: &str,
+        email_present: bool,
+        email: Option<String>,
+        email_verified: Option<bool>,
+        username: Option<String>,
+    ) -> Result<Option<aether_data::repository::users::StoredUserAuthRecord>, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let existing = {
+                store
+                    .lock()
+                    .expect("auth user store should lock")
+                    .get(user_id)
+                    .cloned()
+            };
+            let existing = match existing {
+                Some(user) => Some(user),
+                None => self
+                    .data
+                    .find_user_auth_by_id(user_id)
+                    .await
+                    .map_err(|err| GatewayError::Internal(err.to_string()))?,
+            };
+            let Some(mut user) = existing else {
+                return Ok(None);
+            };
+            if email_present {
+                user.email = email;
+            }
+            if let Some(email_verified) = email_verified {
+                user.email_verified = email_verified;
+            }
+            if let Some(username) = username {
+                user.username = username;
+            }
+            store
+                .lock()
+                .expect("auth user store should lock")
+                .insert(user.id.clone(), user.clone());
+            self.invalidate_auth_context_cache();
+            return Ok(Some(user));
+        }
+
+        let user = self
+            .data
+            .update_local_auth_user_profile(user_id, email_present, email, email_verified, username)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if user.is_some() {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(user)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn restore_local_auth_user_state_if_matches(
+        &self,
+        expected_auth: &aether_data::repository::users::StoredUserAuthRecord,
+        restored_auth: &aether_data::repository::users::StoredUserAuthRecord,
+        expected_export: &aether_data::repository::users::StoredUserExportRow,
+        restored_export: &aether_data::repository::users::StoredUserExportRow,
+        expected_model_capability_settings: Option<&serde_json::Value>,
+        restored_model_capability_settings: Option<serde_json::Value>,
+        expected_feature_settings: Option<&serde_json::Value>,
+        restored_feature_settings: Option<serde_json::Value>,
+    ) -> Result<bool, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            // The gateway test harness uses an auth overlay for users while most auxiliary data
+            // remains in the repository. Keep the compare-and-write atomic for that overlay too;
+            // otherwise import rollback tests would silently exercise a different, unconditional
+            // path than production.
+            let current_feature = self
+                .data
+                .read_user_feature_settings(&expected_auth.id)
+                .await
+                .map_err(|err| GatewayError::Internal(err.to_string()))?;
+            let mut users = store.lock().expect("auth user store should lock");
+            if users.contains_key(&expected_auth.id) {
+                if expected_auth.id != restored_auth.id
+                    || expected_export.id != expected_auth.id
+                    || restored_export.id != restored_auth.id
+                {
+                    return Ok(false);
+                }
+                let Some(current) = users.get(&expected_auth.id).cloned() else {
+                    return Ok(false);
+                };
+                if !current.matches_restore_state(expected_auth) {
+                    return Ok(false);
+                }
+
+                let current_model =
+                    self.auth_user_model_capability_store
+                        .as_ref()
+                        .and_then(|settings| {
+                            settings
+                                .lock()
+                                .expect("auth user model capability store should lock")
+                                .get(&expected_auth.id)
+                                .cloned()
+                        });
+                if current_model.as_ref() != expected_model_capability_settings {
+                    return Ok(false);
+                }
+
+                // Feature settings have no separate test overlay. When the backing repository has
+                // a row, still honor the snapshot comparison; an absent row is represented by
+                // `None`, which is the normal overlay case.
+                if current_feature.as_ref() != expected_feature_settings {
+                    return Ok(false);
+                }
+
+                let security_state_changed = current.role != restored_auth.role
+                    || current.is_active != restored_auth.is_active;
+                let removes_active_admin = current.role.eq_ignore_ascii_case("admin")
+                    && current.is_active
+                    && !current.is_deleted
+                    && (!restored_auth.role.eq_ignore_ascii_case("admin")
+                        || !restored_auth.is_active);
+                if removes_active_admin
+                    && users
+                        .values()
+                        .filter(|user| {
+                            user.role.eq_ignore_ascii_case("admin")
+                                && user.is_active
+                                && !user.is_deleted
+                        })
+                        .count()
+                        <= 1
+                {
+                    return Err(GatewayError::LastActiveAdminUpdateDenied);
+                }
+
+                let mut updated = restored_auth.clone();
+                // Server-managed credentials and timestamps are deliberately not part of this
+                // aggregate restore. The password has its own nullable CAS operation.
+                updated.password_hash = current.password_hash;
+                updated.security_version = current.security_version;
+                updated.created_at = current.created_at;
+                updated.last_login_at = current.last_login_at;
+                updated.auth_source = current.auth_source;
+                updated.is_deleted = current.is_deleted;
+                if security_state_changed {
+                    updated.security_version =
+                        updated.security_version.checked_add(1).ok_or_else(|| {
+                            GatewayError::Internal("users.security_version overflow".to_string())
+                        })?;
+                }
+                users.insert(updated.id.clone(), updated.clone());
+                drop(users);
+
+                if let Some(settings) = self.auth_user_model_capability_store.as_ref() {
+                    let mut guard = settings
+                        .lock()
+                        .expect("auth user model capability store should lock");
+                    match restored_model_capability_settings {
+                        Some(value) => {
+                            guard.insert(updated.id.clone(), value);
+                        }
+                        None => {
+                            guard.remove(&updated.id);
+                        }
+                    }
+                }
+                if security_state_changed {
+                    if let Some(sessions) = self.auth_session_store.as_ref() {
+                        let now = chrono::Utc::now();
+                        for session in sessions
+                            .lock()
+                            .expect("auth session store should lock")
+                            .values_mut()
+                            .filter(|session| {
+                                session.user_id == updated.id && session.revoked_at.is_none()
+                            })
+                        {
+                            session.revoked_at = Some(now);
+                            session.revoke_reason = Some("user_security_state_changed".to_string());
+                            session.updated_at = Some(now);
+                        }
+                    }
+                }
+                self.invalidate_auth_context_cache();
+                return Ok(true);
+            }
+        }
+
+        let restored = self
+            .data
+            .restore_local_auth_user_state_if_matches(
+                expected_auth,
+                restored_auth,
+                expected_export,
+                restored_export,
+                expected_model_capability_settings,
+                restored_model_capability_settings,
+                expected_feature_settings,
+                restored_feature_settings,
+            )
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if restored {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(restored)
+    }
+
+    pub(crate) async fn update_local_auth_user_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: String,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<aether_data::repository::users::StoredUserAuthRecord>, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let existing = {
+                store
+                    .lock()
+                    .expect("auth user store should lock")
+                    .get(user_id)
+                    .cloned()
+            };
+            let existing = match existing {
+                Some(user) => Some(user),
+                None => self
+                    .data
+                    .find_user_auth_by_id(user_id)
+                    .await
+                    .map_err(|err| GatewayError::Internal(err.to_string()))?,
+            };
+            let Some(mut user) = existing else {
+                return Ok(None);
+            };
+            user.password_hash = Some(password_hash);
+            user.security_version = user.security_version.checked_add(1).ok_or_else(|| {
+                GatewayError::Internal("users.security_version overflow".to_string())
+            })?;
+            store
+                .lock()
+                .expect("auth user store should lock")
+                .insert(user.id.clone(), user.clone());
+            return Ok(Some(user));
+        }
+
+        self.data
+            .update_local_auth_user_password_hash(user_id, password_hash, updated_at)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn restore_local_auth_user_password_hash_if_matches(
+        &self,
+        user_id: &str,
+        expected_password_hash: Option<&str>,
+        password_hash: Option<String>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let existing = {
+                store
+                    .lock()
+                    .expect("auth user store should lock")
+                    .get(user_id)
+                    .cloned()
+            };
+            let existing = match existing {
+                Some(user) => Some(user),
+                None => self
+                    .data
+                    .find_user_auth_by_id(user_id)
+                    .await
+                    .map_err(|err| GatewayError::Internal(err.to_string()))?,
+            };
+            let Some(mut user) = existing else {
+                return Ok(false);
+            };
+            if user.password_hash.as_deref() != expected_password_hash {
+                return Ok(false);
+            }
+            user.password_hash = password_hash;
+            user.security_version = user.security_version.checked_add(1).ok_or_else(|| {
+                GatewayError::Internal("users.security_version overflow".to_string())
+            })?;
+            store
+                .lock()
+                .expect("auth user store should lock")
+                .insert(user.id.clone(), user);
+            self.invalidate_auth_context_cache();
+            return Ok(true);
+        }
+
+        self.data
+            .restore_local_auth_user_password_hash_if_matches(
+                user_id,
+                expected_password_hash,
+                password_hash,
+                updated_at,
+            )
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn reset_local_auth_user_password_and_revoke_sessions(
+        &self,
+        user_id: &str,
+        password_hash: String,
+        changed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, GatewayError> {
+        #[cfg(test)]
+        if let (Some(user_store), Some(session_store)) = (
+            self.auth_user_store.as_ref(),
+            self.auth_session_store.as_ref(),
+        ) {
+            let existing = {
+                user_store
+                    .lock()
+                    .expect("auth user store should lock")
+                    .get(user_id)
+                    .cloned()
+            };
+            let existing = match existing {
+                Some(user) => Some(user),
+                None => self
+                    .data
+                    .find_user_auth_by_id(user_id)
+                    .await
+                    .map_err(|err| GatewayError::Internal(err.to_string()))?,
+            };
+            let Some(existing) = existing.filter(|user| !user.is_deleted) else {
+                return Ok(false);
+            };
+            let mut users = user_store.lock().expect("auth user store should lock");
+            let mut sessions = session_store
+                .lock()
+                .expect("auth session store should lock");
+            let user = users.entry(user_id.to_string()).or_insert(existing);
+            user.password_hash = Some(password_hash);
+            user.security_version = user.security_version.checked_add(1).ok_or_else(|| {
+                GatewayError::Internal("users.security_version overflow".to_string())
+            })?;
+            for session in sessions
+                .values_mut()
+                .filter(|session| session.user_id == user_id && !session.is_revoked())
+            {
+                session.revoked_at = Some(changed_at);
+                session.revoke_reason = Some("admin_password_reset".to_string());
+                session.updated_at = Some(changed_at);
+            }
+            self.invalidate_auth_context_cache();
+            return Ok(true);
+        }
+
+        let reset = self
+            .data
+            .reset_local_auth_user_password_and_revoke_sessions(user_id, password_hash, changed_at)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if reset {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(reset)
+    }
+
+    pub(crate) async fn change_local_auth_password_and_revoke_sessions(
+        &self,
+        user_id: &str,
+        current_session_id: &str,
+        expected_password_hash: Option<&str>,
+        next_password_hash: String,
+        changed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, GatewayError> {
+        #[cfg(test)]
+        if let (Some(user_store), Some(session_store)) = (
+            self.auth_user_store.as_ref(),
+            self.auth_session_store.as_ref(),
+        ) {
+            let existing = {
+                user_store
+                    .lock()
+                    .expect("auth user store should lock")
+                    .get(user_id)
+                    .cloned()
+            };
+            let existing = match existing {
+                Some(user) => Some(user),
+                None => self
+                    .data
+                    .find_user_auth_by_id(user_id)
+                    .await
+                    .map_err(|err| GatewayError::Internal(err.to_string()))?,
+            };
+            let Some(existing) = existing else {
+                return Ok(false);
+            };
+            let mut users = user_store.lock().expect("auth user store should lock");
+            let mut sessions = session_store
+                .lock()
+                .expect("auth session store should lock");
+            let user = users.entry(user_id.to_string()).or_insert(existing);
+            if user.password_hash.as_deref() != expected_password_hash {
+                return Ok(false);
+            }
+            let current_key = format!("{user_id}:{current_session_id}");
+            if !sessions
+                .get(&current_key)
+                .is_some_and(|session| !session.is_revoked() && !session.is_expired(changed_at))
+            {
+                return Ok(false);
+            }
+            user.password_hash = Some(next_password_hash);
+            user.security_version = user.security_version.checked_add(1).ok_or_else(|| {
+                GatewayError::Internal("users.security_version overflow".to_string())
+            })?;
+            for session in sessions
+                .values_mut()
+                .filter(|session| session.user_id == user_id && !session.is_revoked())
+            {
+                session.revoked_at = Some(changed_at);
+                session.revoke_reason = Some("password_changed".to_string());
+                session.updated_at = Some(changed_at);
+            }
+            return Ok(true);
+        }
+
+        self.data
+            .change_local_auth_password_and_revoke_sessions(
+                user_id,
+                current_session_id,
+                expected_password_hash,
+                next_password_hash,
+                changed_at,
+            )
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn create_local_auth_user(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        password_hash: String,
+    ) -> Result<Option<aether_data::repository::users::StoredUserAuthRecord>, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let now = chrono::Utc::now();
+            let user = aether_data::repository::users::StoredUserAuthRecord::new(
+                uuid::Uuid::new_v4().to_string(),
+                email,
+                email_verified,
+                username,
+                Some(password_hash),
+                "user".to_string(),
+                "local".to_string(),
+                None,
+                None,
+                None,
+                true,
+                false,
+                Some(now),
+                None,
+            )
+            .map_err(|err| GatewayError::Internal(err.to_string()))?
+            .with_policy_modes(
+                "inherit".to_string(),
+                "inherit".to_string(),
+                "inherit".to_string(),
+            )
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+            store
+                .lock()
+                .expect("auth user store should lock")
+                .insert(user.id.clone(), user.clone());
+            return Ok(Some(user));
+        }
+
+        self.data
+            .create_local_auth_user(email, email_verified, username, password_hash)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn create_local_auth_user_with_settings(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        password_hash: String,
+        role: String,
+        allowed_providers: Option<Vec<String>>,
+        allowed_api_formats: Option<Vec<String>>,
+        allowed_models: Option<Vec<String>>,
+        rate_limit: Option<i32>,
+    ) -> Result<Option<aether_data::repository::users::StoredUserAuthRecord>, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let now = chrono::Utc::now();
+            let user = aether_data::repository::users::StoredUserAuthRecord::new(
+                uuid::Uuid::new_v4().to_string(),
+                email,
+                email_verified,
+                username,
+                Some(password_hash),
+                role,
+                "local".to_string(),
+                allowed_providers.map(serde_json::Value::from),
+                allowed_api_formats.map(serde_json::Value::from),
+                allowed_models.map(serde_json::Value::from),
+                true,
+                false,
+                Some(now),
+                None,
+            )
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+            store
+                .lock()
+                .expect("auth user store should lock")
+                .insert(user.id.clone(), user.clone());
+            let _ = rate_limit;
+            return Ok(Some(user));
+        }
+
+        self.data
+            .create_local_auth_user_with_settings(
+                email,
+                email_verified,
+                username,
+                password_hash,
+                role,
+                allowed_providers,
+                allowed_api_formats,
+                allowed_models,
+                rate_limit,
+            )
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn update_local_auth_user_admin_fields(
+        &self,
+        user_id: &str,
+        role: Option<String>,
+        allowed_providers_present: bool,
+        allowed_providers: Option<Vec<String>>,
+        allowed_api_formats_present: bool,
+        allowed_api_formats: Option<Vec<String>>,
+        allowed_models_present: bool,
+        allowed_models: Option<Vec<String>>,
+        rate_limit_present: bool,
+        rate_limit: Option<i32>,
+        is_active: Option<bool>,
+    ) -> Result<Option<aether_data::repository::users::StoredUserAuthRecord>, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let mut users = store.lock().expect("auth user store should lock");
+            let Some(user) = users.get_mut(user_id) else {
+                return Ok(None);
+            };
+            let security_state_changed = role
+                .as_deref()
+                .is_some_and(|next_role| !user.role.eq_ignore_ascii_case(next_role))
+                || is_active.is_some_and(|next_active| user.is_active != next_active);
+            let mut sessions = self
+                .auth_session_store
+                .as_ref()
+                .map(|sessions| sessions.lock().expect("auth session store should lock"));
+            if let Some(role) = role {
+                user.role = role;
+            }
+            if allowed_providers_present {
+                user.allowed_providers = allowed_providers;
+            }
+            if allowed_api_formats_present {
+                user.allowed_api_formats = allowed_api_formats;
+            }
+            if allowed_models_present {
+                user.allowed_models = allowed_models;
+            }
+            if let Some(is_active) = is_active {
+                user.is_active = is_active;
+            }
+            if security_state_changed {
+                user.security_version = user.security_version.checked_add(1).ok_or_else(|| {
+                    GatewayError::Internal("users.security_version overflow".to_string())
+                })?;
+                let revoked_at = chrono::Utc::now();
+                if let Some(sessions) = sessions.as_mut() {
+                    for session in sessions
+                        .values_mut()
+                        .filter(|session| session.user_id == user_id && !session.is_revoked())
+                    {
+                        session.revoked_at = Some(revoked_at);
+                        session.revoke_reason = Some("user_security_state_changed".to_string());
+                        session.updated_at = Some(revoked_at);
+                    }
+                }
+            }
+            let _ = (rate_limit_present, rate_limit);
+            let user = user.clone();
+            drop(sessions);
+            drop(users);
+            self.invalidate_auth_context_cache();
+            return Ok(Some(user));
+        }
+
+        let user = self
+            .data
+            .update_local_auth_user_admin_fields(
+                user_id,
+                role,
+                allowed_providers_present,
+                allowed_providers,
+                allowed_api_formats_present,
+                allowed_api_formats,
+                allowed_models_present,
+                allowed_models,
+                rate_limit_present,
+                rate_limit,
+                is_active,
+            )
+            .await
+            .map_err(|err| {
+                if aether_data::repository::users::is_last_active_admin_update_denied(&err) {
+                    GatewayError::LastActiveAdminUpdateDenied
+                } else {
+                    GatewayError::Internal(err.to_string())
+                }
+            })?;
+        if user.is_some() {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(user)
+    }
+
+    pub(crate) async fn update_local_auth_user_policy_modes(
+        &self,
+        user_id: &str,
+        allowed_providers_mode: Option<String>,
+        allowed_api_formats_mode: Option<String>,
+        allowed_models_mode: Option<String>,
+        rate_limit_mode: Option<String>,
+    ) -> Result<Option<aether_data::repository::users::StoredUserAuthRecord>, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let mut guard = store.lock().expect("auth user store should lock");
+            let Some(user) = guard.get_mut(user_id) else {
+                return Ok(None);
+            };
+            if let Some(mode) = allowed_providers_mode {
+                user.allowed_providers_mode = mode;
+            }
+            if let Some(mode) = allowed_api_formats_mode {
+                user.allowed_api_formats_mode = mode;
+            }
+            if let Some(mode) = allowed_models_mode {
+                user.allowed_models_mode = mode;
+            }
+            let _ = rate_limit_mode;
+            let user = user.clone();
+            drop(guard);
+            self.invalidate_auth_context_cache();
+            return Ok(Some(user));
+        }
+
+        let user = self
+            .data
+            .update_local_auth_user_policy_modes(
+                user_id,
+                allowed_providers_mode,
+                allowed_api_formats_mode,
+                allowed_models_mode,
+                rate_limit_mode,
+            )
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if user.is_some() {
+            self.invalidate_auth_context_cache();
+        }
+        Ok(user)
+    }
+
+    pub(crate) async fn touch_auth_user_last_login(
+        &self,
+        user_id: &str,
+        logged_in_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let mut guard = store.lock().expect("auth user store should lock");
+            if let Some(user) = guard.get_mut(user_id) {
+                user.last_login_at = Some(logged_in_at);
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+
+        self.data
+            .touch_auth_user_last_login(user_id, logged_in_at)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn delete_local_auth_user(&self, user_id: &str) -> Result<bool, GatewayError> {
+        #[cfg(test)]
+        if let Some(store) = self.auth_user_store.as_ref() {
+            let removed = store
+                .lock()
+                .expect("auth user store should lock")
+                .remove(user_id)
+                .is_some();
+            if removed {
+                if let Some(wallet_store) = self.auth_wallet_store.as_ref() {
+                    wallet_store
+                        .lock()
+                        .expect("auth wallet store should lock")
+                        .retain(|_, wallet| wallet.user_id.as_deref() != Some(user_id));
+                }
+                if let Some(session_store) = self.auth_session_store.as_ref() {
+                    let prefix = format!("{user_id}:");
+                    session_store
+                        .lock()
+                        .expect("auth session store should lock")
+                        .retain(|key, _| !key.starts_with(&prefix));
+                }
+            }
+            return Ok(removed);
+        }
+
+        self.data
+            .delete_local_auth_user(user_id)
+            .await
+            .map_err(|err| {
+                if aether_data::repository::users::is_last_active_admin_delete_denied(&err) {
+                    GatewayError::LastActiveAdminDeleteDenied
+                } else {
+                    GatewayError::Internal(err.to_string())
+                }
+            })
+    }
+
+    pub(crate) async fn register_local_auth_user_with_wallet_outcome(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        password_hash: String,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<
+        Option<(
+            aether_data::repository::users::StoredUserAuthRecord,
+            aether_data::repository::wallet::StoredWalletSnapshot,
+            bool,
+        )>,
+        GatewayError,
+    > {
+        #[cfg(test)]
+        if let (Some(user_store), Some(wallet_store)) = (
+            self.auth_user_store.as_ref(),
+            self.auth_wallet_store.as_ref(),
+        ) {
+            let now = chrono::Utc::now();
+            let user = aether_data::repository::users::StoredUserAuthRecord::new(
+                uuid::Uuid::new_v4().to_string(),
+                email,
+                email_verified,
+                username,
+                Some(password_hash),
+                "user".to_string(),
+                "local".to_string(),
+                None,
+                None,
+                None,
+                true,
+                false,
+                Some(now),
+                None,
+            )
+            .map_err(|err| GatewayError::Internal(err.to_string()))?
+            .with_policy_modes(
+                "inherit".to_string(),
+                "inherit".to_string(),
+                "inherit".to_string(),
+            )
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+            let gift_balance = if unlimited {
+                0.0
+            } else {
+                initial_gift_usd.max(0.0)
+            };
+            let wallet = aether_data::repository::wallet::StoredWalletSnapshot::new(
+                uuid::Uuid::new_v4().to_string(),
+                Some(user.id.clone()),
+                None,
+                0.0,
+                gift_balance,
+                if unlimited {
+                    "unlimited".to_string()
+                } else {
+                    "finite".to_string()
+                },
+                "USD".to_string(),
+                "active".to_string(),
+                0.0,
+                0.0,
+                0.0,
+                gift_balance,
+                now.timestamp(),
+            )
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+            user_store
+                .lock()
+                .expect("auth user store should lock")
+                .insert(user.id.clone(), user.clone());
+            wallet_store
+                .lock()
+                .expect("auth wallet store should lock")
+                .insert(wallet.id.clone(), wallet.clone());
+            super::user_provisioning::record_test_initial_gift_transaction(
+                self,
+                &wallet,
+                &user.id,
+                "用户初始赠款",
+            );
+            return Ok(Some((user, wallet, true)));
+        }
+
+        self.data
+            .register_local_auth_user_with_wallet_outcome(
+                email,
+                email_verified,
+                username,
+                password_hash,
+                initial_gift_usd,
+                unlimited,
+            )
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn register_local_auth_user(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        password_hash: String,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<
+        Option<(
+            aether_data::repository::users::StoredUserAuthRecord,
+            aether_data::repository::wallet::StoredWalletSnapshot,
+        )>,
+        GatewayError,
+    > {
+        Ok(self
+            .register_local_auth_user_with_wallet_outcome(
+                email,
+                email_verified,
+                username,
+                password_hash,
+                initial_gift_usd,
+                unlimited,
+            )
+            .await?
+            .map(|(user, wallet, _created)| (user, wallet)))
+    }
+}
+
+fn normalized_user_group_ids(group_ids: &[String]) -> BTreeSet<String> {
+    group_ids
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use aether_data::repository::users::{InMemoryUserReadRepository, UpsertUserGroupRecord};
+
+    use crate::control::GatewayControlAuthContext;
+    use crate::data::GatewayDataState;
+    use crate::AppState;
+
+    fn user_group_record(
+        allowed_models: Option<Vec<&str>>,
+        allowed_models_mode: &str,
+    ) -> UpsertUserGroupRecord {
+        UpsertUserGroupRecord {
+            name: "Team".to_string(),
+            description: None,
+            priority: 0,
+            allowed_providers: None,
+            allowed_providers_mode: "unrestricted".to_string(),
+            allowed_api_formats: None,
+            allowed_api_formats_mode: "unrestricted".to_string(),
+            allowed_models: allowed_models.map(|values| {
+                values
+                    .into_iter()
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            }),
+            allowed_models_mode: allowed_models_mode.to_string(),
+            rate_limit: None,
+            rate_limit_mode: "inherit".to_string(),
+        }
+    }
+
+    fn cached_auth_context() -> GatewayControlAuthContext {
+        GatewayControlAuthContext {
+            user_id: "user-1".to_string(),
+            api_key_id: "key-1".to_string(),
+            username: Some("alice".to_string()),
+            api_key_name: Some("default".to_string()),
+            balance_remaining: None,
+            access_allowed: true,
+            user_rate_limit: None,
+            api_key_rate_limit: None,
+            api_key_is_standalone: false,
+            admin_bypass_limits: false,
+            local_rejection: None,
+            allowed_models: Some(vec!["gpt-4.1".to_string()]),
+            ip_rules: None,
+            verified_api_key_hash: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn updating_user_group_invalidates_cached_auth_context() {
+        let repository = Arc::new(InMemoryUserReadRepository::default());
+        let state = AppState::new()
+            .expect("state should build")
+            .with_data_state_for_tests(GatewayDataState::with_user_reader_for_tests(repository));
+        let group = state
+            .create_user_group(user_group_record(Some(vec!["gpt-4.1"]), "specific"))
+            .await
+            .expect("group should create")
+            .expect("group should exist");
+
+        let cache_key = "auth-context-cache-key".to_string();
+        let ttl = Duration::from_secs(60);
+        state
+            .auth_context_cache
+            .insert(cache_key.clone(), cached_auth_context(), ttl, 10);
+        assert!(state
+            .auth_context_cache
+            .get_fresh(&cache_key, ttl)
+            .is_some());
+
+        state
+            .update_user_group(&group.id, user_group_record(None, "unrestricted"))
+            .await
+            .expect("group should update")
+            .expect("group should exist after update");
+
+        assert!(state
+            .auth_context_cache
+            .get_fresh(&cache_key, ttl)
+            .is_none());
+    }
+}

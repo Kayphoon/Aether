@@ -1,11 +1,19 @@
 import type { ProviderModelMapping } from './provider'
 
+export interface ModelProviderReference {
+  id: string
+  model_id?: string | null
+  name: string
+  is_active: boolean
+}
+
 // ========== 阶梯计费类型 ==========
 
 /** 缓存时长定价配置 */
 export interface CacheTTLPricing {
   ttl_minutes: number
   cache_creation_price_per_1m: number
+  [key: string]: unknown
 }
 
 /** 单个价格阶梯配置 */
@@ -16,11 +24,67 @@ export interface PricingTier {
   cache_creation_price_per_1m?: number
   cache_read_price_per_1m?: number
   cache_ttl_pricing?: CacheTTLPricing[]
+  [key: string]: unknown
+}
+
+export type ImageOutputQuality = 'low' | 'medium' | 'high'
+
+export interface ImageOutputQualityPricing extends Partial<Record<ImageOutputQuality, number>> {
+  [quality: string]: unknown
+}
+
+export interface ImageOutputPriceRange {
+  up_to_pixels: number | null
+  prices: ImageOutputQualityPricing
+  label?: string | null
+  [key: string]: unknown
+}
+
+/** 按处理层级覆盖的费率配置。允许图像或未来计费字段独立扩展。 */
+export interface ProcessingTierPricingConfig {
+  /** 相对 Standard 的统一倍率；Fast/priority 以首档作为固定基准，其他层级缩放完整目录。 */
+  price_multiplier?: number
+  tiers?: PricingTier[]
+  image_output_prices?: Record<string, ImageOutputQualityPricing> | null
+  image_output_price_default?: number | null
+  image_output_price_ranges?: ImageOutputPriceRange[] | null
+  [key: string]: unknown
 }
 
 /** 阶梯计费配置 */
 export interface TieredPricingConfig {
   tiers: PricingTier[]
+  image_output_prices?: Record<string, ImageOutputQualityPricing> | null
+  image_output_price_default?: number | null
+  image_output_price_ranges?: ImageOutputPriceRange[] | null
+  processing_tiers?: Record<string, ProcessingTierPricingConfig> | null
+  [key: string]: unknown
+}
+
+/**
+ * Provider 价格覆盖可以只声明 processing_tiers，并继续从 GlobalModel
+ * 继承 Standard 目录，因此 tiers 在原始 Provider 配置中是可选的。
+ */
+export interface ProviderTieredPricingConfig {
+  tiers?: PricingTier[]
+  image_output_prices?: Record<string, ImageOutputQualityPricing> | null
+  image_output_price_default?: number | null
+  image_output_price_ranges?: ImageOutputPriceRange[] | null
+  processing_tiers?: Record<string, ProcessingTierPricingConfig> | null
+  [key: string]: unknown
+}
+
+export interface ModelConfig extends Record<string, unknown> {
+  description?: string
+  model_mappings?: string[]
+  api_formats?: string[]
+  billing?: {
+    video?: {
+      price_per_second_by_resolution?: Record<string, number>
+      [key: string]: unknown
+    }
+    [key: string]: unknown
+  }
 }
 
 export interface Model {
@@ -29,17 +93,18 @@ export interface Model {
   global_model_id: string  // 关联的 GlobalModel ID
   provider_model_name: string  // Provider 侧的主模型名称
   provider_model_mappings?: ProviderModelMapping[] | null  // 模型名称映射列表（带优先级）
-  config?: Record<string, unknown> | null  // 额外配置（如 billing/video 等）
+  config?: ModelConfig | null  // 额外配置（如 billing/video 等）
   // 原始配置值（可能为空，为空时使用 GlobalModel 默认值）
   price_per_request?: number | null  // 按次计费价格
-  tiered_pricing?: TieredPricingConfig | null  // 阶梯计费配置
+  tiered_pricing?: ProviderTieredPricingConfig | null  // Provider 原始覆盖，可仅包含 processing_tiers
   supports_vision?: boolean | null
   supports_function_calling?: boolean | null
   supports_streaming?: boolean | null
   supports_extended_thinking?: boolean | null
   supports_image_generation?: boolean | null
+  supports_embedding?: boolean | null
   // 有效值（合并 Model 和 GlobalModel 默认值后的结果）
-  effective_tiered_pricing?: TieredPricingConfig | null  // 有效阶梯计费配置
+  effective_tiered_pricing?: ProviderTieredPricingConfig | null  // 当前响应可能是 Provider partial 覆盖
   effective_input_price?: number | null
   effective_output_price?: number | null
   effective_price_per_request?: number | null  // 有效按次计费价格
@@ -48,6 +113,7 @@ export interface Model {
   effective_supports_streaming?: boolean | null
   effective_supports_extended_thinking?: boolean | null
   effective_supports_image_generation?: boolean | null
+  effective_supports_embedding?: boolean | null
   is_active: boolean
   is_available: boolean
   created_at: string
@@ -56,7 +122,8 @@ export interface Model {
   global_model_name?: string
   global_model_display_name?: string
   // 有效配置（合并 Model 和 GlobalModel 的 config）
-  effective_config?: Record<string, unknown> | null
+  effective_config?: ModelConfig | null
+  model_test_capabilities?: ModelTestCapabilities | null
 }
 
 export interface ModelCreate {
@@ -65,7 +132,7 @@ export interface ModelCreate {
   global_model_id: string  // 关联的 GlobalModel ID（必填）
   // 计费配置（可选，为空时使用 GlobalModel 默认值）
   price_per_request?: number  // 按次计费价格
-  tiered_pricing?: TieredPricingConfig  // 阶梯计费配置
+  tiered_pricing?: ProviderTieredPricingConfig  // Provider 阶梯计费覆盖
   // 能力配置（可选，为空时使用 GlobalModel 默认值）
   supports_vision?: boolean
   supports_function_calling?: boolean
@@ -73,7 +140,7 @@ export interface ModelCreate {
   supports_extended_thinking?: boolean
   supports_image_generation?: boolean
   is_active?: boolean
-  config?: Record<string, unknown>
+  config?: ModelConfig
 }
 
 export interface ModelUpdate {
@@ -81,7 +148,7 @@ export interface ModelUpdate {
   provider_model_mappings?: ProviderModelMapping[] | null  // 模型名称映射列表（带优先级）
   global_model_id?: string
   price_per_request?: number | null  // 按次计费价格（null 表示清空/使用默认值）
-  tiered_pricing?: TieredPricingConfig | null  // 阶梯计费配置
+  tiered_pricing?: ProviderTieredPricingConfig | null  // Provider 阶梯计费覆盖
   supports_vision?: boolean
   supports_function_calling?: boolean
   supports_streaming?: boolean
@@ -89,14 +156,26 @@ export interface ModelUpdate {
   supports_image_generation?: boolean
   is_active?: boolean
   is_available?: boolean
-  config?: Record<string, unknown> | null
+  config?: ModelConfig | null
 }
 
 export interface ModelCapabilities {
   supports_vision: boolean
   supports_function_calling: boolean
   supports_streaming: boolean
+  supports_embedding: boolean
   [key: string]: boolean
+}
+
+export interface OpenAiImageModelTestCapability {
+  max_generation_count?: number | null
+  supports_generation?: boolean | null
+  supports_edit?: boolean | null
+}
+
+export interface ModelTestCapabilities {
+  'openai:image'?: OpenAiImageModelTestCapability | null
+  [apiFormat: string]: OpenAiImageModelTestCapability | Record<string, unknown> | null | undefined
 }
 
 export interface ProviderModelPriceInfo {
@@ -130,6 +209,7 @@ export interface ModelCatalogProviderDetail {
   supports_vision?: boolean | null
   supports_function_calling?: boolean | null
   supports_streaming?: boolean | null
+  supports_embedding?: boolean | null
   is_active: boolean
   mapping_id?: string | null
 }
@@ -183,7 +263,7 @@ export interface GlobalModelCreate {
   // Key 能力配置 - 模型支持的能力列表
   supported_capabilities?: string[]
   // 模型配置（JSON格式）- 包含能力、规格、元信息等
-  config?: Record<string, unknown>
+  config?: ModelConfig
   is_active?: boolean
 }
 
@@ -197,7 +277,7 @@ export interface GlobalModelUpdate {
   // Key 能力配置 - 模型支持的能力列表
   supported_capabilities?: string[] | null
   // 模型配置（JSON格式）- 包含能力、规格、元信息等
-  config?: Record<string, unknown> | null
+  config?: ModelConfig | null
 }
 
 export interface GlobalModelResponse {
@@ -211,8 +291,9 @@ export interface GlobalModelResponse {
   default_tiered_pricing: TieredPricingConfig
   // Key 能力配置 - 模型支持的能力列表
   supported_capabilities?: string[] | null
+  supports_embedding?: boolean | null
   // 模型配置（JSON格式）
-  config?: Record<string, unknown> | null
+  config?: ModelConfig | null
   // 统计数据
   provider_count?: number
   active_provider_count?: number
@@ -242,7 +323,10 @@ export interface UpstreamModel {
   id: string
   owned_by?: string
   display_name?: string
+  visibility?: string
+  supported_in_api?: boolean
   api_formats: string[]  // 该模型支持的所有 API 格式（后端保证返回数组）
+  model_test_capabilities?: ModelTestCapabilities | null
 }
 
 /**

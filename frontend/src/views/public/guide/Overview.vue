@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import {
+  Code,
   Server,
   Key,
   Container,
-  Code,
   Shield,
   Monitor,
   Check,
@@ -44,50 +44,23 @@ const productionSteps = [
   }
 ]
 
-const localBuildSteps = [
-  {
-    title: '克隆代码',
-    code: 'git clone https://github.com/fawney19/Aether.git\ncd Aether',
-    icon: Code
-  },
-  {
-    title: '配置环境变量',
-    note: '生成密钥并填入 .env',
-    code: 'cp .env.example .env\npython generate_keys.py',
-    icon: Key
-  },
-  {
-    title: '构建',
-    note: '自动构建、启动、迁移',
-    code: './deploy.sh',
-    icon: Container
-  },
-  {
-    title: '更新',
-    note: '需要拉取最新代码',
-    code: 'git pull origin master',
-    icon: Code,
-    optional: true
-  }
-]
-
 const developmentSteps = [
   {
     title: '启动依赖',
-    note: 'PostgreSQL + Redis',
-    code: 'docker compose -f docker-compose.build.yml up -d postgres redis',
+    note: '可选，make dev 会自动启动',
+    code: 'docker compose up -d postgres redis',
     icon: Container
   },
   {
-    title: '后端',
-    note: '热重载开发服务器',
-    code: 'uv sync\n./dev.sh',
+    title: '安装前端依赖',
+    note: '首次本地开发',
+    code: '(cd frontend && npm install)',
     icon: Server
   },
   {
-    title: '前端',
-    note: '自动代理到 8084',
-    code: 'cd frontend && npm install && npm run dev',
+    title: '启动开发服务',
+    note: '后端 + Vite dev server',
+    code: 'make dev',
     icon: Monitor
   }
 ]
@@ -129,15 +102,14 @@ function copyStep(stepId: string, code: string) {
         class="mt-6"
       >
         <!-- Tab 切换 -->
-        <div class="flex border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] px-5">
+        <div class="flex max-w-full overflow-x-auto border-b border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] px-5">
           <button
             v-for="(tab, idx) in [
               { icon: Container, label: 'Docker 预构建镜像' },
-              { icon: Code, label: '本地代码构建' },
               { icon: Monitor, label: '本地开发' }
             ]"
             :key="idx"
-            class="flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors border-b-2 -mb-px hover:text-[#262624] dark:hover:text-[#f1ead8]"
+            class="flex shrink-0 items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors border-b-2 -mb-px hover:text-[#262624] dark:hover:text-[#f1ead8]"
             :class="activeDeployTab === idx
               ? 'border-[#cc785c] text-[#cc785c] dark:text-[#d4a27f]'
               : 'border-transparent text-[#666663] dark:text-[#a3a094]'"
@@ -145,7 +117,7 @@ function copyStep(stepId: string, code: string) {
           >
             <component
               :is="tab.icon"
-              class="h-4 w-4"
+              class="h-4 w-4 shrink-0"
             />
             {{ tab.label }}
           </button>
@@ -200,58 +172,9 @@ function copyStep(stepId: string, code: string) {
           </div>
         </div>
 
-        <!-- 本地构建步骤 -->
-        <div
-          v-show="activeDeployTab === 1"
-          class="p-5 space-y-3"
-        >
-          <div
-            v-for="(step, idx) in localBuildSteps"
-            :key="idx"
-            class="group rounded-xl border border-[#e5e4df] dark:border-[rgba(227,224,211,0.12)] overflow-hidden transition-colors"
-            :class="step.optional ? 'border-dashed opacity-80' : ''"
-          >
-            <div class="flex items-center gap-3 px-4 py-3">
-              <span class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 bg-[#cc785c] text-white">
-                {{ idx + 1 }}
-              </span>
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="text-sm font-medium text-[#262624] dark:text-[#f1ead8]">{{ step.title }}</span>
-                  <span
-                    v-if="step.optional"
-                    class="text-[10px] px-1.5 py-0.5 rounded-full bg-[#e5e4df] dark:bg-[rgba(227,224,211,0.12)] text-[#666663] dark:text-[#a3a094]"
-                  >
-                    更新时
-                  </span>
-                </div>
-                <span
-                  v-if="step.note"
-                  class="text-xs text-[#91918d] dark:text-[#a3a094]/80"
-                >{{ step.note }}</span>
-              </div>
-              <button
-                class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-[#666663] dark:text-[#a3a094] hover:bg-[#f0f0eb] dark:hover:bg-[#3a3731] transition-colors shrink-0"
-                @click="copyStep(`build-${idx}`, step.code)"
-              >
-                <Check
-                  v-if="copiedStep === `build-${idx}`"
-                  class="h-3.5 w-3.5 text-green-500"
-                />
-                <Copy
-                  v-else
-                  class="h-3.5 w-3.5"
-                />
-                {{ copiedStep === `build-${idx}` ? '已复制' : '复制' }}
-              </button>
-            </div>
-            <pre class="px-4 pb-3 text-[13px] font-mono text-[#262624] dark:text-[#f1ead8] overflow-x-auto leading-relaxed border-t border-[#e5e4df]/50 dark:border-[rgba(227,224,211,0.06)] pt-3 mx-4 mb-1"><code>{{ step.code }}</code></pre>
-          </div>
-        </div>
-
         <!-- 开发环境步骤 -->
         <div
-          v-show="activeDeployTab === 2"
+          v-show="activeDeployTab === 1"
           class="p-5 space-y-3"
         >
           <div
@@ -474,7 +397,7 @@ function copyStep(stepId: string, code: string) {
           <h3>1. Aether-Proxy</h3>
           <p>Rust实现, 超小资源占有, 适合性能低的VPS直接使用。</p>
           <a
-            href="https://github.com/fawney19/Aether/tree/master/aether-proxy"
+            href="https://github.com/fawney19/Aether/tree/main/aether-tunnel"
             target="_blank"
             rel="noopener noreferrer"
             class="text-[#cc785c] dark:text-[#d4a27f] hover:underline mt-2 inline-block"

@@ -3,6 +3,7 @@ import apiClient from './client'
 export interface OAuthProviderInfo {
   provider_type: string
   display_name: string
+  icon_url?: string | null
 }
 
 export interface OAuthProvidersResponse {
@@ -46,6 +47,7 @@ export interface OAuthProviderAdminConfig {
   frontend_callback_url: string
   attribute_mapping?: Record<string, unknown> | null
   extra_config?: Record<string, unknown> | null
+  icon_url?: string | null
   is_enabled: boolean
 }
 
@@ -61,6 +63,7 @@ export interface OAuthProviderUpsertRequest {
   frontend_callback_url: string
   attribute_mapping?: Record<string, unknown> | null
   extra_config?: Record<string, unknown> | null
+  icon_url?: string | null
   is_enabled: boolean
   force?: boolean
 }
@@ -68,7 +71,7 @@ export interface OAuthProviderUpsertRequest {
 export interface OAuthProviderTestResponse {
   authorization_url_reachable: boolean
   token_url_reachable: boolean
-  secret_status: 'likely_valid' | 'invalid' | 'unknown' | 'not_provided' | string
+  secret_status: 'likely_valid' | 'configured' | 'invalid' | 'unknown' | 'not_provided' | string
   details?: string
 }
 
@@ -96,9 +99,9 @@ export const oauthApi = {
     return response.data.links || []
   },
 
-  async createBindToken(providerType: string): Promise<string> {
-    const response = await apiClient.post<{ bind_token: string }>(`/api/user/oauth/${providerType}/bind-token`)
-    return response.data.bind_token
+  async createBindAuthorization(providerType: string): Promise<string> {
+    const response = await apiClient.post<{ authorize_url: string }>(`/api/user/oauth/${providerType}/bind-token`)
+    return response.data.authorize_url
   },
 
   async unbind(providerType: string): Promise<{ message: string }> {
@@ -118,24 +121,23 @@ export const oauthApi = {
     },
 
     async getProviderConfig(providerType: string): Promise<OAuthProviderAdminConfig> {
-      const response = await apiClient.get<OAuthProviderAdminConfig>(`/api/admin/oauth/providers/${providerType}`)
+      const response = await apiClient.get<OAuthProviderAdminConfig>(`/api/admin/oauth/providers/${encodeURIComponent(providerType)}`)
       return response.data
     },
 
     async upsertProviderConfig(providerType: string, payload: OAuthProviderUpsertRequest): Promise<OAuthProviderAdminConfig> {
-      const response = await apiClient.put<OAuthProviderAdminConfig>(`/api/admin/oauth/providers/${providerType}`, payload)
+      const response = await apiClient.put<OAuthProviderAdminConfig>(`/api/admin/oauth/providers/${encodeURIComponent(providerType)}`, payload)
       return response.data
     },
 
     async deleteProviderConfig(providerType: string): Promise<{ message: string }> {
-      const response = await apiClient.delete<{ message: string }>(`/api/admin/oauth/providers/${providerType}`)
+      const response = await apiClient.delete<{ message: string }>(`/api/admin/oauth/providers/${encodeURIComponent(providerType)}`)
       return response.data
     },
 
     async testProviderConfig(providerType: string, payload: OAuthProviderTestRequest): Promise<OAuthProviderTestResponse> {
-      const response = await apiClient.post<OAuthProviderTestResponse>(`/api/admin/oauth/providers/${providerType}/test`, payload)
+      const response = await apiClient.post<OAuthProviderTestResponse>(`/api/admin/oauth/providers/${encodeURIComponent(providerType)}/test`, payload)
       return response.data
     },
   }
 }
-

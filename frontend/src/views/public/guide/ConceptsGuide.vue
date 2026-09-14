@@ -68,14 +68,6 @@ import { BookOpen } from 'lucide-vue-next'
       <div class="space-y-4 mt-4 text-[#666663] dark:text-[#a3a094] text-sm">
         <ul class="list-decimal pl-5 space-y-2">
           <li><strong class="text-[#262624] dark:text-[#f1ead8] font-medium">提供商类型：</strong>自定义或反代；一般自定义即可，反代请进入反代章节。</li>
-          <li>
-            <strong class="text-[#262624] dark:text-[#f1ead8] font-medium">计费类型：</strong>
-            <ul class="list-disc pl-5 mt-1 space-y-1">
-              <li>按量付费：持续使用</li>
-              <li>月卡额度：按周期(天)限额</li>
-              <li>免费套餐：不计入成本即倍率为0</li>
-            </ul>
-          </li>
           <li><strong class="text-[#262624] dark:text-[#f1ead8] font-medium">最大重试次数：</strong>在缓存亲和调度模式下，首次请求失败后的重试次数。</li>
           <li>
             <strong class="text-[#262624] dark:text-[#f1ead8] font-medium">超时时间：</strong>
@@ -102,7 +94,7 @@ import { BookOpen } from 'lucide-vue-next'
     >
       <h2>3. 添加端点</h2>
       <p class="text-sm text-[#666663] dark:text-[#a3a094] mb-4">
-        添加端点是添加上游支持的端点，并非你需要使用的端点。比如 Anyrouter 只支持 Claude Code 接入，那么就应该仅添加 Claude CLI 端点。
+        添加端点是添加上游支持的端点，并非你需要使用的端点。比如 Anyrouter 只支持 Claude Code 接入，那么就应该添加 Claude Messages 端点，并在 Key 中选择对应认证方式。
       </p>
       <ul class="list-decimal pl-5 space-y-2 text-[#666663] dark:text-[#a3a094] text-sm">
         <li><strong class="text-[#262624] dark:text-[#f1ead8] font-medium">选择格式：</strong>选择上游支持的端点格式。</li>
@@ -158,7 +150,6 @@ import { BookOpen } from 'lucide-vue-next'
           <strong class="text-[#262624] dark:text-[#f1ead8] font-medium">熔断探测：</strong><br>
           当同一个提供商Key字连续若干次请求失败后，会进入熔断状态，之后每间N分钟进行探测请求，若请求成功解除熔断后续正常请求，否则按以指数级增长探测时间以待下次探测，最大探测间隔不会增长超过32分钟。
         </li>
-        <li><strong class="text-[#262624] dark:text-[#f1ead8] font-medium">能力标签：</strong>定义该Key可以使用的能力。</li>
         <li>
           <strong class="text-[#262624] dark:text-[#f1ead8] font-medium">自动获取上游模型：</strong><br>
           在上游获取模型端点支持的情况下，从接口自动获取可以用模型列表。且按一定时间自动刷新，不开启则默认任意模型可用，或在后续模型权限中手动添加。

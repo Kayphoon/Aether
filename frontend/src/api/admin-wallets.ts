@@ -1,5 +1,6 @@
 import apiClient from './client'
-import type { RefundRequest, WalletSummary, WalletTransaction } from './wallet'
+import { buildCacheKey, cachedRequest } from '@/utils/cache'
+import type { RefundRequest, WalletDailyQuotaSummary, WalletSummary, WalletTransaction } from './wallet'
 
 export interface AdminWallet extends WalletSummary {
   user_id: string | null
@@ -7,6 +8,11 @@ export interface AdminWallet extends WalletSummary {
   owner_type: 'user' | 'api_key'
   owner_name: string | null
   created_at: string
+  wallet_balance?: number | null
+  package_balance?: number | null
+  total_available_balance?: number | null
+  daily_quota?: WalletDailyQuotaSummary | null
+  deduction_order?: string[]
 }
 
 export interface AdminWalletListResponse {
@@ -89,6 +95,7 @@ export interface RefundCompleteRequest {
 export const adminWalletApi = {
   async listWallets(params?: {
     status?: string
+    owner_type?: 'user' | 'api_key'
     limit?: number
     offset?: number
   }): Promise<AdminWalletListResponse> {
@@ -98,41 +105,52 @@ export const adminWalletApi = {
 
   async listAllWallets(params?: {
     status?: string
-  }): Promise<AdminWallet[]> {
-    const items: AdminWallet[] = []
-    const limit = 200
-    const maxPages = 200
-    let offset = 0
-    let page = 0
+    owner_type?: 'user' | 'api_key'
+  }, options: { cacheTtlMs?: number } = {}): Promise<AdminWallet[]> {
+    const cacheKey = buildCacheKey(
+      'admin:wallets:list-all',
+      params as Record<string, unknown> | undefined,
+    )
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const items: AdminWallet[] = []
+        const limit = 200
+        const maxPages = 200
+        let offset = 0
+        let page = 0
 
-    while (page < maxPages) {
-      const response = await apiClient.get<AdminWalletListResponse>('/api/admin/wallets', {
-        params: {
-          ...params,
-          limit,
-          offset,
-        },
-      })
-      const data = response.data
-      items.push(...data.items)
+        while (page < maxPages) {
+          const response = await apiClient.get<AdminWalletListResponse>('/api/admin/wallets', {
+            params: {
+              ...params,
+              limit,
+              offset,
+            },
+          })
+          const data = response.data
+          items.push(...data.items)
 
-      if (items.length >= data.total || data.items.length < limit) {
-        break
-      }
+          if (items.length >= data.total || data.items.length < limit) {
+            break
+          }
 
-      const nextOffset = offset + data.items.length
-      if (nextOffset <= offset) {
-        throw new Error('分页游标未前进，终止全量钱包拉取以避免死循环')
-      }
-      offset = nextOffset
-      page += 1
-    }
+          const nextOffset = offset + data.items.length
+          if (nextOffset <= offset) {
+            throw new Error('分页游标未前进，终止全量钱包拉取以避免死循环')
+          }
+          offset = nextOffset
+          page += 1
+        }
 
-    if (page >= maxPages) {
-      throw new Error(`钱包列表分页超过最大页数 ${maxPages}，已中止请求`)
-    }
+        if (page >= maxPages) {
+          throw new Error(`钱包列表分页超过最大页数 ${maxPages}，已中止请求`)
+        }
 
-    return items
+        return items
+      },
+      options.cacheTtlMs ?? 0,
+    )
   },
 
   async getWalletDetail(walletId: string): Promise<AdminWalletDetailResponse> {
@@ -197,7 +215,18 @@ export const adminWalletApi = {
       credited_at: string | null
     }
   }> {
-    const response = await apiClient.post(`/api/admin/wallets/${walletId}/recharge`, payload)
+    const response = await apiClient.post<{
+    wallet: AdminWallet
+    payment_order: {
+      id: string
+      order_no: string
+      amount_usd: number
+      payment_method: string
+      status: string
+      created_at: string
+      credited_at: string | null
+    }
+  }>(`/api/admin/wallets/${walletId}/recharge`, payload)
     return response.data
   },
 
@@ -205,7 +234,10 @@ export const adminWalletApi = {
     wallet: AdminWallet
     transaction: WalletTransaction
   }> {
-    const response = await apiClient.post(`/api/admin/wallets/${walletId}/adjust`, payload)
+    const response = await apiClient.post<{
+    wallet: AdminWallet
+    transaction: WalletTransaction
+  }>(`/api/admin/wallets/${walletId}/adjust`, payload)
     return response.data
   },
 
@@ -214,7 +246,11 @@ export const adminWalletApi = {
     refund: RefundRequest
     transaction: WalletTransaction
   }> {
-    const response = await apiClient.post(
+    const response = await apiClient.post<{
+    wallet: AdminWallet
+    refund: RefundRequest
+    transaction: WalletTransaction
+  }>(
       `/api/admin/wallets/${walletId}/refunds/${refundId}/process`,
       {}
     )
@@ -226,7 +262,11 @@ export const adminWalletApi = {
     refund: RefundRequest
     transaction: WalletTransaction | null
   }> {
-    const response = await apiClient.post(
+    const response = await apiClient.post<{
+    wallet: AdminWallet
+    refund: RefundRequest
+    transaction: WalletTransaction | null
+  }>(
       `/api/admin/wallets/${walletId}/refunds/${refundId}/fail`,
       payload
     )
@@ -238,7 +278,7 @@ export const adminWalletApi = {
     refundId: string,
     payload: RefundCompleteRequest
   ): Promise<{ refund: RefundRequest }> {
-    const response = await apiClient.post(
+    const response = await apiClient.post<{ refund: RefundRequest }>(
       `/api/admin/wallets/${walletId}/refunds/${refundId}/complete`,
       payload
     )

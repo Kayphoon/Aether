@@ -32,6 +32,63 @@ import {
 /** Raw JSON object from API (loosely typed) */
 type RawObject = Record<string, unknown>
 
+type JsonParseResult =
+  | { ok: true; value: unknown }
+  | { ok: false }
+
+const HTML_ENTITY_MAP: Record<string, string> = {
+  amp: '&',
+  apos: "'",
+  gt: '>',
+  lt: '<',
+  nbsp: '\u00A0',
+  quot: '"',
+}
+
+const parseJsonString = (input: string): JsonParseResult => {
+  try {
+    return { ok: true, value: JSON.parse(input) as unknown }
+  } catch {
+    return { ok: false }
+  }
+}
+
+const decodeHtmlEntityToken = (entity: string): string => {
+  const normalized = entity.toLowerCase()
+  const named = HTML_ENTITY_MAP[normalized]
+  if (named !== undefined) {
+    return named
+  }
+
+  if (normalized.startsWith('#x')) {
+    const codePoint = Number.parseInt(normalized.slice(2), 16)
+    if (Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10FFFF) {
+      return String.fromCodePoint(codePoint)
+    }
+  }
+
+  if (normalized.startsWith('#')) {
+    const codePoint = Number.parseInt(normalized.slice(1), 10)
+    if (Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10FFFF) {
+      return String.fromCodePoint(codePoint)
+    }
+  }
+
+  return `&${entity};`
+}
+
+const decodeHtmlEntities = (input: string): string => {
+  let decoded = input
+  for (let pass = 0; pass < 3; pass += 1) {
+    const next = decoded.replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]+);/gi, (_match, entity: string) => decodeHtmlEntityToken(entity))
+    if (next === decoded) {
+      break
+    }
+    decoded = next
+  }
+  return decoded
+}
+
 /**
  * OpenAI API 格式解析器
  */
@@ -57,7 +114,7 @@ export class OpenAIParser implements ApiFormatParser {
     if (model.includes('gpt') || model.includes('o1') || model.includes('o3')) return 95
 
     // 3. 检查请求体结构
-    // OpenAI CLI (Responses API) 使用 input 字段
+    // OpenAI Responses API 使用 input 字段
     const isCliFormat = req?.input !== undefined || req?.instructions !== undefined
     // OpenAI Chat Completions 使用 messages 数组
     const isChatFormat = req?.messages && Array.isArray(req.messages)
@@ -72,7 +129,7 @@ export class OpenAIParser implements ApiFormatParser {
       : responseBody) as RawObject | null | undefined
 
     if (respBody) {
-      // OpenAI CLI 响应特征: type 字段为 response.* 格式
+      // OpenAI Responses 响应特征: type 字段为 response.* 格式
       if (this.isCliResponseEvent(respBody)) {
         return 95
       }
@@ -106,7 +163,7 @@ export class OpenAIParser implements ApiFormatParser {
   }
 
   /**
-   * 检查是否为 OpenAI CLI (Responses API) 的响应事件
+   * 检查是否为 OpenAI Responses API 的响应事件
    */
   private isCliResponseEvent(chunk: RawObject | null | undefined): boolean {
     const type = chunk?.type
@@ -174,7 +231,7 @@ export class OpenAIParser implements ApiFormatParser {
   }
 
   /**
-   * 解析 OpenAI CLI (Responses API) 请求
+   * 解析 OpenAI Responses API 请求
    *
    * CLI 格式特点：
    * - 使用 input 字段（可以是字符串、消息数组或对象）
@@ -256,11 +313,11 @@ export class OpenAIParser implements ApiFormatParser {
       return createMessage(role, contentBlocks)
     }
 
-    // function_call -> 工具调用
-    if (itemType === 'function_call') {
-      const toolId = String(item.call_id || item.id || '')
-      const toolName = String(item.name || '')
-      const args = String(item.arguments || '{}')
+    // Responses API call item -> 工具调用
+    if (this.isResponsesCallItemType(itemType)) {
+      const toolId = this.responsesCallId(item)
+      const toolName = this.responsesCallName(item)
+      const args = this.responsesCallInput(item)
       return createMessage('assistant', [createToolUseBlock(toolId, toolName, args)])
     }
 
@@ -347,7 +404,7 @@ export class OpenAIParser implements ApiFormatParser {
   }
 
   /**
-   * 解析 OpenAI CLI (Responses API) 响应
+   * 解析 OpenAI Responses API 响应
    *
    * CLI 响应格式: { output: [{ type: "message", content: [...] }] }
    */
@@ -382,6 +439,14 @@ export class OpenAIParser implements ApiFormatParser {
           if (contentBlocks.length > 0) {
             result.messages.push(createMessage('assistant', contentBlocks))
           }
+        } else if (item && this.isResponsesCallItemType(item.type)) {
+          result.messages.push(createMessage('assistant', [
+            createToolUseBlock(
+              this.responsesCallId(item),
+              this.responsesCallName(item),
+              this.responsesCallInput(item)
+            ),
+          ]))
         }
       }
 
@@ -491,7 +556,7 @@ export class OpenAIParser implements ApiFormatParser {
   }
 
   /**
-   * 解析 OpenAI CLI (Responses API) 流式响应
+   * 解析 OpenAI Responses API 流式响应
    *
    * 支持的事件类型：
    * - response.created: 响应创建
@@ -509,8 +574,39 @@ export class OpenAIParser implements ApiFormatParser {
 
       const textParts: string[] = []
       const toolCalls = new Map<string, { name: string; id: string; args: string[] }>()
-      let currentToolId = ''
-      let currentToolName = ''
+      const outputIndexToToolKey = new Map<number, string>()
+      let currentToolKey = ''
+
+      const ensureToolCall = (
+        key: string,
+        id: string,
+        name: string,
+        initialInput?: string
+      ) => {
+        if (!key) return
+        const existing = toolCalls.get(key)
+        if (existing) {
+          if (id) existing.id = id
+          if (name) existing.name = name
+          if (initialInput) existing.args = [initialInput]
+          return
+        }
+        toolCalls.set(key, {
+          name,
+          id,
+          args: initialInput ? [initialInput] : [],
+        })
+      }
+
+      const resolveToolKey = (chunk: RawObject): string => {
+        const itemId = typeof chunk.item_id === 'string' ? chunk.item_id : ''
+        if (itemId) return itemId
+        const outputIndex = typeof chunk.output_index === 'number' ? chunk.output_index : null
+        if (outputIndex != null) {
+          return outputIndexToToolKey.get(outputIndex) || currentToolKey
+        }
+        return currentToolKey
+      }
 
       for (const rawChunk of chunks) {
         const chunk = rawChunk as RawObject
@@ -525,7 +621,8 @@ export class OpenAIParser implements ApiFormatParser {
         }
 
         // 处理文本增量: response.output_text.delta
-        if (eventType === 'response.output_text.delta') {
+        // 兼容旧别名 response.outtext.delta
+        if (eventType === 'response.output_text.delta' || eventType === 'response.outtext.delta') {
           const delta = chunk.delta
           if (typeof delta === 'string') {
             textParts.push(delta)
@@ -538,28 +635,57 @@ export class OpenAIParser implements ApiFormatParser {
           continue
         }
 
-        // 处理函数调用输出项添加: response.output_item.added
-        if (eventType === 'response.output_item.added') {
+        // 处理 Responses call 输出项添加/完成: response.output_item.added / done
+        if (eventType === 'response.output_item.added' || eventType === 'response.output_item.done') {
           const item = chunk.item as RawObject | undefined
-          if (item?.type === 'function_call') {
-            currentToolId = String(item.call_id || item.id || '')
-            currentToolName = String(item.name || '')
-            if (currentToolId && !toolCalls.has(currentToolId)) {
-              toolCalls.set(currentToolId, {
-                name: currentToolName,
-                id: currentToolId,
-                args: [],
-              })
+          if (item && this.isResponsesCallItemType(item.type)) {
+            const itemId = typeof item.id === 'string' ? item.id : ''
+            const toolId = this.responsesCallId(item)
+            const key = itemId || toolId || String(chunk.output_index ?? '')
+            const input = eventType === 'response.output_item.done' && this.responsesCallHasInput(item)
+              ? this.responsesCallInput(item)
+              : ''
+            ensureToolCall(key, toolId, this.responsesCallName(item), input)
+            currentToolKey = key
+            if (typeof chunk.output_index === 'number') {
+              outputIndexToToolKey.set(chunk.output_index, key)
             }
           }
           continue
         }
 
-        // 处理函数调用参数增量: response.function_call_arguments.delta
-        if (eventType === 'response.function_call_arguments.delta') {
+        // 处理已知 call 输入增量
+        if (
+          eventType === 'response.function_call_arguments.delta' ||
+          eventType === 'response.custom_tool_call_input.delta'
+        ) {
           const delta = chunk.delta
-          if (typeof delta === 'string' && currentToolId && toolCalls.has(currentToolId)) {
-            toolCalls.get(currentToolId)?.args.push(delta)
+          const key = resolveToolKey(chunk)
+          if (typeof delta === 'string' && key && toolCalls.has(key)) {
+            toolCalls.get(key)?.args.push(delta)
+          }
+          continue
+        }
+
+        if (eventType === 'response.function_call_arguments.done') {
+          const key = resolveToolKey(chunk)
+          const args = typeof chunk.arguments === 'string'
+            ? chunk.arguments
+            : typeof chunk.delta === 'string'
+              ? chunk.delta
+              : null
+          const toolCall = key ? toolCalls.get(key) : undefined
+          if (toolCall && args != null) {
+            toolCall.args = [args]
+          }
+          continue
+        }
+
+        if (eventType === 'response.custom_tool_call_input.done') {
+          const key = resolveToolKey(chunk)
+          const toolCall = key ? toolCalls.get(key) : undefined
+          if (toolCall && typeof chunk.input === 'string') {
+            toolCall.args = [chunk.input]
           }
           continue
         }
@@ -572,17 +698,29 @@ export class OpenAIParser implements ApiFormatParser {
             result.model = response.model
           }
 
-          // 从 output 中提取文本（备用方案）
-          if (textParts.length === 0 && Array.isArray(response?.output)) {
-            for (const rawItem of response.output as unknown[]) {
-              const item = rawItem as RawObject
-              if (item?.type === 'message' && Array.isArray(item?.content)) {
+          // 从 output 中提取文本和工具调用（备用方案）
+          if (Array.isArray(response?.output)) {
+            const output = response.output as unknown[]
+            for (let index = 0; index < output.length; index++) {
+              const item = output[index] as RawObject
+              if (textParts.length === 0 && item?.type === 'message' && Array.isArray(item?.content)) {
                 for (const rawContent of item.content as unknown[]) {
                   const content = rawContent as RawObject
                   if (content?.type === 'output_text' && typeof content?.text === 'string') {
                     textParts.push(content.text)
                   }
                 }
+              } else if (this.isResponsesCallItemType(item.type)) {
+                const itemId = typeof item.id === 'string' ? item.id : ''
+                const toolId = this.responsesCallId(item)
+                // 与流式阶段使用同一套 key 命中同一条工具调用，避免重复渲染
+                const key = itemId || toolId || outputIndexToToolKey.get(index) || String(index)
+                // 仅在最终项确实带有输入时才覆盖，避免用 '{}' 等默认值
+                // 冲掉已通过增量事件收集到的参数
+                const input = this.responsesCallHasInput(item)
+                  ? this.responsesCallInput(item)
+                  : ''
+                ensureToolCall(key, toolId, this.responsesCallName(item), input)
               }
             }
           }
@@ -673,6 +811,49 @@ export class OpenAIParser implements ApiFormatParser {
     return createMessage(role, contentBlocks)
   }
 
+  private isResponsesCallItemType(itemType: unknown): boolean {
+    return typeof itemType === 'string' && itemType.endsWith('_call')
+  }
+
+  private responsesCallId(item: RawObject): string {
+    return String(item.call_id || item.id || '')
+  }
+
+  private responsesCallName(item: RawObject): string {
+    const name = typeof item.name === 'string' ? item.name.trim() : ''
+    if (name) return name
+    return typeof item.type === 'string' ? item.type : 'tool_call'
+  }
+
+  private responsesCallInputCandidate(item: RawObject): unknown {
+    if (item.type === 'function_call') return item.arguments
+    if (item.type === 'custom_tool_call') return item.input
+    for (const key of ['input', 'arguments', 'action', 'query', 'code', 'prompt']) {
+      if (item[key] != null) return item[key]
+    }
+    return undefined
+  }
+
+  private responsesCallInput(item: RawObject): string {
+    const input = this.responsesCallInputCandidate(item)
+    if (typeof input === 'string') return input
+    if (input == null) {
+      if (item.type === 'function_call') return '{}'
+      if (item.type === 'custom_tool_call') return ''
+      return JSON.stringify(item, null, 2)
+    }
+    return JSON.stringify(input, null, 2)
+  }
+
+  private responsesCallHasInput(item: RawObject): boolean {
+    const input = this.responsesCallInputCandidate(item)
+    if (input == null) {
+      return item.type !== 'function_call' && item.type !== 'custom_tool_call'
+    }
+    if (typeof input === 'string') return input.length > 0
+    return true
+  }
+
   /**
    * 映射角色
    */
@@ -751,7 +932,7 @@ export class OpenAIParser implements ApiFormatParser {
   }
 
   /**
-   * 渲染 OpenAI CLI (Responses API) 请求
+   * 渲染 OpenAI Responses API 请求
    */
   private renderCliRequest(requestBody: RawObject): RenderResult {
     try {
@@ -829,12 +1010,12 @@ export class OpenAIParser implements ApiFormatParser {
       return createMessageBlock(role, contentBlocks, { roleLabel: this.getRoleLabel(role) })
     }
 
-    // function_call -> 工具调用
-    if (itemType === 'function_call') {
-      const toolName = String(item.name || '工具调用')
-      const args = this.formatJson(item.arguments)
+    // Responses API call item -> 工具调用
+    if (this.isResponsesCallItemType(itemType)) {
+      const toolName = this.responsesCallName(item)
+      const args = this.formatJson(this.responsesCallInput(item))
       return createMessageBlock('assistant', [
-        createToolUseRenderBlock(toolName, args, String(item.call_id || item.id || '')),
+        createToolUseRenderBlock(toolName, args, this.responsesCallId(item)),
       ], { roleLabel: 'Assistant', badges: [createBadgeBlock('工具调用', 'outline')] })
     }
 
@@ -927,7 +1108,7 @@ export class OpenAIParser implements ApiFormatParser {
   }
 
   /**
-   * 渲染 OpenAI CLI (Responses API) 响应
+   * 渲染 OpenAI Responses API 响应
    */
   private renderCliResponse(responseBody: RawObject): RenderResult {
     try {
@@ -957,6 +1138,17 @@ export class OpenAIParser implements ApiFormatParser {
               roleLabel: 'Assistant',
             }))
           }
+        } else if (this.isResponsesCallItemType(item.type)) {
+          blocks.push(createMessageBlock('assistant', [
+            createToolUseRenderBlock(
+              this.responsesCallName(item),
+              this.formatJson(this.responsesCallInput(item)),
+              this.responsesCallId(item)
+            ),
+          ], {
+            roleLabel: 'Assistant',
+            badges: [createBadgeBlock('工具调用', 'outline')],
+          }))
         }
       }
 
@@ -1152,12 +1344,21 @@ export class OpenAIParser implements ApiFormatParser {
    */
   private formatJson(input: unknown): string {
     if (typeof input === 'string') {
-      try {
-        const parsed = JSON.parse(input) as unknown
-        return JSON.stringify(parsed, null, 2)
-      } catch {
-        return input
+      const parsed = parseJsonString(input)
+      if (parsed.ok) {
+        return JSON.stringify(parsed.value, null, 2)
       }
+
+      const decoded = decodeHtmlEntities(input)
+      if (decoded !== input) {
+        const parsedDecoded = parseJsonString(decoded)
+        if (parsedDecoded.ok) {
+          return JSON.stringify(parsedDecoded.value, null, 2)
+        }
+        return decoded
+      }
+
+      return input
     }
     return JSON.stringify(input, null, 2)
   }

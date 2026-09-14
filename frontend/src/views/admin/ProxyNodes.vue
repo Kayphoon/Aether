@@ -4,760 +4,151 @@
       variant="default"
       class="overflow-hidden"
     >
-      <!-- 标题和筛选器 -->
-      <div class="px-4 sm:px-6 py-3.5 border-b border-border/60">
-        <!-- 移动端 -->
-        <div class="flex flex-col gap-3 sm:hidden">
-          <div class="flex items-center justify-between">
-            <h3 class="text-base font-semibold">
-              代理节点
-            </h3>
-            <div class="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                class="h-7 text-xs"
-                @click="showBatchUpgradeDialog = true"
-              >
-                升级
-              </Button>
-              <Button
-                size="sm"
-                class="h-7 text-xs"
-                @click="showAddDialog = true"
-              >
-                <Plus class="w-3 h-3 mr-1" />
-                添加
-              </Button>
-              <RefreshButton
-                :loading="store.loading"
-                @click="refresh"
-              />
-            </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <div class="relative flex-1">
-              <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground z-10 pointer-events-none" />
-              <Input
-                v-model="searchQuery"
-                type="text"
-                placeholder="搜索..."
-                class="w-full pl-8 pr-3 h-8 text-sm bg-background/50 border-border/60"
-              />
-            </div>
-            <Select v-model="filterStatus">
-              <SelectTrigger class="w-24 h-8 text-xs border-border/60">
-                <SelectValue placeholder="状态" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">
-                  全部
-                </SelectItem>
-                <SelectItem value="online">
-                  在线
-                </SelectItem>
-                <SelectItem value="offline">
-                  离线
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
+      <ProxyNodeHeader
+        v-model:search-query="searchQuery"
+        v-model:filter-status="filterStatus"
+        :loading="store.loading"
+        :status-options="proxyNodeStatusFilterOptions"
+        @open-distribution="showPoolProxyDistributionDialog = true"
+        @open-batch-upgrade="showBatchUpgradeDialog = true"
+        @open-add="openAddDialog"
+        @refresh="refresh"
+      />
 
-        <!-- 桌面端 -->
-        <div class="hidden sm:flex items-center justify-between gap-4">
-          <h3 class="text-base font-semibold">
-            代理节点
-          </h3>
-          <div class="flex items-center gap-2">
-            <div class="relative">
-              <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground z-10 pointer-events-none" />
-              <Input
-                v-model="searchQuery"
-                type="text"
-                placeholder="搜索..."
-                class="w-48 pl-8 pr-3 h-8 text-sm bg-background/50 border-border/60"
-              />
-            </div>
-            <div class="h-4 w-px bg-border" />
-            <Select v-model="filterStatus">
-              <SelectTrigger class="w-28 h-8 text-xs border-border/60">
-                <SelectValue placeholder="全部状态" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">
-                  全部状态
-                </SelectItem>
-                <SelectItem value="online">
-                  在线
-                </SelectItem>
-                <SelectItem value="offline">
-                  离线
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <div class="h-4 w-px bg-border" />
-            <Button
-              variant="outline"
-              size="sm"
-              class="h-8 text-xs"
-              @click="showBatchUpgradeDialog = true"
-            >
-              批量升级
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="h-8 w-8"
-              title="手动添加"
-              @click="showAddDialog = true"
-            >
-              <Plus class="w-3.5 h-3.5" />
-            </Button>
-            <RefreshButton
-              :loading="store.loading"
-              @click="refresh"
-            />
-          </div>
-        </div>
-      </div>
-
-      <!-- 桌面端表格 -->
-      <div class="hidden xl:block overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow class="border-b border-border/60 hover:bg-transparent">
-              <TableHead class="w-[160px] h-12 font-semibold">
-                名称
-              </TableHead>
-              <TableHead class="w-[180px] h-12 font-semibold">
-                地址
-              </TableHead>
-              <TableHead class="w-[100px] h-12 font-semibold">
-                区域
-              </TableHead>
-              <TableHead class="w-[90px] h-12 font-semibold text-center">
-                状态
-              </TableHead>
-              <TableHead class="w-[100px] h-12 font-semibold text-center">
-                总请求
-              </TableHead>
-              <TableHead class="w-[100px] h-12 font-semibold text-center">
-                失败率
-              </TableHead>
-              <TableHead class="w-[100px] h-12 font-semibold text-center">
-                延迟
-              </TableHead>
-              <TableHead class="w-[120px] h-12 font-semibold text-center">
-                版本
-              </TableHead>
-              <TableHead class="w-[160px] h-12 font-semibold">
-                最后心跳
-              </TableHead>
-              <TableHead class="w-[80px] h-12 font-semibold text-center">
-                操作
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow
-              v-for="node in paginatedNodes"
-              :key="node.id"
-              class="border-b border-border/40 hover:bg-muted/30 transition-colors"
-            >
-              <TableCell class="py-4">
-                <div class="flex items-center gap-1.5">
-                  <span class="text-sm font-semibold">{{ node.name }}</span>
-                  <Badge
-                    v-if="node.is_manual"
-                    variant="outline"
-                    class="text-[10px] px-1.5 py-0"
-                  >
-                    手动
-                  </Badge>
-                  <Badge
-                    v-if="node.tunnel_mode"
-                    variant="outline"
-                    class="text-[10px] px-1.5 py-0"
-                  >
-                    Tunnel
-                  </Badge>
-                  <HardwareTooltip :node="node" />
-                </div>
-              </TableCell>
-              <TableCell class="py-4">
-                <code class="text-xs text-muted-foreground">{{ nodeAddress(node) }}</code>
-              </TableCell>
-              <TableCell class="py-4">
-                <span class="text-sm text-muted-foreground">{{ formatRegion(node.region) }}</span>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <Badge
-                  :variant="statusVariant(node.status)"
-                  class="font-medium px-2.5 py-0.5 text-xs"
-                >
-                  {{ statusLabel(node.status) }}
-                </Badge>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <span class="text-sm tabular-nums">{{ formatNumber(node.total_requests) }}</span>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <span
-                  class="text-sm tabular-nums"
-                  :class="failureRate(node) > 5 ? 'text-destructive font-medium' : ''"
-                >{{ formatFailureRate(node) }}</span>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <span class="text-sm tabular-nums">{{ node.avg_latency_ms != null ? `${node.avg_latency_ms.toFixed(0)}ms` : '-' }}</span>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <span class="text-sm tabular-nums">{{ node.is_manual ? '-' : nodeProxyVersion(node) }}</span>
-              </TableCell>
-              <TableCell class="py-4">
-                <span class="text-xs text-muted-foreground">{{ formatTime(node.last_heartbeat_at) }}</span>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <div class="flex items-center justify-center gap-0.5">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    :title="testingNodes.has(node.id) ? '测试中...' : '测试连通性'"
-                    :disabled="testingNodes.has(node.id)"
-                    @click="handleTest(node)"
-                  >
-                    <Loader2
-                      v-if="testingNodes.has(node.id)"
-                      class="h-4 w-4 animate-spin"
-                    />
-                    <Activity
-                      v-else
-                      class="h-4 w-4"
-                    />
-                  </Button>
-                  <Button
-                    v-if="node.is_manual"
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    title="编辑"
-                    @click="handleEdit(node)"
-                  >
-                    <SquarePen class="h-4 w-4" />
-                  </Button>
-                  <Button
-                    v-if="!node.is_manual"
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    title="远程配置"
-                    @click="handleConfig(node)"
-                  >
-                    <Settings class="h-4 w-4" />
-                  </Button>
-                  <Button
-                    v-if="!node.is_manual"
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    title="连接事件"
-                    @click="handleViewEvents(node)"
-                  >
-                    <History class="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    title="删除"
-                    @click="handleDelete(node)"
-                  >
-                    <Trash2 class="h-4 w-4" />
-                  </Button>
-                </div>
-              </TableCell>
-            </TableRow>
-            <TableRow v-if="paginatedNodes.length === 0">
-              <TableCell
-                colspan="10"
-                class="py-12 text-center text-muted-foreground text-sm"
-              >
-                {{ store.loading ? '加载中...' : '暂无代理节点' }}
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </div>
-
-      <!-- 移动端卡片列表 -->
-      <div class="xl:hidden divide-y divide-border/40">
-        <div
-          v-for="node in paginatedNodes"
-          :key="node.id"
-          class="p-4 sm:p-5"
-        >
-          <div class="flex items-start justify-between mb-2">
-            <div>
-              <div class="flex items-center gap-1.5">
-                <span class="font-semibold text-sm">{{ node.name }}</span>
-                <Badge
-                  v-if="node.is_manual"
-                  variant="outline"
-                  class="text-[10px] px-1.5 py-0"
-                >
-                  手动
-                </Badge>
-                <Badge
-                  v-if="node.tunnel_mode"
-                  variant="outline"
-                  class="text-[10px] px-1.5 py-0"
-                >
-                  Tunnel
-                </Badge>
-                <HardwareTooltip :node="node" />
-              </div>
-              <code class="text-xs text-muted-foreground">{{ nodeAddress(node) }}</code>
-              <div
-                v-if="!node.is_manual"
-                class="text-[11px] text-muted-foreground mt-1"
-              >
-                版本: {{ nodeProxyVersion(node) }}
-              </div>
-            </div>
-            <Badge
-              :variant="statusVariant(node.status)"
-              class="text-xs"
-            >
-              {{ statusLabel(node.status) }}
-            </Badge>
-          </div>
-          <div class="grid grid-cols-4 gap-2 text-xs text-muted-foreground mb-3">
-            <div>
-              <span class="block text-foreground/60">区域</span>
-              <span>{{ formatRegion(node.region) }}</span>
-            </div>
-            <div>
-              <span class="block text-foreground/60">总请求</span>
-              <span class="tabular-nums">{{ formatNumber(node.total_requests) }}</span>
-            </div>
-            <div>
-              <span class="block text-foreground/60">失败率</span>
-              <span
-                class="tabular-nums"
-                :class="failureRate(node) > 5 ? 'text-destructive font-medium' : ''"
-              >{{ formatFailureRate(node) }}</span>
-            </div>
-            <div>
-              <span class="block text-foreground/60">延迟</span>
-              <span class="tabular-nums">{{ node.avg_latency_ms != null ? `${node.avg_latency_ms.toFixed(0)}ms` : '-' }}</span>
-            </div>
-          </div>
-          <div class="flex items-center justify-between">
-            <span class="text-xs text-muted-foreground">{{ formatTime(node.last_heartbeat_at) }}</span>
-            <div class="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                class="h-7 px-2 text-xs"
-                :disabled="testingNodes.has(node.id)"
-                @click="handleTest(node)"
-              >
-                <Loader2
-                  v-if="testingNodes.has(node.id)"
-                  class="h-3 w-3 mr-1 animate-spin"
-                />
-                <Activity
-                  v-else
-                  class="h-3 w-3 mr-1"
-                />
-                {{ testingNodes.has(node.id) ? '测试中' : '测试' }}
-              </Button>
-              <Button
-                v-if="node.is_manual"
-                variant="ghost"
-                size="sm"
-                class="h-7 px-2 text-xs"
-                @click="handleEdit(node)"
-              >
-                <SquarePen class="h-3 w-3 mr-1" />
-                编辑
-              </Button>
-              <Button
-                v-if="!node.is_manual"
-                variant="ghost"
-                size="sm"
-                class="h-7 px-2 text-xs"
-                @click="handleConfig(node)"
-              >
-                <Settings class="h-3 w-3 mr-1" />
-                配置
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                class="h-7 px-2 text-xs"
-                @click="handleDelete(node)"
-              >
-                <Trash2 class="h-3 w-3 mr-1" />
-                删除
-              </Button>
-            </div>
-          </div>
-        </div>
-        <div
-          v-if="paginatedNodes.length === 0"
-          class="p-8 text-center text-muted-foreground text-sm"
-        >
-          {{ store.loading ? '加载中...' : '暂无代理节点' }}
-        </div>
-      </div>
-
-      <!-- 分页 -->
-      <Pagination
-        :current="currentPage"
+      <ProxyNodeList
+        v-model:filter-status="filterStatus"
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :nodes="paginatedNodes"
         :total="filteredNodes.length"
-        :page-size="pageSize"
-        cache-key="proxy-nodes-page-size"
-        @update:current="currentPage = $event"
-        @update:page-size="pageSize = $event"
+        :loading="store.loading"
+        :status-options="proxyNodeStatusFilterOptions"
+        :expanded-node-ids="expandedNodeIds"
+        :testing-node-ids="testingNodes"
+        :node-details="nodeDetails"
+        @toggle-details="toggleNodeDetails"
+        @refresh-details="loadNodeDetails"
+        @test="handleTest"
+        @edit="handleEdit"
+        @config="handleConfig"
+        @view-events="handleViewEvents"
+        @delete="handleDelete"
       />
     </Card>
-    <!-- 手动添加/编辑代理节点对话框 -->
-    <Dialog
-      :model-value="showAddDialog"
-      :title="editingNode ? '编辑代理节点' : '手动添加代理节点'"
-      :description="editingNode ? '修改手动代理节点的配置' : '手动配置的代理节点，用于无法部署 aether-proxy 的场景'"
-      :icon="editingNode ? SquarePen : Plus"
-      size="md"
-      @update:model-value="handleDialogClose"
-    >
-      <form
-        class="space-y-4"
-        @submit.prevent="handleAddManualNode"
-      >
-        <div class="space-y-1.5">
-          <Label>名称 *</Label>
-          <Input
-            v-model="addForm.name"
-            placeholder="例如: 美西 VPN 代理"
-          />
-        </div>
-        <div class="space-y-1.5">
-          <Label>代理地址 *</Label>
-          <Input
-            v-model="addForm.proxy_url"
-            placeholder="http://proxy:port 或 socks5://proxy:port"
-          />
-        </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div class="space-y-1.5">
-            <Label>用户名</Label>
-            <Input
-              v-model="addForm.username"
-              placeholder="可选"
-              autocomplete="off"
-              data-form-type="other"
-              data-lpignore="true"
-              data-1p-ignore="true"
-            />
-          </div>
-          <div class="space-y-1.5">
-            <Label>密码</Label>
-            <Input
-              v-model="addForm.password"
-              type="password"
-              placeholder="可选"
-              autocomplete="new-password"
-              data-form-type="other"
-              data-lpignore="true"
-              data-1p-ignore="true"
-            />
-          </div>
-        </div>
-        <div class="space-y-1.5">
-          <Label>区域</Label>
-          <Input
-            v-model="addForm.region"
-            placeholder="可选，例如: US-West"
-          />
-        </div>
-      </form>
+    <ProxyNodeFormDialog
+      :open="showAddDialog"
+      :editing-node="editingNode"
+      :add-mode="addMode"
+      :add-form="addForm"
+      :batch-form="batchForm"
+      :install-form="installForm"
+      :install-system="installSystem"
+      :install-loading="installLoading"
+      :install-copied="installCopied"
+      :proxy-install-command="proxyInstallCommand"
+      :proxy-install-hint="proxyInstallHint"
+      :batch-parse-result="batchParseResult"
+      :adding-node="addingNode"
+      :testing-url="testingUrl"
+      @update:open="handleDialogClose"
+      @update:add-mode="addMode = $event"
+      @update:add-form="addForm = $event"
+      @update:batch-form="batchForm = $event"
+      @update:install-form="installForm = $event"
+      @update:install-system="installSystem = $event"
+      @refresh-install-command="refreshProxyInstallCommand"
+      @copy-install-command="copyProxyInstallCommand"
+      @submit-manual="editingNode ? handleUpdateManualNode() : handleAddManualNode()"
+      @submit-batch="handleBatchAddManualNodes"
+      @test-url="handleTestUrl"
+    />
 
-      <template #footer>
-        <div class="flex items-center justify-between w-full">
-          <Button
-            variant="outline"
-            :disabled="testingUrl || !addForm.proxy_url"
-            @click="handleTestUrl"
-          >
-            {{ testingUrl ? '测试中...' : '测试' }}
-          </Button>
-          <div class="flex items-center gap-2">
-            <Button
-              variant="outline"
-              @click="handleDialogClose(false)"
-            >
-              取消
-            </Button>
-            <Button
-              :disabled="addingNode || !addForm.name || !addForm.proxy_url"
-              @click="editingNode ? handleUpdateManualNode() : handleAddManualNode()"
-            >
-              {{ addingNode ? (editingNode ? '保存中...' : '添加中...') : (editingNode ? '保存' : '添加') }}
-            </Button>
-          </div>
-        </div>
-      </template>
-    </Dialog>
+    <ProxyNodeRemoteConfigDialog
+      :open="showConfigDialog"
+      :node="configNode"
+      :form="configForm"
+      :saving="savingConfig"
+      @update:open="handleConfigDialogClose"
+      @update:form="configForm = $event"
+      @save="handleSaveConfig"
+    />
 
-    <!-- 远程配置对话框 (aether-proxy 节点) -->
-    <Dialog
-      :model-value="showConfigDialog"
-      title="远程配置"
-      description="修改后将在下次心跳时自动下发到 aether-proxy 节点"
-      :icon="Settings"
-      size="md"
-      @update:model-value="handleConfigDialogClose"
-    >
-      <form
-        class="space-y-4"
-        @submit.prevent
-      >
-        <div class="space-y-1.5">
-          <Label>允许的端口</Label>
-          <Input
-            v-model="configForm.allowed_ports"
-            placeholder="80, 443, 8080, 8443"
-          />
-          <p class="text-xs text-muted-foreground">
-            逗号分隔的目标端口白名单
-          </p>
-        </div>
-        <div class="space-y-1.5">
-          <Label>日志级别</Label>
-          <Select v-model="configForm.log_level">
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="trace">
-                trace
-              </SelectItem>
-              <SelectItem value="debug">
-                debug
-              </SelectItem>
-              <SelectItem value="info">
-                info
-              </SelectItem>
-              <SelectItem value="warn">
-                warn
-              </SelectItem>
-              <SelectItem value="error">
-                error
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="space-y-1.5">
-            <Label>心跳间隔 (秒)</Label>
-            <Input
-              v-model="configForm.heartbeat_interval"
-              type="number"
-              min="5"
-              max="600"
-            />
-          </div>
-        </div>
-        <div class="space-y-1.5">
-          <Label>升级到版本</Label>
-          <Input
-            v-model="configForm.upgrade_to"
-            placeholder="例如 0.2.3"
-          />
-          <p class="text-xs text-muted-foreground">
-            留空可清除已有升级指令
-          </p>
-        </div>
-        <div
-          v-if="configNode"
-          class="text-xs text-muted-foreground"
-        >
-          配置版本: v{{ configNode.config_version }}
-        </div>
-      </form>
-      <template #footer>
-        <Button
-          variant="outline"
-          @click="handleConfigDialogClose(false)"
-        >
-          取消
-        </Button>
-        <Button
-          :disabled="savingConfig"
-          @click="handleSaveConfig"
-        >
-          {{ savingConfig ? '保存中...' : '保存' }}
-        </Button>
-      </template>
-    </Dialog>
+    <ProxyNodeBatchUpgradeDialog
+      :open="showBatchUpgradeDialog"
+      :version="batchUpgradeVersion"
+      :upgrading="batchUpgrading"
+      @update:open="handleBatchUpgradeDialogOpen"
+      @update:version="batchUpgradeVersion = $event"
+      @submit="handleBatchUpgrade"
+    />
 
-    <!-- 批量升级对话框 -->
-    <Dialog
-      :model-value="showBatchUpgradeDialog"
-      title="批量升级"
-      description="向所有在线 tunnel 节点下发升级版本指令"
-      :icon="Settings"
-      size="sm"
-      @update:model-value="(open: boolean) => { if (!open) { showBatchUpgradeDialog = false; batchUpgradeVersion = '' } }"
-    >
-      <form
-        class="space-y-4"
-        @submit.prevent="handleBatchUpgrade"
-      >
-        <div class="space-y-1.5">
-          <Label>目标版本</Label>
-          <Input
-            v-model="batchUpgradeVersion"
-            placeholder="例如 0.2.3"
-          />
-        </div>
-      </form>
-      <template #footer>
-        <Button
-          variant="outline"
-          @click="showBatchUpgradeDialog = false; batchUpgradeVersion = ''"
-        >
-          取消
-        </Button>
-        <Button
-          :disabled="batchUpgrading || !batchUpgradeVersion.trim()"
-          @click="handleBatchUpgrade"
-        >
-          {{ batchUpgrading ? '下发中...' : '确认下发' }}
-        </Button>
-      </template>
-    </Dialog>
+    <PoolProxyDistributionDialog
+      v-model="showPoolProxyDistributionDialog"
+    />
 
-    <!-- 连接事件对话框 -->
-    <Dialog
+    <ProxyNodeEventsDialog
       :open="showEventsDialog"
-      title="连接事件"
-      :description="eventsNode ? `${eventsNode.name} 的连接历史` : ''"
-      size="lg"
-      @update:open="(v: boolean) => { if (!v) { showEventsDialog = false; eventsNode = null; nodeEvents = [] } }"
-    >
-      <div class="space-y-3">
-        <!-- 可靠性指标摘要 -->
-        <div
-          v-if="eventsNode"
-          class="grid grid-cols-3 gap-3 text-sm"
-        >
-          <div class="bg-muted/40 rounded-lg px-3 py-2 text-center">
-            <span class="block text-foreground/60 text-xs">失败请求</span>
-            <span class="tabular-nums font-medium">{{ formatNumber(eventsNode.failed_requests || 0) }}</span>
-          </div>
-          <div class="bg-muted/40 rounded-lg px-3 py-2 text-center">
-            <span class="block text-foreground/60 text-xs">DNS 失败</span>
-            <span class="tabular-nums font-medium">{{ formatNumber(eventsNode.dns_failures || 0) }}</span>
-          </div>
-          <div class="bg-muted/40 rounded-lg px-3 py-2 text-center">
-            <span class="block text-foreground/60 text-xs">流错误</span>
-            <span class="tabular-nums font-medium">{{ formatNumber(eventsNode.stream_errors || 0) }}</span>
-          </div>
-        </div>
-
-        <!-- 事件列表 -->
-        <div
-          v-if="loadingEvents"
-          class="py-8 text-center text-muted-foreground text-sm"
-        >
-          加载中...
-        </div>
-        <div
-          v-else-if="nodeEvents.length === 0"
-          class="py-8 text-center text-muted-foreground text-sm"
-        >
-          暂无连接事件记录
-        </div>
-        <div
-          v-else
-          class="max-h-80 overflow-y-auto space-y-1.5"
-        >
-          <div
-            v-for="event in nodeEvents"
-            :key="event.id"
-            class="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/30 text-sm"
-          >
-            <Badge
-              :variant="eventTypeVariant(event.event_type)"
-              class="text-[10px] px-1.5 py-0 shrink-0"
-            >
-              {{ eventTypeLabel(event.event_type) }}
-            </Badge>
-            <span class="text-muted-foreground truncate flex-1">{{ event.detail || '-' }}</span>
-            <span class="text-xs text-muted-foreground/70 tabular-nums shrink-0">{{ formatTime(event.created_at) }}</span>
-          </div>
-        </div>
-      </div>
-      <template #footer>
-        <Button
-          variant="outline"
-          @click="showEventsDialog = false; eventsNode = null; nodeEvents = []"
-        >
-          关闭
-        </Button>
-      </template>
-    </Dialog>
+      :node="eventsNode"
+      :events="nodeEvents"
+      :loading="loadingEvents"
+      @update:open="handleEventsDialogClose"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
-import { proxyNodesApi, type ProxyNode, type ProxyNodeRemoteConfig, type ProxyNodeEvent } from '@/api/proxy-nodes'
-
+import { useClipboard } from '@/composables/useClipboard'
+import { useI18n } from '@/i18n'
+import { clearModelsDevCache } from '@/api/models-dev'
 import {
-  Card,
-  Button,
-  Badge,
-  Input,
-  Label,
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-  Table,
-  TableHeader,
-  TableBody,
-  TableRow,
-  TableHead,
-  TableCell,
-  Pagination,
-  RefreshButton,
-  Dialog,
-} from '@/components/ui'
+  proxyNodesApi,
+  type ProxyNode,
+  type ProxyNodeEvent,
+  type ProxyNodeInstallSession,
+  type ProxyNodeMetricsResponse,
+  type ProxyNodeRemoteConfig,
+  type ProxyNodeSchedulingState,
+  type ProxyNodeTestResult,
+} from '@/api/proxy-nodes'
 
-import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings, History } from 'lucide-vue-next'
+import { Card } from '@/components/ui'
 import { parseApiError } from '@/utils/errorParser'
-import { formatRegion } from '@/utils/region'
-import HardwareTooltip from './components/HardwareTooltip.vue'
+import { parseBatchProxyNodeInput } from './proxy-node-batch'
+import { proxyNodeDeleteSuccessMessage } from './proxy-node-delete-feedback'
+import ProxyNodeBatchUpgradeDialog from './components/ProxyNodeBatchUpgradeDialog.vue'
+import ProxyNodeEventsDialog from './components/ProxyNodeEventsDialog.vue'
+import ProxyNodeFormDialog from './components/ProxyNodeFormDialog.vue'
+import ProxyNodeHeader from './components/ProxyNodeHeader.vue'
+import ProxyNodeList from './components/ProxyNodeList.vue'
+import ProxyNodeRemoteConfigDialog from './components/ProxyNodeRemoteConfigDialog.vue'
+import PoolProxyDistributionDialog from '@/features/pool/components/PoolProxyDistributionDialog.vue'
 
 const { success, error: toastError } = useToast()
 const { confirmDanger } = useConfirm()
+const { copyToClipboard } = useClipboard()
+const { legacyT, locale } = useI18n()
 const store = useProxyNodesStore()
 
 const searchQuery = ref('')
 const filterStatus = ref('all')
+const proxyNodeStatusFilterOptions = [
+  { value: 'all', label: '全部状态' },
+  { value: 'online', label: '在线' },
+  { value: 'offline', label: '离线' },
+]
 const currentPage = ref(1)
 const pageSize = ref(20)
 
 // 手动添加/编辑对话框
 const showAddDialog = ref(false)
+const showPoolProxyDistributionDialog = ref(false)
 const addingNode = ref(false)
 const editingNode = ref<ProxyNode | null>(null)
+const addMode = ref<'script' | 'manual' | 'batch'>('script')
 const addForm = ref({
   name: '',
   proxy_url: '',
@@ -765,8 +156,38 @@ const addForm = ref({
   password: '',
   region: '',
 })
+const batchForm = ref({
+  content: '',
+})
+const installForm = ref({
+  node_name: '',
+})
+const installSystem = ref<'unix' | 'windows'>('unix')
+const installLoading = ref(false)
+const installCopied = ref(false)
+const proxyInstallSession = ref<ProxyNodeInstallSession | null>(null)
+let installCopiedResetTimer: ReturnType<typeof setTimeout> | null = null
 
-// 远程配置对话框 (aether-proxy 节点)
+const proxyInstallCommand = computed(() => {
+  if (!proxyInstallSession.value) return ''
+  return installSystem.value === 'windows'
+    ? proxyInstallSession.value.powershell_command
+    : proxyInstallSession.value.unix_command
+})
+
+const proxyInstallHint = computed(() => {
+  if (!proxyInstallSession.value) {
+    return '脚本会自动安装或更新代理程序，并保留已有配置。'
+  }
+  const minutes = Math.floor(proxyInstallSession.value.expires_in_seconds / 60)
+  return locale.value === 'en-US'
+    ? `This command is valid for ${minutes} minutes and expires immediately after successful use.`
+    : `这条命令将在 ${minutes} 分钟内有效，成功使用后立即失效。`
+})
+
+const batchParseResult = computed(() => parseBatchProxyNodeInput(batchForm.value.content))
+
+// 远程配置对话框 (aether-tunnel 节点)
 const showConfigDialog = ref(false)
 const savingConfig = ref(false)
 const configNode = ref<ProxyNode | null>(null)
@@ -774,6 +195,7 @@ const configForm = ref({
   allowed_ports: '',
   log_level: 'info',
   heartbeat_interval: '30',
+  scheduling_state: 'active' as ProxyNodeSchedulingState,
   upgrade_to: '',
 })
 const showBatchUpgradeDialog = ref(false)
@@ -785,6 +207,18 @@ const showEventsDialog = ref(false)
 const eventsNode = ref<ProxyNode | null>(null)
 const nodeEvents = ref<ProxyNodeEvent[]>([])
 const loadingEvents = ref(false)
+
+interface ProxyNodeDetailState {
+  loading: boolean
+  error: string | null
+  node: ProxyNode | null
+  metrics: ProxyNodeMetricsResponse | null
+  events: ProxyNodeEvent[]
+  loadedAt: number | null
+}
+
+const expandedNodeIds = ref(new Set<string>())
+const nodeDetails = ref<Record<string, ProxyNodeDetailState>>({})
 
 // 测试连通性
 const testingNodes = ref(new Set<string>())
@@ -817,12 +251,49 @@ watch([searchQuery, filterStatus], () => {
   currentPage.value = 1
 })
 
+watch(() => installForm.value.node_name, () => {
+  resetProxyInstallState()
+})
+
+watch(installSystem, () => {
+  installCopied.value = false
+  clearInstallCopiedResetTimer()
+})
+
 onMounted(async () => {
   await store.fetchNodes()
 })
 
+onBeforeUnmount(() => {
+  clearInstallCopiedResetTimer()
+})
+
 async function refresh() {
   await store.fetchNodes()
+}
+
+function formatConnectivityTestParts(result: ProxyNodeTestResult): string[] {
+  const parts = [
+    `${legacyT('探测')}: ${formatConnectivityProbe(result.probe_url)}`,
+    `${legacyT('超时')}: ${result.timeout_secs}s`,
+    `${legacyT('延迟')}: ${result.latency_ms != null ? `${result.latency_ms}ms` : legacyT('暂无样本')}`,
+  ]
+  if (result.exit_ip) parts.push(`${legacyT('出口 IP')}: ${result.exit_ip}`)
+  return parts
+}
+
+function formatConnectivityResult(message: string, result: ProxyNodeTestResult): string {
+  const separator = locale.value === 'en-US' ? ', ' : '，'
+  return `${legacyT(message)}${separator}${formatConnectivityTestParts(result).join(separator)}`
+}
+
+function formatConnectivityProbe(probeUrl: string) {
+  try {
+    const url = new URL(probeUrl)
+    return `${url.host}${url.pathname === '/' ? '' : url.pathname}`
+  } catch {
+    return probeUrl
+  }
 }
 
 async function handleTestUrl() {
@@ -835,36 +306,100 @@ async function handleTestUrl() {
       password: addForm.value.password || undefined,
     })
     if (result.success) {
-      const parts = [`延迟: ${result.latency_ms}ms`]
-      if (result.exit_ip) parts.push(`出口IP: ${result.exit_ip}`)
-      success(`连通性测试通过，${parts.join('，')}`)
+      success(formatConnectivityResult('连通性测试通过', result))
     } else {
-      toastError(`连通性测试失败: ${result.error || '未知错误'}`)
+      const details = formatConnectivityTestParts(result).join(locale.value === 'en-US' ? ', ' : '，')
+      toastError(locale.value === 'en-US'
+        ? `Connectivity test failed (${details}): ${result.error || legacyT('未知错误')}`
+        : `连通性测试失败（${details}）: ${result.error || legacyT('未知错误')}`)
     }
   } catch (err: unknown) {
-    toastError(parseApiError(err, '测试请求失败'))
+    toastError(parseApiError(err, legacyT('测试请求失败')))
   } finally {
     testingUrl.value = false
   }
 }
 
-function handleEdit(node: ProxyNode) {
-  editingNode.value = node
-  addForm.value = {
-    name: node.name,
-    proxy_url: node.proxy_url || '',
-    username: node.proxy_username || '',
-    password: '', // 不回填密码（已脱敏）
-    region: node.region || '',
+function clearInstallCopiedResetTimer() {
+  if (installCopiedResetTimer) {
+    clearTimeout(installCopiedResetTimer)
+    installCopiedResetTimer = null
   }
+}
+
+function resetProxyInstallState() {
+  proxyInstallSession.value = null
+  installCopied.value = false
+  clearInstallCopiedResetTimer()
+}
+
+function openAddDialog() {
+  editingNode.value = null
+  addMode.value = 'script'
+  addForm.value = { name: '', proxy_url: '', username: '', password: '', region: '' }
+  batchForm.value = { content: '' }
+  installForm.value = { node_name: '' }
+  resetProxyInstallState()
   showAddDialog.value = true
+}
+
+async function refreshProxyInstallCommand() {
+  const nodeName = installForm.value.node_name.trim()
+  if (!nodeName || installLoading.value) return
+  installLoading.value = true
+  resetProxyInstallState()
+  try {
+    proxyInstallSession.value = await store.createInstallSession({ node_name: nodeName })
+    success(legacyT('代理节点安装命令已生成'))
+  } catch (err: unknown) {
+    toastError(parseApiError(err, legacyT('生成代理节点安装命令失败')))
+  } finally {
+    installLoading.value = false
+  }
+}
+
+async function copyProxyInstallCommand() {
+  if (!proxyInstallCommand.value) return
+  const copied = await copyToClipboard(proxyInstallCommand.value, false)
+  if (!copied) return
+  installCopied.value = true
+  success(legacyT('安装命令已复制到剪贴板'))
+  clearInstallCopiedResetTimer()
+  installCopiedResetTimer = setTimeout(() => {
+    installCopied.value = false
+    installCopiedResetTimer = null
+  }, 2000)
+}
+
+async function handleEdit(node: ProxyNode) {
+  try {
+    const { node: detail } = await proxyNodesApi.getNode(node.id)
+    editingNode.value = detail
+    addForm.value = {
+      name: detail.name,
+      proxy_url: detail.proxy_url || '',
+      username: detail.proxy_username || '',
+      // 密码是 write-only；留空时更新接口会保留已存密码。
+      password: '',
+      region: detail.region || '',
+    }
+    addMode.value = 'manual'
+    resetProxyInstallState()
+    showAddDialog.value = true
+  } catch (err: unknown) {
+    toastError(parseApiError(err, legacyT('读取代理节点详情失败')))
+  }
 }
 
 function handleDialogClose(open: boolean) {
   if (!open) {
     showAddDialog.value = false
     editingNode.value = null
+    addMode.value = 'script'
     addForm.value = { name: '', proxy_url: '', username: '', password: '', region: '' }
+    batchForm.value = { content: '' }
+    installForm.value = { node_name: '' }
+    resetProxyInstallState()
   }
 }
 
@@ -881,11 +416,11 @@ async function handleUpdateManualNode() {
       password: addForm.value.password || undefined,
       region: addForm.value.region || undefined,
     })
-    success('代理节点已更新')
+    success(legacyT('代理节点已更新'))
     handleDialogClose(false)
     await store.fetchNodes()
   } catch (err: unknown) {
-    toastError(parseApiError(err, '更新失败'))
+    toastError(parseApiError(err, legacyT('更新失败')))
   } finally {
     addingNode.value = false
   }
@@ -903,10 +438,58 @@ async function handleAddManualNode() {
       password: addForm.value.password || undefined,
       region: addForm.value.region || undefined,
     })
-    success('代理节点已添加')
+    success(legacyT('代理节点已添加'))
     handleDialogClose(false)
   } catch (err: unknown) {
-    toastError(parseApiError(err, '添加失败'))
+    toastError(parseApiError(err, legacyT('添加失败')))
+  } finally {
+    addingNode.value = false
+  }
+}
+
+async function handleBatchAddManualNodes() {
+  const { nodes, errors } = batchParseResult.value
+  if (!batchForm.value.content.trim() || addingNode.value) return
+  if (errors.length > 0) {
+    toastError(legacyT(`批量输入存在 ${errors.length} 条格式错误，请先修正后再添加`))
+    return
+  }
+  if (nodes.length === 0) {
+    toastError(legacyT('请先输入至少一条代理地址'))
+    return
+  }
+
+  addingNode.value = true
+  const failures: string[] = []
+  let successCount = 0
+
+  try {
+    for (const node of nodes) {
+      try {
+        await proxyNodesApi.createManualNode(node)
+        successCount += 1
+      } catch (err: unknown) {
+        failures.push(`${node.name}: ${parseApiError(err, legacyT('添加失败'))}`)
+      }
+    }
+
+    await store.fetchNodes()
+
+    if (successCount > 0 && failures.length === 0) {
+      success(legacyT(`已添加 ${successCount} 个代理节点`))
+      handleDialogClose(false)
+      return
+    }
+
+    if (successCount > 0) {
+      success(legacyT(`已添加 ${successCount} 个代理节点，${failures.length} 个失败`))
+    }
+
+    if (failures.length > 0) {
+      toastError(failures.slice(0, 3).join('；'))
+    }
+  } catch (err: unknown) {
+    toastError(parseApiError(err, legacyT('批量添加失败')))
   } finally {
     addingNode.value = false
   }
@@ -919,6 +502,7 @@ function handleConfig(node: ProxyNode) {
     allowed_ports: rc.allowed_ports?.join(', ') || '',
     log_level: rc.log_level || 'info',
     heartbeat_interval: String(rc.heartbeat_interval || node.heartbeat_interval || 30),
+    scheduling_state: rc.scheduling_state || 'active',
     upgrade_to: rc.upgrade_to || '',
   }
   showConfigDialog.value = true
@@ -953,6 +537,7 @@ async function handleSaveConfig() {
     if (!isNaN(hb) && hb >= 5) {
       data.heartbeat_interval = hb
     }
+    data.scheduling_state = configForm.value.scheduling_state
     const targetVersion = configForm.value.upgrade_to.trim()
     if (targetVersion) {
       data.upgrade_to = targetVersion
@@ -960,11 +545,11 @@ async function handleSaveConfig() {
       data.upgrade_to = null
     }
     await proxyNodesApi.updateNodeConfig(configNode.value.id, data)
-    success('远程配置已保存，将在下次心跳时生效')
+    success(legacyT('远程配置已保存，将在下次心跳时生效'))
     handleConfigDialogClose(false)
     await store.fetchNodes()
   } catch (err: unknown) {
-    toastError(parseApiError(err, '保存失败'))
+    toastError(parseApiError(err, legacyT('保存失败')))
   } finally {
     savingConfig.value = false
   }
@@ -976,35 +561,55 @@ async function handleBatchUpgrade() {
   batchUpgrading.value = true
   try {
     const result = await proxyNodesApi.batchUpgrade(version)
-    success(`升级指令已下发：${result.updated} 个节点，跳过 ${result.skipped} 个`)
-    showBatchUpgradeDialog.value = false
-    batchUpgradeVersion.value = ''
+    if (result.updated > 0) {
+      success(legacyT(`已向 ${result.updated} 个节点写入升级目标 ${result.version}，${result.skipped} 个节点无需变更`))
+    } else {
+      success(legacyT(`当前没有需要变更的 tunnel 节点，目标版本仍为 ${result.version}`))
+    }
+    resetBatchUpgradeDialog()
     await store.fetchNodes()
   } catch (err: unknown) {
-    toastError(parseApiError(err, '批量升级下发失败'))
+    toastError(parseApiError(err, legacyT('批量升级下发失败')))
   } finally {
     batchUpgrading.value = false
   }
 }
 
+function resetBatchUpgradeDialog() {
+  showBatchUpgradeDialog.value = false
+  batchUpgradeVersion.value = ''
+}
+
+function handleBatchUpgradeDialogOpen(open: boolean) {
+  if (open) {
+    showBatchUpgradeDialog.value = true
+    return
+  }
+  resetBatchUpgradeDialog()
+}
+
 async function handleDelete(node: ProxyNode) {
+  const address = node.tunnel_mode ? node.ip : `${node.ip}:${node.port}`
   const confirmed = await confirmDanger(
-    `确定要删除代理节点 "${node.name}" (${node.tunnel_mode ? node.ip : `${node.ip}:${node.port}`}) 吗？`,
-    '删除节点'
+    locale.value === 'en-US'
+      ? `Delete proxy node "${node.name}" (${address})?`
+      : `确定要删除代理节点 "${node.name}" (${address}) 吗？`,
+    legacyT('删除节点')
   )
   if (!confirmed) return
 
   try {
     const result = await proxyNodesApi.deleteProxyNode(node.id)
-    // 同步更新 store 本地状态
-    store.nodes = store.nodes.filter(n => n.id !== node.id)
-    if (result.cleared_system_proxy) {
-      success('代理节点已删除，系统默认代理已自动清除')
-    } else {
-      success('代理节点已删除')
+    if (result.cleared_external_models_proxy) {
+      clearModelsDevCache()
     }
+    await store.fetchNodes()
+    success(legacyT(proxyNodeDeleteSuccessMessage(
+      result.cleared_system_proxy,
+      result.cleared_external_models_proxy,
+    )))
   } catch (err: unknown) {
-    toastError(parseApiError(err, '删除失败'))
+    toastError(parseApiError(err, legacyT('删除失败')))
   }
 }
 
@@ -1015,16 +620,83 @@ async function handleTest(node: ProxyNode) {
   try {
     const result = await proxyNodesApi.testNode(node.id)
     if (result.success) {
-      const parts = [`延迟: ${result.latency_ms}ms`]
-      if (result.exit_ip) parts.push(`出口IP: ${result.exit_ip}`)
-      success(`连通性测试通过，${parts.join('，')}`)
+      success(formatConnectivityResult('连通性测试通过', result))
     } else {
-      toastError(`连通性测试失败: ${result.error || '未知错误'}`)
+      const details = formatConnectivityTestParts(result).join(locale.value === 'en-US' ? ', ' : '，')
+      toastError(locale.value === 'en-US'
+        ? `Connectivity test failed (${details}): ${result.error || legacyT('未知错误')}`
+        : `连通性测试失败（${details}）: ${result.error || legacyT('未知错误')}`)
     }
   } catch (err: unknown) {
-    toastError(parseApiError(err, '测试请求失败'))
+    toastError(parseApiError(err, legacyT('测试请求失败')))
   } finally {
     testingNodes.value.delete(node.id)
+  }
+}
+
+function createNodeDetailState(): ProxyNodeDetailState {
+  return {
+    loading: false,
+    error: null,
+    node: null,
+    metrics: null,
+    events: [],
+    loadedAt: null,
+  }
+}
+
+function updateNodeDetailState(nodeId: string, patch: Partial<ProxyNodeDetailState>) {
+  nodeDetails.value = {
+    ...nodeDetails.value,
+    [nodeId]: {
+      ...(nodeDetails.value[nodeId] ?? createNodeDetailState()),
+      ...patch,
+    },
+  }
+}
+
+function toggleNodeDetails(node: ProxyNode) {
+  const next = new Set(expandedNodeIds.value)
+  if (next.has(node.id)) {
+    next.delete(node.id)
+    expandedNodeIds.value = next
+    return
+  }
+
+  next.add(node.id)
+  expandedNodeIds.value = next
+
+  const detailState = nodeDetails.value[node.id]
+  if (!detailState?.loadedAt && !detailState?.loading) {
+    void loadNodeDetails(node)
+  }
+}
+
+async function loadNodeDetails(node: ProxyNode) {
+  updateNodeDetailState(node.id, { loading: true, error: null })
+  const to = Math.floor(Date.now() / 1000)
+  const from = to - 24 * 60 * 60
+  const eventsFrom = to - 7 * 24 * 60 * 60
+
+  try {
+    const [detail, metrics, events] = await Promise.all([
+      proxyNodesApi.getNode(node.id),
+      proxyNodesApi.listNodeMetrics(node.id, { from, to, step: '1h' }),
+      proxyNodesApi.listNodeEvents(node.id, { limit: 8, from: eventsFrom, to }),
+    ])
+    updateNodeDetailState(node.id, {
+      loading: false,
+      error: null,
+      node: detail.node,
+      metrics,
+      events: events.items,
+      loadedAt: Date.now(),
+    })
+  } catch (err: unknown) {
+    updateNodeDetailState(node.id, {
+      loading: false,
+      error: parseApiError(err, legacyT('加载节点数据失败')),
+    })
   }
 }
 
@@ -1033,92 +705,20 @@ async function handleViewEvents(node: ProxyNode) {
   showEventsDialog.value = true
   loadingEvents.value = true
   try {
-    const res = await proxyNodesApi.listNodeEvents(node.id, 50)
+    const res = await proxyNodesApi.listNodeEvents(node.id, { limit: 50 })
     nodeEvents.value = res.items
   } catch (err: unknown) {
-    toastError(parseApiError(err, '加载事件失败'))
+    toastError(parseApiError(err, legacyT('加载事件失败')))
   } finally {
     loadingEvents.value = false
   }
 }
 
-function eventTypeLabel(type: string) {
-  switch (type) {
-    case 'connected': return '连接'
-    case 'disconnected': return '断开'
-    case 'error': return '错误'
-    default: return type
+function handleEventsDialogClose(open: boolean) {
+  showEventsDialog.value = open
+  if (!open) {
+    eventsNode.value = null
+    nodeEvents.value = []
   }
-}
-
-function eventTypeVariant(type: string) {
-  switch (type) {
-    case 'connected': return 'success' as const
-    case 'disconnected': return 'destructive' as const
-    case 'error': return 'destructive' as const
-    default: return 'secondary' as const
-  }
-}
-
-function statusVariant(status: string) {
-  switch (status) {
-    case 'online': return 'success' as const
-    case 'offline': return 'destructive' as const
-    default: return 'secondary' as const
-  }
-}
-
-function statusLabel(status: string) {
-  switch (status) {
-    case 'online': return '在线'
-    case 'offline': return '离线'
-    default: return status
-  }
-}
-
-function formatNumber(n: number) {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
-}
-
-function formatTime(iso: string | null) {
-  if (!iso) return '-'
-  const d = new Date(iso)
-  const now = new Date()
-  const diff = (now.getTime() - d.getTime()) / 1000
-  if (diff < 60) return '刚刚'
-  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`
-  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
-
-function failureRate(node: ProxyNode) {
-  if (!node.total_requests) return 0
-  const failed = (node.failed_requests || 0) + (node.dns_failures || 0) + (node.stream_errors || 0)
-  return (failed / node.total_requests) * 100
-}
-
-function formatFailureRate(node: ProxyNode) {
-  if (!node.total_requests) return '-'
-  const rate = failureRate(node)
-  if (rate === 0) return '0%'
-  if (rate < 0.1) return '<0.1%'
-  return `${rate.toFixed(1)}%`
-}
-
-function nodeAddress(node: ProxyNode) {
-  if (node.is_manual) return node.proxy_url || `${node.ip}:${node.port}`
-  if (node.tunnel_mode) return node.ip || 'WebSocket Tunnel'
-  return `${node.ip}:${node.port}`
-}
-
-function nodeProxyVersion(node: ProxyNode) {
-  const metadata = node.proxy_metadata
-  if (!metadata || typeof metadata !== 'object') return '-'
-  const version = (metadata as Record<string, unknown>).version
-  if (typeof version !== 'string') return '-'
-  const normalized = version.trim()
-  return normalized || '-'
 }
 </script>

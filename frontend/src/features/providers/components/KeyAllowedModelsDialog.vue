@@ -2,7 +2,7 @@
   <Dialog
     :model-value="isOpen"
     title="获取上游模型"
-    description="从上游获取所有密钥可用的模型列表。导入的模型需要关联全局模型后才能参与路由。"
+    description="从上游获取所有密钥可用的模型列表。导入时会创建或复用全局模型，并关联到当前提供商。"
     :icon="Layers"
     size="2xl"
     @update:model-value="handleDialogUpdate"
@@ -135,6 +135,14 @@
                 >
                   已存在
                 </Badge>
+                <Badge
+                  v-if="model.visibility === 'hide'"
+                  variant="outline"
+                  class="text-[10px] px-1.5 py-0 shrink-0 text-muted-foreground"
+                  title="运行时可调用的内部模型"
+                >
+                  内部
+                </Badge>
               </div>
               <div class="text-[11px] text-muted-foreground/60 font-mono truncate mt-0.5">
                 {{ model.id }}
@@ -212,7 +220,7 @@ const emit = defineEmits<{
   saved: []
 }>()
 
-const { success, error: showError } = useToast()
+const { success, error: showError, warning: showWarning } = useToast()
 const { fetchModels: fetchCachedModels } = useUpstreamModelsCache()
 
 const isOpen = computed(() => props.open)
@@ -295,9 +303,8 @@ async function fetchUpstreamModels() {
         .filter((m: UpstreamModel) => !existingModelIds.value.has(m.id))
         .map((m: UpstreamModel) => m.id)
       hasQueried.value = true
-      // 如果有部分失败，显示警告提示
-      if (result.error) {
-        showError(`部分格式获取失败: ${result.error}`, '警告')
+      if (result.warning) {
+        showWarning(result.warning, '部分格式获取失败')
       }
     } else if (result.error) {
       errorMessage.value = result.error

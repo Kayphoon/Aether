@@ -33,17 +33,20 @@ export interface UserStats {
 
 export interface SendVerificationCodeRequest {
   email: string
+  turnstile_token?: string
 }
 
 export interface SendVerificationCodeResponse {
   message: string
   success: boolean
   expire_minutes?: number
+  verification_token: string
 }
 
 export interface VerifyEmailRequest {
   email: string
   code: string
+  verification_token: string
 }
 
 export interface VerifyEmailResponse {
@@ -53,6 +56,7 @@ export interface VerifyEmailResponse {
 
 export interface VerificationStatusRequest {
   email: string
+  verification_token: string
 }
 
 export interface VerificationStatusResponse {
@@ -67,6 +71,11 @@ export interface RegisterRequest {
   email?: string
   username: string
   password: string
+  turnstile_token?: string
+  invite_code?: string
+  privacy_policy_accepted?: boolean
+  privacy_policy_version?: string
+  email_verification_token?: string
 }
 
 export interface RegisterResponse {
@@ -81,6 +90,17 @@ export interface RegistrationSettingsResponse {
   require_email_verification: boolean
   email_configured: boolean
   password_policy_level: string
+  turnstile_enabled?: boolean
+  turnstile_site_key?: string | null
+  turnstile_required_actions?: string[]
+  privacy_policy?: RegistrationPrivacyPolicySettings
+}
+
+export interface RegistrationPrivacyPolicySettings {
+  enabled: boolean
+  format: 'markdown' | 'html'
+  content: string
+  version: string
 }
 
 export interface AuthSettingsResponse {
@@ -125,7 +145,7 @@ export interface User {
 export const authApi = {
   async login(credentials: LoginRequest): Promise<LoginResponse> {
     const response = await apiClient.post<LoginResponse>('/api/auth/login', credentials)
-    apiClient.setToken(response.data.access_token)
+    apiClient.setToken(response.data.access_token, true)
     return response.data
   },
 
@@ -148,23 +168,34 @@ export const authApi = {
   },
 
   async refreshToken(): Promise<LoginResponse> {
-    const response = await apiClient.post<LoginResponse>('/api/auth/refresh', {})
+    const response = await apiClient.post<LoginResponse>('/api/auth/refresh')
     apiClient.setToken(response.data.access_token)
     return response.data
   },
 
-  async sendVerificationCode(email: string): Promise<SendVerificationCodeResponse> {
+  async sendVerificationCode(
+    email: string,
+    turnstileToken?: string
+  ): Promise<SendVerificationCodeResponse> {
+    const payload: SendVerificationCodeRequest = { email }
+    if (turnstileToken) {
+      payload.turnstile_token = turnstileToken
+    }
     const response = await apiClient.post<SendVerificationCodeResponse>(
       '/api/auth/send-verification-code',
-      { email }
+      payload
     )
     return response.data
   },
 
-  async verifyEmail(email: string, code: string): Promise<VerifyEmailResponse> {
+  async verifyEmail(
+    email: string,
+    code: string,
+    verificationToken: string
+  ): Promise<VerifyEmailResponse> {
     const response = await apiClient.post<VerifyEmailResponse>(
       '/api/auth/verify-email',
-      { email, code }
+      { email, code, verification_token: verificationToken }
     )
     return response.data
   },
@@ -181,10 +212,13 @@ export const authApi = {
     return response.data
   },
 
-  async getVerificationStatus(email: string): Promise<VerificationStatusResponse> {
+  async getVerificationStatus(
+    email: string,
+    verificationToken: string
+  ): Promise<VerificationStatusResponse> {
     const response = await apiClient.post<VerificationStatusResponse>(
       '/api/auth/verification-status',
-      { email }
+      { email, verification_token: verificationToken }
     )
     return response.data
   },

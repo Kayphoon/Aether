@@ -3,8 +3,11 @@ import type { ProxyNode } from '@/api/proxy-nodes'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Cpu } from 'lucide-vue-next'
 import { computed } from 'vue'
+import { formatCompactNumber } from '@/utils/format'
+import { useI18n } from '@/i18n'
 
 const props = defineProps<{ node: ProxyNode }>()
+const { legacyT } = useI18n()
 
 const hardwareInfo = computed<Record<string, unknown> | null>(() => {
   return normalizeHardwareInfo(props.node.hardware_info)
@@ -88,7 +91,7 @@ const hardwareRows = computed(() => {
 const nativeTooltipText = computed(() =>
   hardwareRows.value.length > 0
     ? hardwareRows.value.map((row) => `${row.label}: ${row.value}`).join('\n')
-    : '暂无硬件信息上报'
+    : legacyT('暂无硬件信息上报')
 )
 
 const showHardwareInfo = computed(
@@ -104,9 +107,7 @@ function formatMemory(mb: number | null) {
 }
 
 function formatNumber(n: number) {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(n)
+  return formatCompactNumber(n, { fractionDigits: 1 })
 }
 
 function normalizeHardwareInfo(info: unknown): Record<string, unknown> | null {
@@ -172,7 +173,7 @@ function pickString(...values: unknown[]): string {
       <TooltipTrigger as-child>
         <button
           type="button"
-          aria-label="硬件信息"
+          :aria-label="legacyT('硬件信息')"
           :title="nativeTooltipText"
           class="inline-flex items-center justify-center rounded-sm p-0.5 hover:bg-muted/60 transition-colors cursor-pointer"
         >
@@ -188,7 +189,7 @@ function pickString(...values: unknown[]): string {
           v-if="hardwareRows.length === 0"
           class="text-muted-foreground"
         >
-          暂无硬件信息上报
+          {{ legacyT('暂无硬件信息上报') }}
         </div>
         <template v-else>
           <div

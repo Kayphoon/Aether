@@ -1,0 +1,4116 @@
+use super::{
+    ActivateManagementTokenIfMatches, AuthApiKeyLookupKey, CompareAndSwapLdapConfigResult,
+    CreateManagementTokenRecord, DataLayerError, GatewayAuthApiKeySnapshot, GatewayDataState,
+    InitializeAuthWalletOutcome, LdapBindPasswordUpdate, ManagementTokenCounterDelta,
+    ManagementTokenListQuery, ProxyNodeCounterDelta, ProxyNodeHeartbeatMutation,
+    ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation, ProxyNodeRegistrationMutation,
+    ProxyNodeRemoteConfigMutation, ProxyNodeTrafficMutation, ProxyNodeTunnelStatusMutation,
+    RegenerateManagementTokenSecret, StoredAuthApiKeyExportRecord, StoredAuthApiKeySnapshot,
+    StoredLdapModuleConfig, StoredManagementToken, StoredManagementTokenListPage,
+    StoredManagementTokenWithUser, StoredOAuthProviderConfig, StoredOAuthProviderModuleConfig,
+    StoredProxyFleetMetricsBucket, StoredProxyNode, StoredProxyNodeEvent,
+    StoredProxyNodeMetricsBucket, StoredUserAuthRecord, StoredUserOAuthLinkSummary,
+    StoredUserPreferenceRecord, StoredUserSessionRecord, StoredWalletSnapshot,
+    UpdateManagementTokenRecord, UpsertOAuthProviderConfigRecord,
+};
+use crate::LocalMutationOutcome;
+use aether_data::repository::auth::ResolvedAuthApiKeySnapshotReader;
+
+/// Result of synchronizing an LDAP identity and, when applicable, creating its
+/// first wallet.  The wallet id is only exposed when this invocation created
+/// the row, which gives callers a safe compensation token without exposing an
+/// existing wallet as their own work.
+pub(crate) struct LdapAuthProvisioningResult {
+    pub(crate) user: StoredUserAuthRecord,
+    pub(crate) owned_wallet_id: Option<String>,
+}
+
+fn auth_user_wallet_matches(wallet: &StoredWalletSnapshot, user_id: &str) -> bool {
+    wallet.user_id.as_deref() == Some(user_id) && wallet.api_key_id.is_none()
+}
+use aether_data::repository::users::ResolveOAuthLinkedUserOutcome;
+use aether_data::repository::users::{
+    BindUserOAuthLinkOutcome, BindUserOAuthLinkSessionExpectation, DeleteUserOAuthLinkOutcome,
+};
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GatewayUserEffectiveListPolicies {
+    pub(crate) allowed_providers: Option<Vec<String>>,
+    pub(crate) allowed_api_formats: Option<Vec<String>>,
+    pub(crate) allowed_models: Option<Vec<String>>,
+}
+
+impl GatewayDataState {
+    pub(crate) async fn is_other_user_auth_email_taken(
+        &self,
+        email: &str,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        Ok(repository
+            .find_user_auth_by_email(email)
+            .await?
+            .is_some_and(|user| user.id != user_id))
+    }
+
+    pub(crate) async fn is_other_user_auth_username_taken(
+        &self,
+        username: &str,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        Ok(repository
+            .find_user_auth_by_username(username)
+            .await?
+            .is_some_and(|user| user.id != user_id))
+    }
+
+    pub(crate) async fn find_active_user_auth_by_email_ci(
+        &self,
+        email: &str,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository.find_active_user_auth_by_email_ci(email).await
+    }
+
+    pub(crate) async fn find_user_auth_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository.find_user_auth_by_username(username).await
+    }
+
+    pub(crate) async fn find_user_auth_by_id(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.find_user_auth_by_id(user_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn find_user_auth_by_identifier(
+        &self,
+        identifier: &str,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.find_user_auth_by_identifier(identifier).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn list_user_groups(
+        &self,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.list_user_groups().await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn find_user_group_by_id(
+        &self,
+        group_id: &str,
+    ) -> Result<Option<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.find_user_group_by_id(group_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn list_user_groups_by_ids(
+        &self,
+        group_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.list_user_groups_by_ids(group_ids).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn create_user_group(
+        &self,
+        record: aether_data::repository::users::UpsertUserGroupRecord,
+    ) -> Result<Option<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.create_user_group(record).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn update_user_group(
+        &self,
+        group_id: &str,
+        record: aether_data::repository::users::UpsertUserGroupRecord,
+    ) -> Result<Option<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.update_user_group(group_id, record).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn restore_user_group_if_matches(
+        &self,
+        expected: &aether_data::repository::users::StoredUserGroup,
+        restored: &aether_data::repository::users::StoredUserGroup,
+    ) -> Result<bool, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => {
+                repository
+                    .restore_user_group_if_matches(expected, restored)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn delete_user_group(&self, group_id: &str) -> Result<bool, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.delete_user_group(group_id).await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn list_user_group_members(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroupMember>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.list_user_group_members(group_id).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn replace_user_group_members(
+        &self,
+        group_id: &str,
+        user_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroupMember>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => {
+                repository
+                    .replace_user_group_members(group_id, user_ids)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_user_groups_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.list_user_groups_for_user(user_id).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_user_group_memberships_by_user_ids(
+        &self,
+        user_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroupMembership>, DataLayerError>
+    {
+        match &self.user_reader {
+            Some(repository) => {
+                repository
+                    .list_user_group_memberships_by_user_ids(user_ids)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn replace_user_groups_for_user(
+        &self,
+        user_id: &str,
+        group_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => {
+                repository
+                    .replace_user_groups_for_user(user_id, group_ids)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn restore_user_groups_if_matches(
+        &self,
+        user_id: &str,
+        expected_group_ids: &[String],
+        restored_group_ids: &[String],
+    ) -> Result<bool, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => {
+                repository
+                    .restore_user_groups_if_matches(user_id, expected_group_ids, restored_group_ids)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn add_user_to_group(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.add_user_to_group(group_id, user_id).await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn list_user_oauth_links(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<StoredUserOAuthLinkSummary>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(Vec::new());
+        };
+        repository.list_user_oauth_links(user_id).await
+    }
+
+    pub(crate) async fn find_oauth_linked_user(
+        &self,
+        provider_type: &str,
+        provider_user_id: &str,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .find_oauth_linked_user(provider_type, provider_user_id)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn resolve_enabled_oauth_linked_user(
+        &self,
+        provider_type: &str,
+        provider_user_id: &str,
+        provider_username: Option<&str>,
+        provider_email: Option<&str>,
+        extra_data: Option<serde_json::Value>,
+        verified_email: Option<&str>,
+        touched_at: chrono::DateTime<chrono::Utc>,
+        provider_enabled_snapshot: bool,
+    ) -> Result<ResolveOAuthLinkedUserOutcome, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(ResolveOAuthLinkedUserOutcome::ProviderUnavailable);
+        };
+        repository
+            .resolve_enabled_oauth_linked_user(
+                provider_type,
+                provider_user_id,
+                provider_username,
+                provider_email,
+                extra_data,
+                verified_email,
+                touched_at,
+                provider_enabled_snapshot,
+            )
+            .await
+    }
+
+    pub(crate) async fn touch_oauth_link(
+        &self,
+        provider_type: &str,
+        provider_user_id: &str,
+        provider_username: Option<&str>,
+        provider_email: Option<&str>,
+        extra_data: Option<serde_json::Value>,
+        touched_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .touch_oauth_link(
+                provider_type,
+                provider_user_id,
+                provider_username,
+                provider_email,
+                extra_data,
+                touched_at,
+            )
+            .await
+    }
+
+    pub(crate) async fn create_oauth_auth_user(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .create_oauth_auth_user(email, email_verified, username, created_at)
+            .await
+    }
+
+    pub(crate) async fn find_oauth_link_owner(
+        &self,
+        provider_type: &str,
+        provider_user_id: &str,
+    ) -> Result<Option<String>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .find_oauth_link_owner(provider_type, provider_user_id)
+            .await
+    }
+
+    pub(crate) async fn has_user_oauth_provider_link(
+        &self,
+        user_id: &str,
+        provider_type: &str,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .has_user_oauth_provider_link(user_id, provider_type)
+            .await
+    }
+
+    pub(crate) async fn count_user_oauth_links(
+        &self,
+        user_id: &str,
+    ) -> Result<u64, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(0);
+        };
+        repository.count_user_oauth_links(user_id).await
+    }
+
+    pub(crate) async fn has_oauth_links_for_provider(
+        &self,
+        provider_type: &str,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository.has_oauth_links_for_provider(provider_type).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn bind_user_oauth_link(
+        &self,
+        user_id: &str,
+        provider_type: &str,
+        provider_user_id: &str,
+        provider_username: Option<&str>,
+        provider_email: Option<&str>,
+        extra_data: Option<serde_json::Value>,
+        linked_at: chrono::DateTime<chrono::Utc>,
+        provider_enabled_snapshot: bool,
+        session_expectation: Option<&BindUserOAuthLinkSessionExpectation>,
+    ) -> Result<BindUserOAuthLinkOutcome, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(BindUserOAuthLinkOutcome::UserNotFound);
+        };
+        repository
+            .bind_user_oauth_link_if_provider_enabled(
+                user_id,
+                provider_type,
+                provider_user_id,
+                provider_username,
+                provider_email,
+                extra_data,
+                linked_at,
+                provider_enabled_snapshot,
+                session_expectation,
+            )
+            .await
+    }
+
+    pub(crate) async fn upgrade_oauth_email_verification_if_matches(
+        &self,
+        user_id: &str,
+        verified_email: &str,
+        verified_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .upgrade_oauth_email_verification_if_matches(user_id, verified_email, verified_at)
+            .await
+    }
+
+    pub(crate) async fn delete_user_oauth_link(
+        &self,
+        user_id: &str,
+        provider_type: &str,
+        local_password_login_allowed: bool,
+        enabled_provider_types_snapshot: &[String],
+    ) -> Result<DeleteUserOAuthLinkOutcome, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(DeleteUserOAuthLinkOutcome::NotFound);
+        };
+        repository
+            .delete_user_oauth_link(
+                user_id,
+                provider_type,
+                local_password_login_allowed,
+                enabled_provider_types_snapshot,
+            )
+            .await
+    }
+
+    pub(crate) async fn read_user_preferences(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<StoredUserPreferenceRecord>, DataLayerError> {
+        if let Some(store) = &self.user_preferences {
+            return Ok(store
+                .read()
+                .expect("user preference store should lock")
+                .get(user_id)
+                .cloned());
+        }
+
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository.read_user_preferences(user_id).await
+    }
+
+    pub(crate) async fn write_user_preferences(
+        &self,
+        preferences: &StoredUserPreferenceRecord,
+    ) -> Result<Option<StoredUserPreferenceRecord>, DataLayerError> {
+        if let Some(store) = &self.user_preferences {
+            store
+                .write()
+                .expect("user preference store should lock")
+                .insert(preferences.user_id.clone(), preferences.clone());
+            return Ok(Some(preferences.clone()));
+        }
+
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository.write_user_preferences(preferences).await
+    }
+
+    pub(crate) async fn find_active_provider_name(
+        &self,
+        provider_id: &str,
+    ) -> Result<Option<String>, DataLayerError> {
+        let providers = self.list_provider_catalog_providers(true).await?;
+        Ok(providers
+            .into_iter()
+            .find(|provider| provider.id == provider_id)
+            .map(|provider| provider.name))
+    }
+
+    pub(crate) async fn find_user_session(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<Option<StoredUserSessionRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository.find_user_session(user_id, session_id).await
+    }
+
+    pub(crate) async fn list_user_sessions(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<StoredUserSessionRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(Vec::new());
+        };
+        repository.list_user_sessions(user_id).await
+    }
+
+    pub(crate) async fn create_user_session(
+        &self,
+        session: &StoredUserSessionRecord,
+    ) -> Result<Option<StoredUserSessionRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository.create_user_session(session).await
+    }
+
+    pub(crate) async fn create_user_session_if_password_matches(
+        &self,
+        session: &StoredUserSessionRecord,
+        expected_password_hash: &str,
+    ) -> Result<Option<StoredUserSessionRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .create_user_session_if_password_matches(session, expected_password_hash)
+            .await
+    }
+
+    pub(crate) async fn update_user_model_capability_settings(
+        &self,
+        user_id: &str,
+        settings: Option<serde_json::Value>,
+    ) -> Result<Option<serde_json::Value>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_user_model_capability_settings(user_id, settings)
+            .await
+    }
+
+    pub(crate) async fn update_user_feature_settings(
+        &self,
+        user_id: &str,
+        settings: Option<serde_json::Value>,
+    ) -> Result<Option<serde_json::Value>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_user_feature_settings(user_id, settings)
+            .await
+    }
+
+    pub(crate) async fn update_local_auth_user_profile(
+        &self,
+        user_id: &str,
+        email_present: bool,
+        email: Option<String>,
+        email_verified: Option<bool>,
+        username: Option<String>,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_local_auth_user_profile(user_id, email_present, email, email_verified, username)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn restore_local_auth_user_state_if_matches(
+        &self,
+        expected_auth: &aether_data::repository::users::StoredUserAuthRecord,
+        restored_auth: &aether_data::repository::users::StoredUserAuthRecord,
+        expected_export: &aether_data::repository::users::StoredUserExportRow,
+        restored_export: &aether_data::repository::users::StoredUserExportRow,
+        expected_model_capability_settings: Option<&serde_json::Value>,
+        restored_model_capability_settings: Option<serde_json::Value>,
+        expected_feature_settings: Option<&serde_json::Value>,
+        restored_feature_settings: Option<serde_json::Value>,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .restore_local_auth_user_state_if_matches(
+                expected_auth,
+                restored_auth,
+                expected_export,
+                restored_export,
+                expected_model_capability_settings,
+                restored_model_capability_settings,
+                expected_feature_settings,
+                restored_feature_settings,
+            )
+            .await
+    }
+
+    pub(crate) async fn update_local_auth_user_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: String,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_local_auth_user_password_hash(user_id, password_hash, updated_at)
+            .await
+    }
+
+    pub(crate) async fn restore_local_auth_user_password_hash_if_matches(
+        &self,
+        user_id: &str,
+        expected_password_hash: Option<&str>,
+        password_hash: Option<String>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .restore_local_auth_user_password_hash_if_matches(
+                user_id,
+                expected_password_hash,
+                password_hash,
+                updated_at,
+            )
+            .await
+    }
+
+    pub(crate) async fn reset_local_auth_user_password_and_revoke_sessions(
+        &self,
+        user_id: &str,
+        password_hash: String,
+        changed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .reset_local_auth_user_password_and_revoke_sessions(user_id, password_hash, changed_at)
+            .await
+    }
+
+    pub(crate) async fn change_local_auth_password_and_revoke_sessions(
+        &self,
+        user_id: &str,
+        current_session_id: &str,
+        expected_password_hash: Option<&str>,
+        next_password_hash: String,
+        changed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .change_local_auth_password_and_revoke_sessions(
+                user_id,
+                current_session_id,
+                expected_password_hash,
+                next_password_hash,
+                changed_at,
+            )
+            .await
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn create_local_auth_user(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        password_hash: String,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .create_local_auth_user(email, email_verified, username, password_hash)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn create_local_auth_user_with_settings(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        password_hash: String,
+        role: String,
+        allowed_providers: Option<Vec<String>>,
+        allowed_api_formats: Option<Vec<String>>,
+        allowed_models: Option<Vec<String>>,
+        rate_limit: Option<i32>,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .create_local_auth_user_with_settings(
+                email,
+                email_verified,
+                username,
+                password_hash,
+                role,
+                allowed_providers,
+                allowed_api_formats,
+                allowed_models,
+                rate_limit,
+            )
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn update_local_auth_user_admin_fields(
+        &self,
+        user_id: &str,
+        role: Option<String>,
+        allowed_providers_present: bool,
+        allowed_providers: Option<Vec<String>>,
+        allowed_api_formats_present: bool,
+        allowed_api_formats: Option<Vec<String>>,
+        allowed_models_present: bool,
+        allowed_models: Option<Vec<String>>,
+        rate_limit_present: bool,
+        rate_limit: Option<i32>,
+        is_active: Option<bool>,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_local_auth_user_admin_fields(
+                user_id,
+                role,
+                allowed_providers_present,
+                allowed_providers,
+                allowed_api_formats_present,
+                allowed_api_formats,
+                allowed_models_present,
+                allowed_models,
+                rate_limit_present,
+                rate_limit,
+                is_active,
+            )
+            .await
+    }
+
+    pub(crate) async fn update_local_auth_user_policy_modes(
+        &self,
+        user_id: &str,
+        allowed_providers_mode: Option<String>,
+        allowed_api_formats_mode: Option<String>,
+        allowed_models_mode: Option<String>,
+        rate_limit_mode: Option<String>,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_local_auth_user_policy_modes(
+                user_id,
+                allowed_providers_mode,
+                allowed_api_formats_mode,
+                allowed_models_mode,
+                rate_limit_mode,
+            )
+            .await
+    }
+
+    pub(crate) async fn touch_auth_user_last_login(
+        &self,
+        user_id: &str,
+        logged_in_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .touch_auth_user_last_login(user_id, logged_in_at)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn get_or_create_ldap_auth_user(
+        &self,
+        email: String,
+        username: String,
+        ldap_dn: Option<String>,
+        ldap_username: Option<String>,
+        logged_in_at: chrono::DateTime<chrono::Utc>,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        Ok(self
+            .get_or_create_ldap_auth_user_with_wallet_outcome(
+                email,
+                username,
+                ldap_dn,
+                ldap_username,
+                logged_in_at,
+                initial_gift_usd,
+                unlimited,
+            )
+            .await?
+            .map(|result| result.user))
+    }
+
+    pub(crate) async fn get_or_create_ldap_auth_user_with_wallet_outcome(
+        &self,
+        email: String,
+        username: String,
+        ldap_dn: Option<String>,
+        ldap_username: Option<String>,
+        logged_in_at: chrono::DateTime<chrono::Utc>,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<LdapAuthProvisioningResult>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        let Some(outcome) = repository
+            .get_or_create_ldap_auth_user(email, username, ldap_dn, ldap_username, logged_in_at)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !outcome.created {
+            return Ok(Some(LdapAuthProvisioningResult {
+                user: outcome.user,
+                owned_wallet_id: None,
+            }));
+        }
+
+        let initialized = match self
+            .initialize_auth_user_wallet_with_outcome(&outcome.user.id, initial_gift_usd, unlimited)
+            .await
+        {
+            Ok(Some(initialized)) => initialized,
+            Ok(None) => {
+                let _ = self
+                    .rollback_provisional_auth_user_with_wallet(&outcome.user.id, None)
+                    .await;
+                return Ok(None);
+            }
+            Err(err) => {
+                let _ = self
+                    .rollback_provisional_auth_user_with_wallet(&outcome.user.id, None)
+                    .await;
+                return Err(err);
+            }
+        };
+
+        // A user wallet initializer must return a user-owned wallet. If a
+        // custom/legacy backend violates that contract, only remove the wallet
+        // when this invocation actually created it; an existing wallet must be
+        // preserved and the user rollback must fail closed.
+        let wallet_is_user_owned = auth_user_wallet_matches(&initialized.wallet, &outcome.user.id);
+        if !wallet_is_user_owned {
+            let owned_wallet_id = initialized.created.then(|| initialized.wallet.id.clone());
+            let _ = self
+                .rollback_provisional_auth_user_with_wallet(
+                    &outcome.user.id,
+                    owned_wallet_id.as_deref(),
+                )
+                .await;
+            return Err(DataLayerError::UnexpectedValue(
+                "LDAP user wallet owner does not match the provisioned user".to_string(),
+            ));
+        }
+
+        Ok(Some(LdapAuthProvisioningResult {
+            user: outcome.user,
+            owned_wallet_id: initialized.created.then_some(initialized.wallet.id),
+        }))
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn initialize_auth_user_wallet(
+        &self,
+        user_id: &str,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .initialize_auth_user_wallet(user_id, initial_gift_usd, unlimited)
+            .await
+    }
+
+    pub(crate) async fn initialize_auth_user_wallet_with_outcome(
+        &self,
+        user_id: &str,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<InitializeAuthWalletOutcome>, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .initialize_auth_user_wallet_with_outcome(user_id, initial_gift_usd, unlimited)
+            .await
+    }
+
+    pub(crate) async fn initialize_auth_api_key_wallet(
+        &self,
+        api_key_id: &str,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .initialize_auth_api_key_wallet(api_key_id, initial_gift_usd, unlimited)
+            .await
+    }
+
+    pub(crate) async fn initialize_auth_api_key_wallet_with_outcome(
+        &self,
+        api_key_id: &str,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<InitializeAuthWalletOutcome>, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .initialize_auth_api_key_wallet_with_outcome(api_key_id, initial_gift_usd, unlimited)
+            .await
+    }
+
+    pub(crate) async fn delete_provisional_auth_user_wallet(
+        &self,
+        wallet_id: &str,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.wallet_writer {
+            Some(repository) => {
+                repository
+                    .delete_provisional_auth_user_wallet(wallet_id, user_id)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn delete_wallet_if_unreferenced(
+        &self,
+        wallet_id: &str,
+        owner: aether_data::repository::wallet::WalletLookupKey<'_>,
+    ) -> Result<bool, DataLayerError> {
+        match &self.wallet_writer {
+            Some(repository) => {
+                repository
+                    .delete_wallet_if_unreferenced(wallet_id, owner)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn delete_wallet_if_snapshot_matches_and_unreferenced(
+        &self,
+        expected: &StoredWalletSnapshot,
+        owner: aether_data::repository::wallet::WalletLookupKey<'_>,
+    ) -> Result<bool, DataLayerError> {
+        match &self.wallet_writer {
+            Some(repository) => {
+                repository
+                    .delete_wallet_if_snapshot_matches_and_unreferenced(expected, owner)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn restore_wallet_if_snapshot_matches(
+        &self,
+        before: &StoredWalletSnapshot,
+        after: &StoredWalletSnapshot,
+        owner: aether_data::repository::wallet::WalletLookupKey<'_>,
+    ) -> Result<bool, DataLayerError> {
+        match &self.wallet_writer {
+            Some(repository) => {
+                repository
+                    .restore_wallet_if_snapshot_matches(before, after, owner)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn update_auth_user_wallet_limit_mode(
+        &self,
+        user_id: &str,
+        limit_mode: &str,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_auth_user_wallet_limit_mode(user_id, limit_mode)
+            .await
+    }
+
+    pub(crate) async fn update_auth_api_key_wallet_limit_mode(
+        &self,
+        api_key_id: &str,
+        limit_mode: &str,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_auth_api_key_wallet_limit_mode(api_key_id, limit_mode)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn update_auth_user_wallet_snapshot(
+        &self,
+        user_id: &str,
+        balance: f64,
+        gift_balance: f64,
+        limit_mode: &str,
+        currency: &str,
+        status: &str,
+        total_recharged: f64,
+        total_consumed: f64,
+        total_refunded: f64,
+        total_adjusted: f64,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_auth_user_wallet_snapshot(
+                user_id,
+                balance,
+                gift_balance,
+                limit_mode,
+                currency,
+                status,
+                total_recharged,
+                total_consumed,
+                total_refunded,
+                total_adjusted,
+                updated_at_unix_secs,
+            )
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn update_auth_api_key_wallet_snapshot(
+        &self,
+        api_key_id: &str,
+        balance: f64,
+        gift_balance: f64,
+        limit_mode: &str,
+        currency: &str,
+        status: &str,
+        total_recharged: f64,
+        total_consumed: f64,
+        total_refunded: f64,
+        total_adjusted: f64,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_auth_api_key_wallet_snapshot(
+                api_key_id,
+                balance,
+                gift_balance,
+                limit_mode,
+                currency,
+                status,
+                total_recharged,
+                total_consumed,
+                total_refunded,
+                total_adjusted,
+                updated_at_unix_secs,
+            )
+            .await
+    }
+
+    pub(crate) async fn count_active_admin_users(&self) -> Result<u64, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(0);
+        };
+        repository.count_active_admin_users().await
+    }
+
+    pub(crate) async fn count_active_local_admin_users_with_valid_password(
+        &self,
+    ) -> Result<u64, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(0);
+        };
+        repository
+            .count_active_local_admin_users_with_valid_password()
+            .await
+    }
+
+    pub(crate) async fn count_user_pending_refunds(
+        &self,
+        user_id: &str,
+    ) -> Result<u64, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            return Ok(0);
+        };
+        repository.count_pending_refunds_by_user_id(user_id).await
+    }
+
+    pub(crate) async fn count_user_pending_payment_orders(
+        &self,
+        user_id: &str,
+    ) -> Result<u64, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            return Ok(0);
+        };
+        repository
+            .count_pending_payment_orders_by_user_id(user_id)
+            .await
+    }
+
+    pub(crate) async fn delete_local_auth_user(
+        &self,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository.delete_local_auth_user(user_id).await
+    }
+
+    pub(crate) async fn delete_local_auth_user_if_wallet_absent(
+        &self,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .delete_local_auth_user_if_wallet_absent(user_id)
+            .await
+    }
+
+    pub(crate) async fn rollback_provisional_auth_user(
+        &self,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        self.rollback_provisional_auth_user_with_wallet(user_id, None)
+            .await
+    }
+
+    /// Check for every wallet that can still keep a user-owned account alive.
+    ///
+    /// API-key wallets do not carry the owning user id themselves, so a direct
+    /// `find(UserId(..))` is insufficient.  When an auth-key reader is
+    /// available we resolve the user's non-standalone key ids first.  A
+    /// reader-less in-memory repository cannot distinguish those keys from
+    /// standalone keys; in that case any API-key wallet is treated as a
+    /// blocking reference (fail closed).
+    async fn wallet_exists_for_user_or_api_key(
+        &self,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.wallet_reader.as_ref() else {
+            // A writer without a reader cannot prove wallet absence. Preserve
+            // the existing conservative behavior used by rollback callers.
+            return Ok(self.wallet_writer.is_some());
+        };
+
+        if repository
+            .find(aether_data::repository::wallet::WalletLookupKey::UserId(
+                user_id,
+            ))
+            .await?
+            .is_some()
+        {
+            return Ok(true);
+        }
+
+        if self.has_auth_api_key_reader() {
+            let user_ids = vec![user_id.to_string()];
+            let api_key_ids = self
+                .list_auth_api_key_export_records_by_user_ids(&user_ids)
+                .await?
+                .into_iter()
+                .map(|record| record.api_key_id)
+                .collect::<Vec<_>>();
+            if api_key_ids.is_empty() {
+                return Ok(false);
+            }
+            return Ok(!repository
+                .list_wallets_by_api_key_ids(&api_key_ids)
+                .await?
+                .is_empty());
+        }
+
+        // Without an auth-key reader, inspect the wallet owner type directly.
+        // A single-row page is enough to establish that an API-key wallet
+        // exists while avoiding an unbounded read during error compensation.
+        let page = repository
+            .list_admin_wallets(&aether_data::repository::wallet::AdminWalletListQuery {
+                status: None,
+                owner_type: Some("api_key".to_string()),
+                limit: 1,
+                offset: 0,
+            })
+            .await?;
+        Ok(page.total > 0)
+    }
+
+    /// Compensate a user provision only when the caller can prove ownership of the wallet it
+    /// created.  A missing wallet id is intentionally fail-closed: a concurrent initializer may
+    /// have created a valid wallet after this operation started, and an owner-only structural
+    /// lookup would then be able to delete that wallet.
+    pub(crate) async fn rollback_provisional_auth_user_with_wallet(
+        &self,
+        user_id: &str,
+        wallet_id: Option<&str>,
+    ) -> Result<bool, DataLayerError> {
+        if user_id.trim().is_empty() {
+            return Ok(false);
+        }
+        if wallet_id.is_some_and(|wallet_id| wallet_id.trim().is_empty()) {
+            return Err(DataLayerError::InvalidInput(
+                "wallet compensation wallet id cannot be empty".to_string(),
+            ));
+        }
+
+        let database_backend_has_atomic_guard = self.backends.is_some();
+        let wallet_removed = if let Some(wallet_id) = wallet_id {
+            let removed = self
+                .delete_provisional_auth_user_wallet(wallet_id, user_id)
+                .await?;
+            if !removed {
+                // The caller supplied an ownership token for a specific
+                // wallet. If that row still exists, an owner-only lookup is
+                // not enough to justify deleting the user: the row may be
+                // funded, attached to another owner, or simply ineligible
+                // for provisional cleanup.
+                let exact_wallet_exists = match &self.wallet_reader {
+                    Some(repository) => repository
+                        .find(aether_data::repository::wallet::WalletLookupKey::WalletId(
+                            wallet_id,
+                        ))
+                        .await?
+                        .is_some(),
+                    None => self.wallet_writer.is_some(),
+                };
+                if exact_wallet_exists {
+                    return Err(DataLayerError::UnexpectedValue(format!(
+                        "refusing to delete provisional auth user {user_id}: supplied wallet still exists"
+                    )));
+                }
+                let wallet_exists = self.wallet_exists_for_user_or_api_key(user_id).await?;
+                if wallet_exists {
+                    return Err(DataLayerError::UnexpectedValue(format!(
+                        "refusing to delete provisional auth user {user_id}: wallet is not eligible for rollback"
+                    )));
+                }
+            }
+            // Removing the supplied wallet does not prove that it was the
+            // user's only financial reference. Check again before falling
+            // through to the user deletion path when no SQL atomic guard is
+            // available (notably in-memory/test repositories).
+            if removed && !database_backend_has_atomic_guard {
+                if self.wallet_exists_for_user_or_api_key(user_id).await? {
+                    return Err(DataLayerError::UnexpectedValue(format!(
+                        "refusing to delete provisional auth user {user_id}: another wallet reference exists"
+                    )));
+                }
+            }
+            removed
+        } else if database_backend_has_atomic_guard {
+            // The SQL user repository performs the wallet-absence check in the
+            // same transaction as deletion.  A separate read here would
+            // reintroduce the provisioning TOCTOU race.
+            false
+        } else {
+            let wallet_exists = self.wallet_exists_for_user_or_api_key(user_id).await?;
+            if wallet_exists {
+                return Err(DataLayerError::UnexpectedValue(format!(
+                    "refusing to delete provisional auth user {user_id}: wallet ownership is unknown"
+                )));
+            }
+            false
+        };
+        let _ = wallet_removed;
+        if database_backend_has_atomic_guard {
+            self.delete_local_auth_user_if_wallet_absent(user_id).await
+        } else {
+            self.delete_local_auth_user(user_id).await
+        }
+    }
+
+    pub(crate) async fn register_local_auth_user_with_wallet_outcome(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        password_hash: String,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<(StoredUserAuthRecord, StoredWalletSnapshot, bool)>, DataLayerError> {
+        let Some(user) = self
+            .create_local_auth_user(email, email_verified, username, password_hash)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let initialized = match self
+            .initialize_auth_user_wallet_with_outcome(&user.id, initial_gift_usd, unlimited)
+            .await
+        {
+            Ok(Some(initialized)) => initialized,
+            Ok(None) => {
+                let _ = self
+                    .rollback_provisional_auth_user_with_wallet(&user.id, None)
+                    .await;
+                return Ok(None);
+            }
+            Err(err) => {
+                let _ = self
+                    .rollback_provisional_auth_user_with_wallet(&user.id, None)
+                    .await;
+                return Err(err);
+            }
+        };
+
+        // A local account may only be paired with a user-owned wallet. Keep
+        // this contract check at the data boundary as well as in the LDAP
+        // path: custom or legacy repositories must not be able to hand a
+        // caller an API-key wallet (or another user's wallet) as its new
+        // account balance.
+        let wallet_is_user_owned = auth_user_wallet_matches(&initialized.wallet, &user.id);
+        if !wallet_is_user_owned {
+            let owned_wallet_id = initialized.created.then(|| initialized.wallet.id.clone());
+            let _ = self
+                .rollback_provisional_auth_user_with_wallet(&user.id, owned_wallet_id.as_deref())
+                .await;
+            return Err(DataLayerError::UnexpectedValue(
+                "local user wallet owner does not match the provisioned user".to_string(),
+            ));
+        }
+        Ok(Some((user, initialized.wallet, initialized.created)))
+    }
+
+    pub(crate) async fn register_local_auth_user(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        password_hash: String,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<(StoredUserAuthRecord, StoredWalletSnapshot)>, DataLayerError> {
+        Ok(self
+            .register_local_auth_user_with_wallet_outcome(
+                email,
+                email_verified,
+                username,
+                password_hash,
+                initial_gift_usd,
+                unlimited,
+            )
+            .await?
+            .map(|(user, wallet, _created)| (user, wallet)))
+    }
+
+    pub(crate) async fn touch_user_session(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        touched_at: chrono::DateTime<chrono::Utc>,
+        ip_address: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .touch_user_session(user_id, session_id, touched_at, ip_address, user_agent)
+            .await
+    }
+
+    pub(crate) async fn update_user_session_device_label(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        device_label: &str,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .update_user_session_device_label(user_id, session_id, device_label, updated_at)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn rotate_user_session_refresh_token(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        expected_refresh_token_hash: &str,
+        next_refresh_token_hash: &str,
+        rotated_at: chrono::DateTime<chrono::Utc>,
+        expires_at: chrono::DateTime<chrono::Utc>,
+        ip_address: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .rotate_user_session_refresh_token(
+                user_id,
+                session_id,
+                expected_refresh_token_hash,
+                next_refresh_token_hash,
+                rotated_at,
+                expires_at,
+                ip_address,
+                user_agent,
+            )
+            .await
+    }
+
+    pub(crate) async fn revoke_user_session(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        revoked_at: chrono::DateTime<chrono::Utc>,
+        reason: &str,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(false);
+        };
+        repository
+            .revoke_user_session(user_id, session_id, revoked_at, reason)
+            .await
+    }
+
+    pub(crate) async fn revoke_all_user_sessions(
+        &self,
+        user_id: &str,
+        revoked_at: chrono::DateTime<chrono::Utc>,
+        reason: &str,
+    ) -> Result<u64, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(0);
+        };
+        repository
+            .revoke_all_user_sessions(user_id, revoked_at, reason)
+            .await
+    }
+
+    pub(crate) async fn list_enabled_oauth_module_providers(
+        &self,
+    ) -> Result<Vec<StoredOAuthProviderModuleConfig>, DataLayerError> {
+        match &self.auth_module_reader {
+            Some(repository) => repository.list_enabled_oauth_providers().await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn get_ldap_module_config(
+        &self,
+    ) -> Result<Option<StoredLdapModuleConfig>, DataLayerError> {
+        match &self.auth_module_reader {
+            Some(repository) => repository.get_ldap_config().await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn compare_and_swap_ldap_module_config(
+        &self,
+        expected: Option<&StoredLdapModuleConfig>,
+        replacement: &StoredLdapModuleConfig,
+        bind_password_update: &LdapBindPasswordUpdate,
+    ) -> Result<Option<CompareAndSwapLdapConfigResult>, DataLayerError> {
+        match &self.auth_module_writer {
+            Some(repository) => repository
+                .compare_and_swap_ldap_config(expected, replacement, bind_password_update)
+                .await
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn delete_ldap_module_config_if_matches(
+        &self,
+        expected: &StoredLdapModuleConfig,
+    ) -> Result<bool, DataLayerError> {
+        match &self.auth_module_writer {
+            Some(repository) => repository.delete_ldap_config_if_matches(expected).await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn compare_and_swap_ldap_bind_password(
+        &self,
+        expected: &str,
+        replacement: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.auth_module_writer {
+            Some(repository) => {
+                repository
+                    .compare_and_swap_ldap_bind_password(expected, replacement)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn list_oauth_provider_configs(
+        &self,
+    ) -> Result<Vec<StoredOAuthProviderConfig>, DataLayerError> {
+        match &self.oauth_provider_reader {
+            Some(repository) => repository.list_oauth_provider_configs().await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn get_oauth_provider_config(
+        &self,
+        provider_type: &str,
+    ) -> Result<Option<StoredOAuthProviderConfig>, DataLayerError> {
+        match &self.oauth_provider_reader {
+            Some(repository) => repository.get_oauth_provider_config(provider_type).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn compare_and_swap_oauth_provider_client_secret(
+        &self,
+        provider_type: &str,
+        expected: &str,
+        replacement: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.oauth_provider_writer {
+            Some(repository) => {
+                repository
+                    .compare_and_swap_oauth_provider_client_secret(
+                        provider_type,
+                        expected,
+                        replacement,
+                    )
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn count_locked_users_if_oauth_provider_disabled(
+        &self,
+        provider_type: &str,
+        ldap_exclusive: bool,
+    ) -> Result<usize, DataLayerError> {
+        let repository_count = match &self.oauth_provider_reader {
+            Some(repository) => {
+                repository
+                    .count_locked_users_if_provider_disabled(provider_type, ldap_exclusive)
+                    .await
+            }
+            None => Ok(0),
+        }?;
+        let enabled_provider_types = match &self.oauth_provider_reader {
+            Some(repository) => repository
+                .list_oauth_provider_configs()
+                .await?
+                .into_iter()
+                .filter(|provider| provider.is_enabled)
+                .map(|provider| provider.provider_type)
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
+        let user_count = match &self.user_reader {
+            Some(repository) => {
+                repository
+                    .count_locked_users_if_oauth_provider_disabled(
+                        provider_type,
+                        &enabled_provider_types,
+                        ldap_exclusive,
+                    )
+                    .await?
+            }
+            None => 0,
+        };
+        Ok(repository_count.max(user_count))
+    }
+
+    pub(crate) async fn upsert_oauth_provider_config(
+        &self,
+        record: &UpsertOAuthProviderConfigRecord,
+        ldap_exclusive: bool,
+        force_disable: bool,
+        locked_users_snapshot: usize,
+    ) -> Result<
+        Option<aether_data::repository::oauth_providers::UpsertOAuthProviderConfigOutcome>,
+        DataLayerError,
+    > {
+        match &self.oauth_provider_writer {
+            Some(repository) => repository
+                .upsert_oauth_provider_config_guarded(
+                    record,
+                    ldap_exclusive,
+                    force_disable,
+                    locked_users_snapshot,
+                )
+                .await
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn delete_oauth_provider_config_if_unlinked(
+        &self,
+        provider_type: &str,
+    ) -> Result<bool, DataLayerError> {
+        let has_links_snapshot = self.has_oauth_links_for_provider(provider_type).await?;
+        match &self.oauth_provider_writer {
+            Some(repository) => {
+                repository
+                    .delete_oauth_provider_config_if_unlinked(provider_type, has_links_snapshot)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn list_management_tokens(
+        &self,
+        query: &ManagementTokenListQuery,
+    ) -> Result<StoredManagementTokenListPage, DataLayerError> {
+        match &self.management_token_reader {
+            Some(repository) => repository.list_management_tokens(query).await,
+            None => Ok(StoredManagementTokenListPage {
+                items: Vec::new(),
+                total: 0,
+            }),
+        }
+    }
+
+    pub(crate) async fn get_management_token_with_user(
+        &self,
+        token_id: &str,
+    ) -> Result<Option<StoredManagementTokenWithUser>, DataLayerError> {
+        match &self.management_token_reader {
+            Some(repository) => repository.get_management_token_with_user(token_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn get_management_token_with_user_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<StoredManagementTokenWithUser>, DataLayerError> {
+        match &self.management_token_reader {
+            Some(repository) => {
+                repository
+                    .get_management_token_with_user_by_hash(token_hash)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn create_management_token(
+        &self,
+        record: &CreateManagementTokenRecord,
+    ) -> Result<LocalMutationOutcome<StoredManagementToken>, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => match repository.create_management_token(record).await {
+                Ok(token) => Ok(LocalMutationOutcome::Applied(token)),
+                Err(DataLayerError::InvalidInput(detail)) => {
+                    Ok(LocalMutationOutcome::Invalid(detail))
+                }
+                Err(err) => Err(err),
+            },
+            None => Ok(LocalMutationOutcome::Unavailable),
+        }
+    }
+
+    pub(crate) async fn update_management_token(
+        &self,
+        record: &UpdateManagementTokenRecord,
+    ) -> Result<LocalMutationOutcome<StoredManagementToken>, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => match repository.update_management_token(record).await {
+                Ok(Some(token)) => Ok(LocalMutationOutcome::Applied(token)),
+                Ok(None) => Ok(LocalMutationOutcome::NotFound),
+                Err(DataLayerError::InvalidInput(detail)) => {
+                    Ok(LocalMutationOutcome::Invalid(detail))
+                }
+                Err(err) => Err(err),
+            },
+            None => Ok(LocalMutationOutcome::Unavailable),
+        }
+    }
+
+    pub(crate) async fn update_management_token_for_user(
+        &self,
+        record: &UpdateManagementTokenRecord,
+        user_id: &str,
+    ) -> Result<LocalMutationOutcome<StoredManagementToken>, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => match repository
+                .update_management_token_for_user(record, user_id)
+                .await
+            {
+                Ok(Some(token)) => Ok(LocalMutationOutcome::Applied(token)),
+                Ok(None) => Ok(LocalMutationOutcome::NotFound),
+                Err(DataLayerError::InvalidInput(detail)) => {
+                    Ok(LocalMutationOutcome::Invalid(detail))
+                }
+                Err(err) => Err(err),
+            },
+            None => Ok(LocalMutationOutcome::Unavailable),
+        }
+    }
+
+    pub(crate) async fn delete_management_token(
+        &self,
+        token_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => repository.delete_management_token(token_id).await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn delete_management_token_for_user(
+        &self,
+        token_id: &str,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => {
+                repository
+                    .delete_management_token_for_user(token_id, user_id)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn record_management_token_usage(
+        &self,
+        token_id: &str,
+        last_used_ip: Option<&str>,
+    ) -> Result<Option<StoredManagementToken>, DataLayerError> {
+        if let Some(repository) = &self.usage_writer {
+            let enqueued = repository
+                .enqueue_management_token_counter_delta(ManagementTokenCounterDelta {
+                    token_id: token_id.to_string(),
+                    usage_count_delta: 1,
+                    last_used_at_unix_secs: Some(chrono::Utc::now().timestamp().max(0) as u64),
+                    last_used_ip: last_used_ip.map(ToOwned::to_owned),
+                })
+                .await?;
+            if enqueued {
+                return Ok(None);
+            }
+        }
+
+        match &self.management_token_writer {
+            Some(repository) => {
+                repository
+                    .record_management_token_usage(token_id, last_used_ip)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn find_proxy_node(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_reader {
+            Some(repository) => repository.find_proxy_node(node_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn list_proxy_nodes(&self) -> Result<Vec<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_reader {
+            Some(repository) => repository.list_proxy_nodes().await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_proxy_node_events(
+        &self,
+        node_id: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyNodeEvent>, DataLayerError> {
+        match &self.proxy_node_reader {
+            Some(repository) => repository.list_proxy_node_events(node_id, limit).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_proxy_node_events_filtered(
+        &self,
+        node_id: &str,
+        query: &super::ProxyNodeEventQuery,
+    ) -> Result<Vec<StoredProxyNodeEvent>, DataLayerError> {
+        match &self.proxy_node_reader {
+            Some(repository) => {
+                repository
+                    .list_proxy_node_events_filtered(node_id, query)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_proxy_node_metrics(
+        &self,
+        node_id: &str,
+        step: super::ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyNodeMetricsBucket>, DataLayerError> {
+        match &self.proxy_node_reader {
+            Some(repository) => {
+                repository
+                    .list_proxy_node_metrics(node_id, step, from_unix_secs, to_unix_secs, limit)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_proxy_fleet_metrics(
+        &self,
+        step: super::ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyFleetMetricsBucket>, DataLayerError> {
+        match &self.proxy_node_reader {
+            Some(repository) => {
+                repository
+                    .list_proxy_fleet_metrics(step, from_unix_secs, to_unix_secs, limit)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn register_proxy_node(
+        &self,
+        mutation: &ProxyNodeRegistrationMutation,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.register_node(mutation).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn compare_and_set_proxy_node_password(
+        &self,
+        node_id: &str,
+        expected: &str,
+        replacement: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => {
+                repository
+                    .compare_and_set_proxy_password(node_id, expected, replacement)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn compare_and_set_proxy_node_metadata(
+        &self,
+        node_id: &str,
+        expected: &serde_json::Value,
+        replacement: &serde_json::Value,
+    ) -> Result<bool, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => {
+                repository
+                    .compare_and_set_proxy_metadata(node_id, expected, replacement)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn create_manual_proxy_node(
+        &self,
+        mutation: &ProxyNodeManualCreateMutation,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.create_manual_node(mutation).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn update_manual_proxy_node(
+        &self,
+        mutation: &ProxyNodeManualUpdateMutation,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.update_manual_node(mutation).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn reset_stale_proxy_node_tunnel_statuses(
+        &self,
+    ) -> Result<usize, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.reset_stale_tunnel_statuses().await,
+            None => Ok(0),
+        }
+    }
+
+    pub(crate) async fn cleanup_proxy_node_metrics(
+        &self,
+        retain_1m_from_unix_secs: u64,
+        retain_1h_from_unix_secs: u64,
+        delete_limit: usize,
+    ) -> Result<super::ProxyNodeMetricsCleanupSummary, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => {
+                repository
+                    .cleanup_proxy_node_metrics(
+                        retain_1m_from_unix_secs,
+                        retain_1h_from_unix_secs,
+                        delete_limit,
+                    )
+                    .await
+            }
+            None => Ok(super::ProxyNodeMetricsCleanupSummary::default()),
+        }
+    }
+
+    pub(crate) async fn apply_proxy_node_heartbeat(
+        &self,
+        mutation: &ProxyNodeHeartbeatMutation,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.apply_heartbeat(mutation).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn record_proxy_node_traffic(
+        &self,
+        mutation: &ProxyNodeTrafficMutation,
+    ) -> Result<bool, DataLayerError> {
+        if let Some(repository) = &self.usage_writer {
+            let enqueued = repository
+                .enqueue_proxy_node_counter_delta(ProxyNodeCounterDelta {
+                    node_id: mutation.node_id.clone(),
+                    expected_tunnel_generation: mutation.expected_tunnel_generation.clone(),
+                    total_requests_delta: mutation.total_requests_delta,
+                    failed_requests_delta: mutation.failed_requests_delta,
+                    dns_failures_delta: mutation.dns_failures_delta,
+                    stream_errors_delta: mutation.stream_errors_delta,
+                })
+                .await?;
+            if enqueued {
+                return Ok(true);
+            }
+        }
+
+        match &self.proxy_node_writer {
+            Some(repository) => repository.record_traffic(mutation).await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn update_proxy_node_tunnel_status(
+        &self,
+        mutation: &ProxyNodeTunnelStatusMutation,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.update_tunnel_status(mutation).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn unregister_proxy_node(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.unregister_node(node_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn delete_proxy_node(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.delete_node(node_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn update_proxy_node_remote_config(
+        &self,
+        mutation: &ProxyNodeRemoteConfigMutation,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.update_remote_config(mutation).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_management_token_active(
+        &self,
+        token_id: &str,
+        is_active: bool,
+    ) -> Result<Option<StoredManagementToken>, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => {
+                repository
+                    .set_management_token_active(token_id, is_active)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_management_token_active_for_user(
+        &self,
+        token_id: &str,
+        user_id: &str,
+        is_active: bool,
+    ) -> Result<Option<StoredManagementToken>, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => {
+                repository
+                    .set_management_token_active_for_user(token_id, user_id, is_active)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn activate_management_token_if_matches(
+        &self,
+        mutation: &ActivateManagementTokenIfMatches,
+    ) -> Result<bool, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => {
+                repository
+                    .activate_management_token_if_matches(mutation)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn delete_inactive_management_token_if_matches(
+        &self,
+        mutation: &ActivateManagementTokenIfMatches,
+    ) -> Result<bool, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => {
+                repository
+                    .delete_inactive_management_token_if_matches(mutation)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn regenerate_management_token_secret(
+        &self,
+        mutation: &RegenerateManagementTokenSecret,
+    ) -> Result<LocalMutationOutcome<StoredManagementToken>, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => match repository
+                .regenerate_management_token_secret(mutation)
+                .await
+            {
+                Ok(Some(token)) => Ok(LocalMutationOutcome::Applied(token)),
+                Ok(None) => Ok(LocalMutationOutcome::NotFound),
+                Err(DataLayerError::InvalidInput(detail)) => {
+                    Ok(LocalMutationOutcome::Invalid(detail))
+                }
+                Err(err) => Err(err),
+            },
+            None => Ok(LocalMutationOutcome::Unavailable),
+        }
+    }
+
+    pub(crate) async fn regenerate_management_token_secret_for_user(
+        &self,
+        mutation: &RegenerateManagementTokenSecret,
+        user_id: &str,
+    ) -> Result<LocalMutationOutcome<StoredManagementToken>, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => match repository
+                .regenerate_management_token_secret_for_user(mutation, user_id)
+                .await
+            {
+                Ok(Some(token)) => Ok(LocalMutationOutcome::Applied(token)),
+                Ok(None) => Ok(LocalMutationOutcome::NotFound),
+                Err(DataLayerError::InvalidInput(detail)) => {
+                    Ok(LocalMutationOutcome::Invalid(detail))
+                }
+                Err(err) => Err(err),
+            },
+            None => Ok(LocalMutationOutcome::Unavailable),
+        }
+    }
+
+    pub(in crate::data) async fn find_auth_api_key_snapshot(
+        &self,
+        key: AuthApiKeyLookupKey<'_>,
+    ) -> Result<Option<StoredAuthApiKeySnapshot>, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => repository.find_api_key_snapshot(key).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn list_auth_api_key_snapshots_by_ids(
+        &self,
+        api_key_ids: &[String],
+    ) -> Result<Vec<StoredAuthApiKeySnapshot>, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => repository.list_api_key_snapshots_by_ids(api_key_ids).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_auth_api_key_export_records_by_user_ids(
+        &self,
+        user_ids: &[String],
+    ) -> Result<Vec<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => repository.list_export_api_keys_by_user_ids(user_ids).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_auth_api_key_export_records_by_ids(
+        &self,
+        api_key_ids: &[String],
+    ) -> Result<Vec<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => repository.list_export_api_keys_by_ids(api_key_ids).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn read_auth_api_key_feature_settings(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        is_standalone: bool,
+    ) -> Result<Option<serde_json::Value>, DataLayerError> {
+        if is_standalone {
+            return Ok(self
+                .find_auth_api_key_export_standalone_record_by_id(api_key_id)
+                .await?
+                .and_then(|record| record.feature_settings));
+        }
+
+        Ok(self
+            .list_auth_api_key_export_records_by_ids(&[api_key_id.to_string()])
+            .await?
+            .into_iter()
+            .find(|record| record.user_id == user_id && !record.is_standalone)
+            .and_then(|record| record.feature_settings))
+    }
+
+    pub(crate) async fn list_auth_api_key_export_records_by_name_search(
+        &self,
+        name_search: &str,
+    ) -> Result<Vec<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => {
+                repository
+                    .list_export_api_keys_by_name_search(name_search)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_auth_api_key_export_standalone_records_page(
+        &self,
+        query: &aether_data::repository::auth::StandaloneApiKeyExportListQuery,
+    ) -> Result<Vec<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => repository.list_export_standalone_api_keys_page(query).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn count_auth_api_key_export_standalone_records(
+        &self,
+        is_active: Option<bool>,
+    ) -> Result<u64, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => repository.count_export_standalone_api_keys(is_active).await,
+            None => Ok(0),
+        }
+    }
+
+    pub(crate) async fn summarize_auth_api_key_export_records_by_user_ids(
+        &self,
+        user_ids: &[String],
+        now_unix_secs: u64,
+    ) -> Result<aether_data::repository::auth::AuthApiKeyExportSummary, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => {
+                repository
+                    .summarize_export_api_keys_by_user_ids(user_ids, now_unix_secs)
+                    .await
+            }
+            None => Ok(aether_data::repository::auth::AuthApiKeyExportSummary::default()),
+        }
+    }
+
+    pub(crate) async fn summarize_auth_api_key_export_non_standalone_records(
+        &self,
+        now_unix_secs: u64,
+    ) -> Result<aether_data::repository::auth::AuthApiKeyExportSummary, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => {
+                repository
+                    .summarize_export_non_standalone_api_keys(now_unix_secs)
+                    .await
+            }
+            None => Ok(aether_data::repository::auth::AuthApiKeyExportSummary::default()),
+        }
+    }
+
+    pub(crate) async fn list_auth_api_key_export_standalone_records(
+        &self,
+    ) -> Result<Vec<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => repository.list_export_standalone_api_keys().await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn summarize_auth_api_key_export_standalone_records(
+        &self,
+        now_unix_secs: u64,
+    ) -> Result<aether_data::repository::auth::AuthApiKeyExportSummary, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => {
+                repository
+                    .summarize_export_standalone_api_keys(now_unix_secs)
+                    .await
+            }
+            None => Ok(aether_data::repository::auth::AuthApiKeyExportSummary::default()),
+        }
+    }
+
+    pub(crate) async fn find_auth_api_key_export_standalone_record_by_id(
+        &self,
+        api_key_id: &str,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_reader {
+            Some(repository) => {
+                repository
+                    .find_export_standalone_api_key_by_id(api_key_id)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn create_user_api_key(
+        &self,
+        record: aether_data::repository::auth::CreateUserApiKeyRecord,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => repository.create_user_api_key(record).await,
+            None => Ok(None),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn synchronize_user_api_key_owner_for_tests(
+        &self,
+        user: &StoredUserAuthRecord,
+    ) -> Result<(), DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .synchronize_user_api_key_owner_for_tests(user)
+                    .await
+            }
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) async fn create_standalone_api_key(
+        &self,
+        record: aether_data::repository::auth::CreateStandaloneApiKeyRecord,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => repository.create_standalone_api_key(record).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn update_user_api_key_basic(
+        &self,
+        record: aether_data::repository::auth::UpdateUserApiKeyBasicRecord,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => repository.update_user_api_key_basic(record).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn compare_and_swap_api_key_ciphertext(
+        &self,
+        mutation: &aether_data::repository::auth::CompareAndSwapAuthApiKeyCiphertext,
+    ) -> Result<bool, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .compare_and_swap_api_key_ciphertext(mutation)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn update_user_api_key_basic_if_unlocked(
+        &self,
+        record: aether_data::repository::auth::UpdateUserApiKeyBasicRecord,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .update_user_api_key_basic_if_unlocked(record)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn update_standalone_api_key_basic(
+        &self,
+        record: aether_data::repository::auth::UpdateStandaloneApiKeyBasicRecord,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => repository.update_standalone_api_key_basic(record).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn restore_api_key_if_matches(
+        &self,
+        expected: &StoredAuthApiKeyExportRecord,
+        restored: &StoredAuthApiKeyExportRecord,
+    ) -> Result<bool, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .restore_api_key_if_matches(expected, restored)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn set_user_api_key_active(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        is_active: bool,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_user_api_key_active(user_id, api_key_id, is_active)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_user_api_key_active_if_unlocked(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        is_active: bool,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_user_api_key_active_if_unlocked(user_id, api_key_id, is_active)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_standalone_api_key_active(
+        &self,
+        api_key_id: &str,
+        is_active: bool,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_standalone_api_key_active(api_key_id, is_active)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_user_api_key_locked(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        is_locked: bool,
+    ) -> Result<bool, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_user_api_key_locked(user_id, api_key_id, is_locked)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn set_user_api_key_allowed_providers(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        allowed_providers: Option<Vec<String>>,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_user_api_key_allowed_providers(user_id, api_key_id, allowed_providers)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_user_api_key_allowed_providers_if_unlocked(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        allowed_providers: Option<Vec<String>>,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_user_api_key_allowed_providers_if_unlocked(
+                        user_id,
+                        api_key_id,
+                        allowed_providers,
+                    )
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_user_api_key_force_capabilities(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        force_capabilities: Option<serde_json::Value>,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_user_api_key_force_capabilities(user_id, api_key_id, force_capabilities)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_user_api_key_force_capabilities_if_unlocked(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        force_capabilities: Option<serde_json::Value>,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_user_api_key_force_capabilities_if_unlocked(
+                        user_id,
+                        api_key_id,
+                        force_capabilities,
+                    )
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_user_api_key_feature_settings(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        feature_settings: Option<serde_json::Value>,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_user_api_key_feature_settings(user_id, api_key_id, feature_settings)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_user_api_key_feature_settings_if_unlocked(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        feature_settings: Option<serde_json::Value>,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_user_api_key_feature_settings_if_unlocked(
+                        user_id,
+                        api_key_id,
+                        feature_settings,
+                    )
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_api_key_usage_totals(
+        &self,
+        api_key_id: &str,
+        total_requests: u64,
+        total_tokens: u64,
+        total_cost_usd: f64,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_api_key_usage_totals(
+                        api_key_id,
+                        total_requests,
+                        total_tokens,
+                        total_cost_usd,
+                    )
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn set_standalone_api_key_feature_settings(
+        &self,
+        api_key_id: &str,
+        feature_settings: Option<serde_json::Value>,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .set_standalone_api_key_feature_settings(api_key_id, feature_settings)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn delete_user_api_key(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => repository.delete_user_api_key(user_id, api_key_id).await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn delete_user_api_key_if_unlocked(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => {
+                repository
+                    .delete_user_api_key_if_unlocked(user_id, api_key_id)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn delete_standalone_api_key(
+        &self,
+        api_key_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.auth_api_key_writer {
+            Some(repository) => repository.delete_standalone_api_key(api_key_id).await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn read_auth_api_key_snapshot(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        now_unix_secs: u64,
+    ) -> Result<Option<GatewayAuthApiKeySnapshot>, DataLayerError> {
+        let snapshot = crate::request_diagnostics::observe_db_operation(
+            "auth_api_key_snapshot",
+            self.database_pool_summary(),
+            self.find_stored_auth_api_key_snapshot(AuthApiKeyLookupKey::UserApiKeyIds {
+                user_id,
+                api_key_id,
+            }),
+        )
+        .await?;
+        self.apply_user_group_effective_policies(snapshot, now_unix_secs)
+            .await
+    }
+
+    pub(crate) async fn read_auth_api_key_snapshot_by_key_hash(
+        &self,
+        key_hash: &str,
+        now_unix_secs: u64,
+    ) -> Result<Option<GatewayAuthApiKeySnapshot>, DataLayerError> {
+        let snapshot = crate::request_diagnostics::observe_db_operation(
+            "auth_api_key_snapshot_by_hash",
+            self.database_pool_summary(),
+            self.find_stored_auth_api_key_snapshot(AuthApiKeyLookupKey::KeyHash(key_hash)),
+        )
+        .await?;
+        self.apply_user_group_effective_policies(snapshot, now_unix_secs)
+            .await
+    }
+
+    async fn apply_user_group_effective_policies(
+        &self,
+        snapshot: Option<StoredAuthApiKeySnapshot>,
+        now_unix_secs: u64,
+    ) -> Result<Option<GatewayAuthApiKeySnapshot>, DataLayerError> {
+        let Some(mut snapshot) = snapshot else {
+            return Ok(None);
+        };
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(Some(GatewayAuthApiKeySnapshot::from_stored(
+                snapshot,
+                now_unix_secs,
+            )));
+        };
+        let Some(user) = crate::request_diagnostics::observe_db_operation(
+            "auth_user_policy",
+            self.database_pool_summary(),
+            repository.find_user_auth_by_id(&snapshot.user_id),
+        )
+        .await?
+        else {
+            return Ok(Some(GatewayAuthApiKeySnapshot::from_stored(
+                snapshot,
+                now_unix_secs,
+            )));
+        };
+        snapshot.user_role = user.role;
+        let groups = self
+            .effective_user_groups_for_user(&snapshot.user_id)
+            .await?;
+
+        let GatewayUserEffectiveListPolicies {
+            allowed_providers,
+            allowed_api_formats,
+            allowed_models,
+        } = resolve_group_effective_list_policies(&groups);
+        let user_rate_limit = resolve_effective_rate_limit_policy(None, "system", &groups);
+        snapshot.user_allowed_providers = allowed_providers;
+        snapshot.user_allowed_api_formats = allowed_api_formats;
+        snapshot.user_allowed_models = allowed_models;
+        snapshot.user_rate_limit = user_rate_limit;
+        Ok(Some(GatewayAuthApiKeySnapshot::from_stored(
+            snapshot,
+            now_unix_secs,
+        )))
+    }
+
+    pub(crate) async fn resolve_user_effective_list_policies(
+        &self,
+        user: &StoredUserAuthRecord,
+    ) -> Result<GatewayUserEffectiveListPolicies, DataLayerError> {
+        if user.role.eq_ignore_ascii_case("admin") {
+            return Ok(GatewayUserEffectiveListPolicies::default());
+        }
+
+        let groups = if self.user_reader.is_some() {
+            self.effective_user_groups_for_user(&user.id).await?
+        } else {
+            Vec::new()
+        };
+        Ok(resolve_group_effective_list_policies(&groups))
+    }
+
+    async fn effective_user_groups_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let mut groups = repository.list_user_groups_for_user(user_id).await?;
+        let dynamic_group_ids = self.active_membership_group_ids_for_user(user_id).await?;
+        if !dynamic_group_ids.is_empty() {
+            groups.extend(
+                repository
+                    .list_user_groups_by_ids(&dynamic_group_ids)
+                    .await?,
+            );
+            let mut deduped = std::collections::BTreeMap::new();
+            for group in groups {
+                deduped.insert(group.id.clone(), group);
+            }
+            groups = deduped.into_values().collect();
+        }
+        groups.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(groups)
+    }
+
+    async fn active_membership_group_ids_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<String>, DataLayerError> {
+        let Some(repository) = self.billing_reader.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let Some(entitlements) = repository.list_user_plan_entitlements(user_id).await? else {
+            return Ok(Vec::new());
+        };
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let mut group_ids = std::collections::BTreeSet::new();
+        for entitlement in entitlements {
+            if entitlement.status != "active"
+                || entitlement.starts_at_unix_secs > now
+                || entitlement.expires_at_unix_secs <= now
+            {
+                continue;
+            }
+            let Some(items) = entitlement.entitlements_snapshot.as_array() else {
+                continue;
+            };
+            for item in items {
+                if item.get("type").and_then(serde_json::Value::as_str) != Some("membership_group")
+                {
+                    continue;
+                }
+                let Some(groups) = item
+                    .get("grant_user_groups")
+                    .and_then(serde_json::Value::as_array)
+                else {
+                    continue;
+                };
+                for group_id in groups {
+                    if let Some(group_id) = group_id.as_str().map(str::trim) {
+                        if !group_id.is_empty() {
+                            group_ids.insert(group_id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(group_ids.into_iter().collect())
+    }
+}
+
+// Per-user list policy columns are retained only for legacy import/export compatibility.
+// Runtime authorization and user-facing catalogs must both treat group policies as authoritative.
+fn resolve_group_effective_list_policies(
+    groups: &[aether_data::repository::users::StoredUserGroup],
+) -> GatewayUserEffectiveListPolicies {
+    GatewayUserEffectiveListPolicies {
+        allowed_providers: resolve_effective_list_policy(None, "unrestricted", groups, |group| {
+            (
+                &group.allowed_providers_mode,
+                group.allowed_providers.clone(),
+            )
+        }),
+        allowed_api_formats: resolve_effective_api_format_policy(
+            None,
+            "unrestricted",
+            groups,
+            |group| {
+                (
+                    &group.allowed_api_formats_mode,
+                    group.allowed_api_formats.clone(),
+                )
+            },
+        ),
+        allowed_models: resolve_effective_list_policy(None, "unrestricted", groups, |group| {
+            (&group.allowed_models_mode, group.allowed_models.clone())
+        }),
+    }
+}
+
+fn resolve_effective_list_policy(
+    user_values: Option<Vec<String>>,
+    user_mode: &str,
+    groups: &[aether_data::repository::users::StoredUserGroup],
+    group_field: impl Fn(
+        &aether_data::repository::users::StoredUserGroup,
+    ) -> (&str, Option<Vec<String>>),
+) -> Option<Vec<String>> {
+    let group_policy = union_group_list_policies(groups, group_field);
+    let user_policy = list_restriction_from_mode(user_mode, user_values);
+    intersect_list_policies(group_policy, user_policy)
+}
+
+fn resolve_effective_api_format_policy(
+    user_values: Option<Vec<String>>,
+    user_mode: &str,
+    groups: &[aether_data::repository::users::StoredUserGroup],
+    group_field: impl Fn(
+        &aether_data::repository::users::StoredUserGroup,
+    ) -> (&str, Option<Vec<String>>),
+) -> Option<Vec<String>> {
+    let group_policy = union_group_list_policies(groups, group_field);
+    let user_policy = list_restriction_from_mode(user_mode, user_values);
+    intersect_api_format_list_policies(group_policy, user_policy)
+}
+
+fn union_group_list_policies(
+    groups: &[aether_data::repository::users::StoredUserGroup],
+    group_field: impl Fn(
+        &aether_data::repository::users::StoredUserGroup,
+    ) -> (&str, Option<Vec<String>>),
+) -> Option<Vec<String>> {
+    let mut saw_restrictive_group = false;
+    let mut values = std::collections::BTreeSet::new();
+
+    for group in groups {
+        let (mode, group_values) = group_field(group);
+        match mode {
+            "unrestricted" => return None,
+            "specific" => {
+                saw_restrictive_group = true;
+                values.extend(group_values.unwrap_or_default());
+            }
+            "deny_all" => {
+                saw_restrictive_group = true;
+            }
+            _ => {}
+        }
+    }
+
+    saw_restrictive_group.then(|| values.into_iter().collect())
+}
+
+fn list_restriction_from_mode(mode: &str, values: Option<Vec<String>>) -> Option<Vec<String>> {
+    match mode {
+        "specific" => Some(values.unwrap_or_default()),
+        "deny_all" => Some(Vec::new()),
+        _ => None,
+    }
+}
+
+fn resolve_effective_rate_limit_policy(
+    user_rate_limit: Option<i32>,
+    user_mode: &str,
+    groups: &[aether_data::repository::users::StoredUserGroup],
+) -> Option<i32> {
+    let group_policy = groups.iter().fold(None, |effective, group| {
+        union_rate_limit_policies(
+            effective,
+            rate_limit_restriction_from_mode(&group.rate_limit_mode, group.rate_limit),
+        )
+    });
+    let user_policy = rate_limit_restriction_from_mode(user_mode, user_rate_limit);
+    rate_limit_policy_value(intersect_rate_limit_policies(group_policy, user_policy))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RateLimitRestriction {
+    Unlimited,
+    Limited(i32),
+}
+
+fn rate_limit_restriction_from_mode(
+    mode: &str,
+    rate_limit: Option<i32>,
+) -> Option<RateLimitRestriction> {
+    match mode {
+        "custom" => {
+            let rate_limit = rate_limit.unwrap_or(0).max(0);
+            if rate_limit == 0 {
+                Some(RateLimitRestriction::Unlimited)
+            } else {
+                Some(RateLimitRestriction::Limited(rate_limit))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn intersect_list_policies(
+    left: Option<Vec<String>>,
+    right: Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(values), None) | (None, Some(values)) => Some(values),
+        (Some(left_values), Some(right_values)) => {
+            let right_values = right_values
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>();
+            Some(
+                left_values
+                    .into_iter()
+                    .filter(|value| right_values.contains(value))
+                    .collect(),
+            )
+        }
+    }
+}
+
+fn intersect_api_format_list_policies(
+    left: Option<Vec<String>>,
+    right: Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(values), None) | (None, Some(values)) => Some(values),
+        (Some(left_values), Some(right_values)) => Some(
+            crate::ai_serving::intersect_api_format_allowed_lists(&left_values, &right_values),
+        ),
+    }
+}
+
+fn intersect_rate_limit_policies(
+    left: Option<RateLimitRestriction>,
+    right: Option<RateLimitRestriction>,
+) -> Option<RateLimitRestriction> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (Some(RateLimitRestriction::Unlimited), Some(RateLimitRestriction::Unlimited)) => {
+            Some(RateLimitRestriction::Unlimited)
+        }
+        (Some(RateLimitRestriction::Limited(value)), Some(RateLimitRestriction::Unlimited))
+        | (Some(RateLimitRestriction::Unlimited), Some(RateLimitRestriction::Limited(value))) => {
+            Some(RateLimitRestriction::Limited(value))
+        }
+        (Some(RateLimitRestriction::Limited(left)), Some(RateLimitRestriction::Limited(right))) => {
+            Some(RateLimitRestriction::Limited(left.min(right)))
+        }
+    }
+}
+
+fn union_rate_limit_policies(
+    left: Option<RateLimitRestriction>,
+    right: Option<RateLimitRestriction>,
+) -> Option<RateLimitRestriction> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (Some(RateLimitRestriction::Unlimited), _) | (_, Some(RateLimitRestriction::Unlimited)) => {
+            Some(RateLimitRestriction::Unlimited)
+        }
+        (Some(RateLimitRestriction::Limited(left)), Some(RateLimitRestriction::Limited(right))) => {
+            Some(RateLimitRestriction::Limited(left.max(right)))
+        }
+    }
+}
+
+fn rate_limit_policy_value(policy: Option<RateLimitRestriction>) -> Option<i32> {
+    match policy {
+        None => None,
+        Some(RateLimitRestriction::Unlimited) => Some(0),
+        Some(RateLimitRestriction::Limited(value)) => Some(value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use aether_data::repository::auth::{
+        InMemoryAuthApiKeySnapshotRepository, StoredAuthApiKeyExportRecord,
+        StoredAuthApiKeySnapshot,
+    };
+    use aether_data::repository::users::{
+        InMemoryUserReadRepository, StoredUserAuthRecord, StoredUserGroup, UpsertUserGroupRecord,
+        UserReadRepository,
+    };
+    use aether_data::repository::wallet::{
+        InMemoryWalletRepository, WalletLookupKey, WalletReadRepository,
+    };
+
+    use crate::data::GatewayDataState;
+
+    fn sample_snapshot(api_key_id: &str, user_id: &str) -> StoredAuthApiKeySnapshot {
+        sample_snapshot_with_role(api_key_id, user_id, "user")
+    }
+
+    #[test]
+    fn auth_user_wallet_owner_contract_rejects_cross_owner_rows() {
+        let user_wallet = StoredWalletSnapshot::new(
+            "user-wallet".to_string(),
+            Some("user-1".to_string()),
+            None,
+            0.0,
+            0.0,
+            "finite".to_string(),
+            "USD".to_string(),
+            "active".to_string(),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1,
+        )
+        .expect("wallet should build");
+        let api_key_wallet = StoredWalletSnapshot::new(
+            "api-key-wallet".to_string(),
+            None,
+            Some("key-1".to_string()),
+            0.0,
+            0.0,
+            "finite".to_string(),
+            "USD".to_string(),
+            "active".to_string(),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1,
+        )
+        .expect("wallet should build");
+        let other_user_wallet = StoredWalletSnapshot::new(
+            "other-user-wallet".to_string(),
+            Some("user-2".to_string()),
+            None,
+            0.0,
+            0.0,
+            "finite".to_string(),
+            "USD".to_string(),
+            "active".to_string(),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1,
+        )
+        .expect("wallet should build");
+
+        assert!(auth_user_wallet_matches(&user_wallet, "user-1"));
+        assert!(!auth_user_wallet_matches(&user_wallet, "user-2"));
+        assert!(!auth_user_wallet_matches(&api_key_wallet, "user-1"));
+        assert!(!auth_user_wallet_matches(&other_user_wallet, "user-1"));
+    }
+
+    #[tokio::test]
+    async fn provisioning_rollback_removes_initial_wallet_before_user() {
+        let now = chrono::Utc::now();
+        let user = StoredUserAuthRecord::new(
+            "provisional-user".to_string(),
+            Some("provisional@example.com".to_string()),
+            true,
+            "provisional".to_string(),
+            Some("$2b$12$4qL4tdcsFwVaDTw5Ck3xzu8GpNdre56DiNR6Dnw7t6gCXaEnqAe7G".to_string()),
+            "user".to_string(),
+            "local".to_string(),
+            None,
+            None,
+            None,
+            true,
+            false,
+            Some(now),
+            None,
+        )
+        .expect("user should build");
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users([user]));
+        let wallet_repository = Arc::new(InMemoryWalletRepository::default());
+        let wallet = wallet_repository
+            .initialize_auth_user_wallet("provisional-user", 10.0, false)
+            .await
+            .expect("wallet should initialize")
+            .expect("wallet should exist");
+        let state = GatewayDataState::with_user_and_wallet_for_tests(
+            user_repository.clone(),
+            wallet_repository.clone(),
+        );
+
+        assert!(state
+            .rollback_provisional_auth_user_with_wallet(
+                "provisional-user",
+                Some(wallet.id.as_str()),
+            )
+            .await
+            .expect("rollback should succeed"));
+        assert!(user_repository
+            .find_user_auth_by_id("provisional-user")
+            .await
+            .expect("user lookup should succeed")
+            .is_none());
+        assert!(wallet_repository
+            .find(WalletLookupKey::UserId("provisional-user"))
+            .await
+            .expect("wallet lookup should succeed")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn provisioning_rollback_preserves_user_when_wallet_has_financial_activity() {
+        let now = chrono::Utc::now();
+        let user = StoredUserAuthRecord::new(
+            "active-user".to_string(),
+            Some("active@example.com".to_string()),
+            true,
+            "active-user".to_string(),
+            Some("$2b$12$4qL4tdcsFwVaDTw5Ck3xzu8GpNdre56DiNR6Dnw7t6gCXaEnqAe7G".to_string()),
+            "user".to_string(),
+            "local".to_string(),
+            None,
+            None,
+            None,
+            true,
+            false,
+            Some(now),
+            None,
+        )
+        .expect("user should build");
+        let wallet = StoredWalletSnapshot::new(
+            "active-wallet".to_string(),
+            Some("active-user".to_string()),
+            None,
+            1.0,
+            0.0,
+            "finite".to_string(),
+            "USD".to_string(),
+            "active".to_string(),
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            now.timestamp(),
+        )
+        .expect("wallet should build");
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users([user]));
+        let wallet_repository = Arc::new(InMemoryWalletRepository::seed([wallet]));
+        let state = GatewayDataState::with_user_and_wallet_for_tests(
+            user_repository.clone(),
+            wallet_repository.clone(),
+        );
+
+        let error = state
+            .rollback_provisional_auth_user_with_wallet("active-user", Some("active-wallet"))
+            .await
+            .expect_err("financial activity must block provisioning rollback");
+        assert!(matches!(error, DataLayerError::UnexpectedValue(_)));
+        assert!(user_repository
+            .find_user_auth_by_id("active-user")
+            .await
+            .expect("user lookup should succeed")
+            .is_some());
+        assert!(wallet_repository
+            .find(WalletLookupKey::UserId("active-user"))
+            .await
+            .expect("wallet lookup should succeed")
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn provisioning_rollback_removes_user_when_wallet_is_confirmed_absent() {
+        let now = chrono::Utc::now();
+        let user = StoredUserAuthRecord::new(
+            "no-wallet-user".to_string(),
+            Some("no-wallet@example.com".to_string()),
+            true,
+            "no-wallet-user".to_string(),
+            Some("$2b$12$4qL4tdcsFwVaDTw5Ck3xzu8GpNdre56DiNR6Dnw7t6gCXaEnqAe7G".to_string()),
+            "user".to_string(),
+            "local".to_string(),
+            None,
+            None,
+            None,
+            true,
+            false,
+            Some(now),
+            None,
+        )
+        .expect("user should build");
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users([user]));
+        let wallet_repository = Arc::new(InMemoryWalletRepository::default());
+        let state = GatewayDataState::with_user_and_wallet_for_tests(
+            user_repository.clone(),
+            wallet_repository,
+        );
+
+        assert!(state
+            .rollback_provisional_auth_user("no-wallet-user")
+            .await
+            .expect("confirmed wallet absence should allow rollback"));
+        assert!(user_repository
+            .find_user_auth_by_id("no-wallet-user")
+            .await
+            .expect("user lookup should succeed")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn provisioning_rollback_preserves_user_when_api_key_wallet_exists() {
+        let now = chrono::Utc::now();
+        let user = StoredUserAuthRecord::new(
+            "api-key-wallet-user".to_string(),
+            Some("api-key-wallet@example.com".to_string()),
+            true,
+            "api-key-wallet-user".to_string(),
+            Some("$2b$12$4qL4tdcsFwVaDTw5Ck3xzu8GpNdre56DiNR6Dnw7t6gCXaEnqAe7G".to_string()),
+            "user".to_string(),
+            "local".to_string(),
+            None,
+            None,
+            None,
+            true,
+            false,
+            Some(now),
+            None,
+        )
+        .expect("user should build");
+        let api_key_wallet = StoredWalletSnapshot::new(
+            "api-key-wallet-row".to_string(),
+            None,
+            Some("api-key-wallet-id".to_string()),
+            0.0,
+            0.0,
+            "finite".to_string(),
+            "USD".to_string(),
+            "active".to_string(),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            now.timestamp(),
+        )
+        .expect("wallet should build");
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users([user]));
+        let wallet_repository = Arc::new(InMemoryWalletRepository::seed([api_key_wallet]));
+        let state = GatewayDataState::with_user_and_wallet_for_tests(
+            user_repository.clone(),
+            wallet_repository.clone(),
+        );
+
+        let error = state
+            .rollback_provisional_auth_user_with_wallet("api-key-wallet-user", None)
+            .await
+            .expect_err("an API-key wallet must block user rollback");
+        assert!(matches!(error, DataLayerError::UnexpectedValue(_)));
+        assert!(user_repository
+            .find_user_auth_by_id("api-key-wallet-user")
+            .await
+            .expect("user lookup should succeed")
+            .is_some());
+        assert!(wallet_repository
+            .find(WalletLookupKey::ApiKeyId("api-key-wallet-id"))
+            .await
+            .expect("wallet lookup should succeed")
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn provisioning_rollback_rejects_a_wallet_id_owned_by_another_user() {
+        let now = chrono::Utc::now();
+        let target_user = StoredUserAuthRecord::new(
+            "target-user".to_string(),
+            Some("target@example.com".to_string()),
+            true,
+            "target-user".to_string(),
+            Some("$2b$12$4qL4tdcsFwVaDTw5Ck3xzu8GpNdre56DiNR6Dnw7t6gCXaEnqAe7G".to_string()),
+            "user".to_string(),
+            "local".to_string(),
+            None,
+            None,
+            None,
+            true,
+            false,
+            Some(now),
+            None,
+        )
+        .expect("target user should build");
+        let other_user_wallet = StoredWalletSnapshot::new(
+            "other-user-wallet".to_string(),
+            Some("other-user".to_string()),
+            None,
+            0.0,
+            0.0,
+            "finite".to_string(),
+            "USD".to_string(),
+            "active".to_string(),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            now.timestamp(),
+        )
+        .expect("wallet should build");
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users([target_user]));
+        let wallet_repository = Arc::new(InMemoryWalletRepository::seed([other_user_wallet]));
+        let state = GatewayDataState::with_user_and_wallet_for_tests(
+            user_repository.clone(),
+            wallet_repository.clone(),
+        );
+
+        let error = state
+            .rollback_provisional_auth_user_with_wallet("target-user", Some("other-user-wallet"))
+            .await
+            .expect_err("a live supplied wallet id must block user deletion");
+        assert!(matches!(error, DataLayerError::UnexpectedValue(_)));
+        assert!(user_repository
+            .find_user_auth_by_id("target-user")
+            .await
+            .expect("user lookup should succeed")
+            .is_some());
+        assert!(wallet_repository
+            .find(WalletLookupKey::WalletId("other-user-wallet"))
+            .await
+            .expect("wallet lookup should succeed")
+            .is_some());
+    }
+
+    fn sample_snapshot_with_role(
+        api_key_id: &str,
+        user_id: &str,
+        role: &str,
+    ) -> StoredAuthApiKeySnapshot {
+        StoredAuthApiKeySnapshot::new(
+            user_id.to_string(),
+            "alice".to_string(),
+            Some("alice@example.com".to_string()),
+            role.to_string(),
+            "local".to_string(),
+            true,
+            false,
+            Some(serde_json::json!(["openai"])),
+            Some(serde_json::json!(["openai:chat"])),
+            Some(serde_json::json!(["gpt-5"])),
+            api_key_id.to_string(),
+            Some("default".to_string()),
+            true,
+            false,
+            false,
+            Some(60),
+            Some(5),
+            Some(200),
+            Some(serde_json::json!(["openai"])),
+            Some(serde_json::json!(["openai:chat"])),
+            Some(serde_json::json!(["gpt-5"])),
+        )
+        .expect("snapshot should build")
+    }
+
+    fn sample_auth_user(user_id: &str, role: &str) -> StoredUserAuthRecord {
+        StoredUserAuthRecord::new(
+            user_id.to_string(),
+            Some("alice@example.com".to_string()),
+            true,
+            "alice".to_string(),
+            Some("hash".to_string()),
+            role.to_string(),
+            "local".to_string(),
+            Some(serde_json::json!(["openai"])),
+            Some(serde_json::json!(["openai:chat"])),
+            Some(serde_json::json!(["gpt-5"])),
+            true,
+            false,
+            None,
+            None,
+        )
+        .expect("auth user should build")
+    }
+
+    fn sample_group(
+        id: &str,
+        priority: i32,
+        allowed_models: Option<Vec<&str>>,
+        allowed_models_mode: &str,
+        rate_limit: Option<i32>,
+        rate_limit_mode: &str,
+    ) -> StoredUserGroup {
+        StoredUserGroup {
+            id: id.to_string(),
+            name: id.to_string(),
+            normalized_name: id.to_string(),
+            description: None,
+            priority,
+            allowed_providers: None,
+            allowed_providers_mode: "unrestricted".to_string(),
+            allowed_api_formats: None,
+            allowed_api_formats_mode: "unrestricted".to_string(),
+            allowed_models: allowed_models.map(|values| {
+                values
+                    .into_iter()
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            }),
+            allowed_models_mode: allowed_models_mode.to_string(),
+            rate_limit,
+            rate_limit_mode: rate_limit_mode.to_string(),
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn list_policy_intersects_unrestricted_group_union_with_user_restriction() {
+        let groups = vec![
+            sample_group("default", 0, None, "unrestricted", None, "system"),
+            sample_group(
+                "restricted",
+                10,
+                Some(vec!["gpt-5", "gpt-4.1"]),
+                "specific",
+                None,
+                "system",
+            ),
+        ];
+
+        let policy = resolve_effective_list_policy(
+            Some(vec!["gpt-4.1".to_string(), "gemini-2.5-pro".to_string()]),
+            "specific",
+            &groups,
+            |group| (&group.allowed_models_mode, group.allowed_models.clone()),
+        );
+
+        assert_eq!(
+            policy,
+            Some(vec!["gpt-4.1".to_string(), "gemini-2.5-pro".to_string()])
+        );
+    }
+
+    #[test]
+    fn api_format_policy_intersection_preserves_search_companion_scope() {
+        let mut responses_group =
+            sample_group("responses", 10, None, "unrestricted", None, "system");
+        responses_group.allowed_api_formats = Some(vec!["openai:responses".to_string()]);
+        responses_group.allowed_api_formats_mode = "specific".to_string();
+
+        let search_policy = resolve_effective_api_format_policy(
+            Some(vec!["openai:search".to_string()]),
+            "specific",
+            std::slice::from_ref(&responses_group),
+            |group| {
+                (
+                    &group.allowed_api_formats_mode,
+                    group.allowed_api_formats.clone(),
+                )
+            },
+        );
+        assert_eq!(search_policy, Some(vec!["openai:search".to_string()]));
+
+        responses_group.allowed_api_formats = Some(vec!["openai:search".to_string()]);
+        let responses_policy = resolve_effective_api_format_policy(
+            Some(vec!["openai:responses".to_string()]),
+            "specific",
+            &[responses_group],
+            |group| {
+                (
+                    &group.allowed_api_formats_mode,
+                    group.allowed_api_formats.clone(),
+                )
+            },
+        );
+        assert_eq!(responses_policy, Some(vec!["openai:search".to_string()]));
+    }
+
+    #[test]
+    fn list_policy_unions_multiple_group_restrictions_legacy_case() {
+        let groups = vec![
+            sample_group(
+                "team-a",
+                10,
+                Some(vec!["gpt-5", "gpt-4.1"]),
+                "specific",
+                None,
+                "system",
+            ),
+            sample_group(
+                "team-b",
+                20,
+                Some(vec!["gpt-4.1", "gemini-2.5-pro"]),
+                "specific",
+                None,
+                "system",
+            ),
+        ];
+
+        let policy = resolve_effective_list_policy(None, "unrestricted", &groups, |group| {
+            (&group.allowed_models_mode, group.allowed_models.clone())
+        });
+
+        assert_eq!(
+            policy,
+            Some(vec![
+                "gemini-2.5-pro".to_string(),
+                "gpt-4.1".to_string(),
+                "gpt-5".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn list_policy_unions_multiple_group_restrictions() {
+        let groups = vec![
+            sample_group(
+                "team-a",
+                10,
+                Some(vec!["gpt-5", "gpt-4.1"]),
+                "specific",
+                None,
+                "system",
+            ),
+            sample_group(
+                "team-b",
+                20,
+                Some(vec!["gpt-4.1", "gemini-2.5-pro"]),
+                "specific",
+                None,
+                "system",
+            ),
+        ];
+
+        let policy = resolve_effective_list_policy(None, "unrestricted", &groups, |group| {
+            (&group.allowed_models_mode, group.allowed_models.clone())
+        });
+
+        assert_eq!(
+            policy,
+            Some(vec![
+                "gemini-2.5-pro".to_string(),
+                "gpt-4.1".to_string(),
+                "gpt-5".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn unrestricted_group_makes_group_policy_unrestricted() {
+        let groups = vec![
+            sample_group(
+                "restricted",
+                10,
+                Some(vec!["gpt-5"]),
+                "specific",
+                None,
+                "system",
+            ),
+            sample_group("unrestricted", 20, None, "unrestricted", None, "system"),
+        ];
+
+        let policy = resolve_effective_list_policy(None, "unrestricted", &groups, |group| {
+            (&group.allowed_models_mode, group.allowed_models.clone())
+        });
+
+        assert_eq!(policy, None);
+    }
+
+    #[test]
+    fn deny_all_group_does_not_remove_other_group_grants() {
+        let groups = vec![
+            sample_group("deny", 10, None, "deny_all", None, "system"),
+            sample_group(
+                "restricted",
+                20,
+                Some(vec!["gpt-5"]),
+                "specific",
+                None,
+                "system",
+            ),
+        ];
+
+        let policy = resolve_effective_list_policy(None, "unrestricted", &groups, |group| {
+            (&group.allowed_models_mode, group.allowed_models.clone())
+        });
+
+        assert_eq!(policy, Some(vec!["gpt-5".to_string()]));
+    }
+
+    #[test]
+    fn user_unrestricted_does_not_bypass_group_restrictions() {
+        let groups = vec![sample_group(
+            "restricted",
+            10,
+            Some(vec!["gpt-5"]),
+            "specific",
+            None,
+            "system",
+        )];
+
+        let policy = resolve_effective_list_policy(None, "unrestricted", &groups, |group| {
+            (&group.allowed_models_mode, group.allowed_models.clone())
+        });
+
+        assert_eq!(policy, Some(vec!["gpt-5".to_string()]));
+    }
+
+    #[test]
+    fn rate_limit_policy_uses_highest_group_limit_before_user_restriction() {
+        let groups = vec![
+            sample_group("default", 10, None, "unrestricted", Some(30), "custom"),
+            sample_group("tier-1", 20, None, "unrestricted", Some(100), "custom"),
+        ];
+
+        assert_eq!(
+            resolve_effective_rate_limit_policy(Some(120), "custom", &groups),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn rate_limit_unlimited_group_overrides_limited_groups() {
+        let groups = vec![
+            sample_group("default", 10, None, "unrestricted", Some(30), "custom"),
+            sample_group("tier-2", 20, None, "unrestricted", Some(0), "custom"),
+        ];
+
+        assert_eq!(
+            resolve_effective_rate_limit_policy(None, "system", &groups),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn rate_limit_user_policy_still_restricts_group_grants() {
+        let groups = vec![sample_group(
+            "tier-1",
+            10,
+            None,
+            "unrestricted",
+            Some(100),
+            "custom",
+        )];
+
+        assert_eq!(
+            resolve_effective_rate_limit_policy(Some(60), "custom", &groups),
+            Some(60)
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_non_standalone_snapshot_applies_group_and_key_policies() {
+        let mut snapshot = sample_snapshot_with_role("key-admin", "admin-1", "admin")
+            .with_user_rate_limit(Some(120));
+        snapshot.api_key_allowed_providers = Some(vec!["anthropic".to_string()]);
+        snapshot.api_key_allowed_api_formats = Some(vec!["anthropic:messages".to_string()]);
+        snapshot.api_key_allowed_models = Some(vec!["claude-sonnet-4-5".to_string()]);
+        snapshot.api_key_rate_limit = Some(5);
+        snapshot.api_key_concurrent_limit = Some(1);
+
+        let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-admin".to_string()),
+            snapshot,
+        )]));
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![
+            sample_auth_user("admin-1", "admin"),
+        ]));
+        let group = user_repository
+            .create_user_group(UpsertUserGroupRecord {
+                name: "Restricted".to_string(),
+                description: None,
+                priority: 10,
+                allowed_providers: Some(vec!["openai".to_string()]),
+                allowed_providers_mode: "specific".to_string(),
+                allowed_api_formats: Some(vec!["openai:chat".to_string()]),
+                allowed_api_formats_mode: "specific".to_string(),
+                allowed_models: Some(vec!["gpt-4.1".to_string()]),
+                allowed_models_mode: "specific".to_string(),
+                rate_limit: Some(1),
+                rate_limit_mode: "custom".to_string(),
+            })
+            .await
+            .expect("group should create")
+            .expect("group should exist");
+        user_repository
+            .add_user_to_group(&group.id, "admin-1")
+            .await
+            .expect("group membership should create");
+
+        let state = GatewayDataState::with_auth_api_key_reader_for_tests(auth_repository)
+            .with_user_reader(user_repository);
+        let resolved = state
+            .read_auth_api_key_snapshot_by_key_hash("hash-admin", 100)
+            .await
+            .expect("snapshot should resolve")
+            .expect("snapshot should exist");
+
+        assert_eq!(resolved.user_role, "admin");
+        assert_eq!(resolved.effective_allowed_providers(), Some(&[][..]));
+        assert_eq!(resolved.effective_allowed_api_formats(), Some(&[][..]));
+        assert_eq!(resolved.effective_allowed_models(), Some(&[][..]));
+        assert_eq!(resolved.user_rate_limit, Some(1));
+        assert_eq!(resolved.api_key_rate_limit, Some(5));
+        assert_eq!(resolved.api_key_concurrent_limit, Some(1));
+    }
+
+    #[tokio::test]
+    async fn current_admin_role_refreshes_without_bypassing_key_policies() {
+        let mut snapshot = sample_snapshot("key-admin", "admin-1");
+        snapshot.api_key_allowed_providers = Some(vec!["anthropic".to_string()]);
+        snapshot.api_key_allowed_api_formats = Some(vec!["anthropic:messages".to_string()]);
+        snapshot.api_key_allowed_models = Some(vec!["claude-sonnet-4-5".to_string()]);
+
+        let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-admin".to_string()),
+            snapshot,
+        )]));
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![
+            sample_auth_user("admin-1", "admin"),
+        ]));
+        let state = GatewayDataState::with_auth_api_key_reader_for_tests(auth_repository)
+            .with_user_reader(user_repository);
+
+        let resolved = state
+            .read_auth_api_key_snapshot_by_key_hash("hash-admin", 100)
+            .await
+            .expect("snapshot should resolve")
+            .expect("snapshot should exist");
+
+        assert_eq!(resolved.user_role, "admin");
+        assert_eq!(
+            resolved.effective_allowed_providers(),
+            Some(&["anthropic".to_string()][..])
+        );
+        assert_eq!(
+            resolved.effective_allowed_api_formats(),
+            Some(&["anthropic:messages".to_string()][..])
+        );
+        assert_eq!(
+            resolved.effective_allowed_models(),
+            Some(&["claude-sonnet-4-5".to_string()][..])
+        );
+        assert_eq!(resolved.user_rate_limit, None);
+        assert_eq!(resolved.api_key_rate_limit, Some(60));
+        assert_eq!(resolved.api_key_concurrent_limit, Some(5));
+    }
+
+    #[tokio::test]
+    async fn current_user_role_replaces_stored_admin_role() {
+        let snapshot = sample_snapshot_with_role("key-user", "user-1", "admin");
+        let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-user".to_string()),
+            snapshot,
+        )]));
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![
+            sample_auth_user("user-1", "user"),
+        ]));
+        let state = GatewayDataState::with_auth_api_key_reader_for_tests(auth_repository)
+            .with_user_reader(user_repository);
+
+        let resolved = state
+            .read_auth_api_key_snapshot_by_key_hash("hash-user", 100)
+            .await
+            .expect("snapshot should resolve")
+            .expect("snapshot should exist");
+
+        assert_eq!(resolved.user_role, "user");
+    }
+
+    #[tokio::test]
+    async fn user_personal_policy_fields_are_ignored_when_groups_are_applied() {
+        let mut snapshot = sample_snapshot("key-user", "user-1").with_user_rate_limit(Some(200));
+        snapshot.api_key_allowed_providers = None;
+        snapshot.api_key_allowed_api_formats = None;
+        snapshot.api_key_allowed_models = None;
+
+        let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-user".to_string()),
+            snapshot,
+        )]));
+        let user = sample_auth_user("user-1", "user");
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![
+            user.clone()
+        ]));
+        let group = user_repository
+            .create_user_group(UpsertUserGroupRecord {
+                name: "Group Policy".to_string(),
+                description: None,
+                priority: 10,
+                allowed_providers: Some(vec!["anthropic".to_string()]),
+                allowed_providers_mode: "specific".to_string(),
+                allowed_api_formats: Some(vec!["claude:messages".to_string()]),
+                allowed_api_formats_mode: "specific".to_string(),
+                allowed_models: Some(vec!["claude-sonnet-4-5".to_string()]),
+                allowed_models_mode: "specific".to_string(),
+                rate_limit: Some(30),
+                rate_limit_mode: "custom".to_string(),
+            })
+            .await
+            .expect("group should create")
+            .expect("group should exist");
+        user_repository
+            .add_user_to_group(&group.id, "user-1")
+            .await
+            .expect("group membership should create");
+
+        let state = GatewayDataState::with_auth_api_key_reader_for_tests(auth_repository)
+            .with_user_reader(user_repository);
+        let resolved = state
+            .read_auth_api_key_snapshot_by_key_hash("hash-user", 100)
+            .await
+            .expect("snapshot should resolve")
+            .expect("snapshot should exist");
+
+        assert_eq!(
+            resolved.effective_allowed_providers(),
+            Some(&["anthropic".to_string()][..])
+        );
+        assert_eq!(
+            resolved.effective_allowed_api_formats(),
+            Some(&["claude:messages".to_string()][..])
+        );
+        assert_eq!(
+            resolved.effective_allowed_models(),
+            Some(&["claude-sonnet-4-5".to_string()][..])
+        );
+        assert_eq!(resolved.user_rate_limit, Some(30));
+
+        let catalog_policies = state
+            .resolve_user_effective_list_policies(&user)
+            .await
+            .expect("catalog policies should resolve");
+        assert_eq!(
+            catalog_policies.allowed_providers.as_deref(),
+            resolved.effective_allowed_providers()
+        );
+        assert_eq!(
+            catalog_policies.allowed_api_formats.as_deref(),
+            resolved.effective_allowed_api_formats()
+        );
+        assert_eq!(
+            catalog_policies.allowed_models.as_deref(),
+            resolved.effective_allowed_models()
+        );
+    }
+
+    #[tokio::test]
+    async fn group_responses_permission_and_key_search_scope_resolve_to_search() {
+        let mut snapshot = sample_snapshot("key-search", "user-search");
+        snapshot.api_key_allowed_api_formats = Some(vec!["openai:search".to_string()]);
+        let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-search".to_string()),
+            snapshot,
+        )]));
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![
+            sample_auth_user("user-search", "user"),
+        ]));
+        let group = user_repository
+            .create_user_group(UpsertUserGroupRecord {
+                name: "Responses".to_string(),
+                description: None,
+                priority: 10,
+                allowed_providers: None,
+                allowed_providers_mode: "unrestricted".to_string(),
+                allowed_api_formats: Some(vec!["openai:responses".to_string()]),
+                allowed_api_formats_mode: "specific".to_string(),
+                allowed_models: None,
+                allowed_models_mode: "unrestricted".to_string(),
+                rate_limit: None,
+                rate_limit_mode: "system".to_string(),
+            })
+            .await
+            .expect("group should create")
+            .expect("group should exist");
+        user_repository
+            .add_user_to_group(&group.id, "user-search")
+            .await
+            .expect("group membership should create");
+
+        let state = GatewayDataState::with_auth_api_key_reader_for_tests(auth_repository)
+            .with_user_reader(user_repository);
+        let resolved = state
+            .read_auth_api_key_snapshot_by_key_hash("hash-search", 100)
+            .await
+            .expect("snapshot should resolve")
+            .expect("snapshot should exist");
+
+        assert_eq!(
+            resolved.effective_allowed_api_formats(),
+            Some(&["openai:search".to_string()][..])
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_without_user_reader_uses_stored_policy_intersection() {
+        let mut snapshot = sample_snapshot("key-search", "user-search");
+        snapshot.api_key_allowed_api_formats = Some(vec!["openai:search".to_string()]);
+        let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-search".to_string()),
+            snapshot,
+        )]));
+        let state = GatewayDataState::with_auth_api_key_reader_for_tests(auth_repository);
+
+        let resolved = state
+            .read_auth_api_key_snapshot_by_key_hash("hash-search", 100)
+            .await
+            .expect("snapshot should resolve")
+            .expect("snapshot should exist");
+
+        assert_eq!(resolved.effective_allowed_api_formats(), Some(&[][..]));
+    }
+
+    #[tokio::test]
+    async fn missing_current_user_uses_stored_policy_intersection() {
+        let mut snapshot = sample_snapshot("key-search", "missing-user");
+        snapshot.api_key_allowed_api_formats = Some(vec!["openai:search".to_string()]);
+        let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-search".to_string()),
+            snapshot,
+        )]));
+        let user_repository = Arc::new(InMemoryUserReadRepository::default());
+        let state = GatewayDataState::with_auth_api_key_reader_for_tests(auth_repository)
+            .with_user_reader(user_repository);
+
+        let resolved = state
+            .read_auth_api_key_snapshot_by_key_hash("hash-search", 100)
+            .await
+            .expect("snapshot should resolve")
+            .expect("snapshot should exist");
+
+        assert_eq!(resolved.effective_allowed_api_formats(), Some(&[][..]));
+    }
+
+    #[tokio::test]
+    async fn data_state_lists_auth_api_key_export_records() {
+        let repository = Arc::new(
+            InMemoryAuthApiKeySnapshotRepository::seed(vec![
+                (
+                    Some("hash-user".to_string()),
+                    sample_snapshot("key-user", "user-1"),
+                ),
+                (
+                    Some("hash-standalone".to_string()),
+                    sample_snapshot("key-standalone", "admin-1"),
+                ),
+            ])
+            .with_export_records(vec![
+                StoredAuthApiKeyExportRecord::new(
+                    "user-1".to_string(),
+                    "key-user".to_string(),
+                    "hash-user".to_string(),
+                    Some("enc-user".to_string()),
+                    Some("default".to_string()),
+                    None,
+                    None,
+                    Some(serde_json::json!(["gpt-5"])),
+                    Some(60),
+                    Some(5),
+                    Some(serde_json::json!({"cache_1h": true})),
+                    true,
+                    Some(200),
+                    false,
+                    9,
+                    0,
+                    1.75,
+                    false,
+                )
+                .expect("user export record should build"),
+                StoredAuthApiKeyExportRecord::new(
+                    "admin-1".to_string(),
+                    "key-standalone".to_string(),
+                    "hash-standalone".to_string(),
+                    Some("enc-standalone".to_string()),
+                    Some("standalone".to_string()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(1),
+                    None,
+                    true,
+                    None,
+                    true,
+                    2,
+                    0,
+                    0.5,
+                    true,
+                )
+                .expect("standalone export record should build"),
+            ]),
+        );
+
+        let state = GatewayDataState::with_auth_api_key_reader_for_tests(repository);
+
+        let user_records = state
+            .list_auth_api_key_export_records_by_user_ids(&["user-1".to_string()])
+            .await
+            .expect("user export records should load");
+        assert_eq!(user_records.len(), 1);
+        assert_eq!(user_records[0].api_key_id, "key-user");
+        assert_eq!(user_records[0].total_requests, 9);
+
+        let selected_records = state
+            .list_auth_api_key_export_records_by_ids(&[
+                "key-standalone".to_string(),
+                "missing".to_string(),
+                "key-user".to_string(),
+            ])
+            .await
+            .expect("selected export records should load");
+        assert_eq!(selected_records.len(), 2);
+        assert_eq!(selected_records[0].api_key_id, "key-standalone");
+        assert_eq!(selected_records[1].api_key_id, "key-user");
+
+        let paged_records = state
+            .list_auth_api_key_export_standalone_records_page(
+                &aether_data::repository::auth::StandaloneApiKeyExportListQuery {
+                    skip: 0,
+                    limit: 10,
+                    is_active: Some(true),
+                },
+            )
+            .await
+            .expect("paged standalone export records should load");
+        assert_eq!(paged_records.len(), 1);
+        assert_eq!(paged_records[0].api_key_id, "key-standalone");
+        assert_eq!(
+            state
+                .count_auth_api_key_export_standalone_records(Some(true))
+                .await
+                .expect("standalone export count should load"),
+            1
+        );
+
+        let standalone_records = state
+            .list_auth_api_key_export_standalone_records()
+            .await
+            .expect("standalone export records should load");
+        assert_eq!(standalone_records.len(), 1);
+        assert_eq!(standalone_records[0].api_key_id, "key-standalone");
+        assert!(standalone_records[0].is_standalone);
+    }
+}

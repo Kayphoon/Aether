@@ -1,3 +1,6 @@
+import { formatCompactNumber } from '@/utils/format'
+import { getI18nLocale } from '@/i18n'
+
 export function walletStatusLabel(status: string | null | undefined): string {
   const labels: Record<string, string> = {
     active: '正常',
@@ -5,6 +8,14 @@ export function walletStatusLabel(status: string | null | undefined): string {
     closed: '已关闭',
   }
   if (!status) return '未知'
+  if (getI18nLocale() === 'en-US') {
+    const englishLabels: Record<string, string> = {
+      active: 'Active',
+      suspended: 'Frozen',
+      closed: 'Closed',
+    }
+    return englishLabels[status] || status
+  }
   return labels[status] || status
 }
 
@@ -17,7 +28,7 @@ export function formatWalletCurrency(
   return `$${amount.toFixed(decimals)}`
 }
 
-export function walletStatusBadge(status: string | null | undefined): string {
+export function walletStatusBadge(status: string | null | undefined) {
   if (status === 'active') return 'success'
   if (status === 'suspended') return 'warning'
   if (status === 'closed') return 'destructive'
@@ -32,22 +43,27 @@ export function walletTransactionCategoryLabel(category: string | null | undefin
     refund: '退款',
   }
   if (!category) return '未知'
+  if (getI18nLocale() === 'en-US') {
+    const englishLabels: Record<string, string> = {
+      recharge: 'Top-up',
+      gift: 'Grant',
+      adjust: 'Adjustment',
+      refund: 'Refund',
+    }
+    return englishLabels[category] || category
+  }
   return labels[category] || category
 }
 
 export function dailyUsageCategoryLabel(isToday = false): string {
+  if (getI18nLocale() === 'en-US') return isToday ? 'Today usage' : 'Daily usage'
   return isToday ? '今日消费' : '每日消费'
 }
 
 export function formatTokenCount(value: number | null | undefined): string {
   const amount = Number(value ?? 0)
-  if (amount >= 1_000_000) {
-    return `${(amount / 1_000_000).toFixed(amount >= 10_000_000 ? 0 : 1)}M`
-  }
-  if (amount >= 1_000) {
-    return `${(amount / 1_000).toFixed(amount >= 10_000 ? 0 : 1)}K`
-  }
-  return `${Math.round(amount)}`
+  if (!Number.isFinite(amount) || amount <= 0) return '0'
+  return formatCompactNumber(Math.round(amount), { fractionDigits: 1 })
 }
 
 export function walletTransactionReasonLabel(reasonCode: string | null | undefined): string {
@@ -64,6 +80,21 @@ export function walletTransactionReasonLabel(reasonCode: string | null | undefin
     refund_revert: '退款回补',
   }
   if (!reasonCode) return '未知'
+  if (getI18nLocale() === 'en-US') {
+    const englishLabels: Record<string, string> = {
+      topup_admin_manual: 'Manual top-up',
+      topup_gateway: 'Payment top-up',
+      topup_card_code: 'Card code top-up',
+      gift_initial: 'Initial grant',
+      gift_campaign: 'Campaign grant',
+      gift_expire_reclaim: 'Grant reclaim',
+      adjust_admin: 'Manual adjustment',
+      adjust_system: 'System adjustment',
+      refund_out: 'Refund deduction',
+      refund_revert: 'Refund reversal',
+    }
+    return englishLabels[reasonCode] || reasonCode
+  }
   return labels[reasonCode] || reasonCode
 }
 
@@ -71,6 +102,12 @@ export function paymentMethodLabel(method: string | null | undefined): string {
   const labels: Record<string, string> = {
     alipay: '支付宝',
     wechat: '微信支付',
+    wxpay: '微信支付',
+    wechat_pay: '微信支付',
+    epay: '易支付',
+    stripe: 'Stripe',
+    card: '银行卡/信用卡',
+    link: 'Stripe Link',
     admin_manual: '人工充值',
     card_code: '充值卡',
     gift_code: '礼品卡',
@@ -79,6 +116,25 @@ export function paymentMethodLabel(method: string | null | undefined): string {
     offline: '线下转账',
   }
   if (!method) return '-'
+  if (getI18nLocale() === 'en-US') {
+    const englishLabels: Record<string, string> = {
+      alipay: 'Alipay',
+      wechat: 'WeChat Pay',
+      wxpay: 'WeChat Pay',
+      wechat_pay: 'WeChat Pay',
+      epay: 'E-Pay',
+      stripe: 'Stripe',
+      card: 'Bank card / credit card',
+      link: 'Stripe Link',
+      admin_manual: 'Manual top-up',
+      card_code: 'Top-up code',
+      gift_code: 'Gift code',
+      card_recharge: 'Card code top-up',
+      bank_transfer: 'Bank transfer',
+      offline: 'Offline transfer',
+    }
+    return englishLabels[method] || method
+  }
   return labels[method] || method
 }
 
@@ -93,6 +149,18 @@ export function paymentStatusLabel(status: string | null | undefined): string {
     refunded: '已退款',
   }
   if (!status) return '未知'
+  if (getI18nLocale() === 'en-US') {
+    const englishLabels: Record<string, string> = {
+      pending: 'Pending',
+      paid: 'Paid',
+      credited: 'Credited',
+      failed: 'Failed',
+      expired: 'Expired',
+      refunding: 'Refunding',
+      refunded: 'Refunded',
+    }
+    return englishLabels[status] || status
+  }
   return labels[status] || status
 }
 
@@ -106,10 +174,21 @@ export function walletLinkTypeLabel(type: string | null | undefined): string {
     usage: '用量记录',
   }
   if (!type) return '-'
+  if (getI18nLocale() === 'en-US') {
+    const englishLabels: Record<string, string> = {
+      payment_order: 'Top-up order',
+      refund_request: 'Refund request',
+      admin_action: 'Admin action',
+      system_task: 'System task',
+      campaign: 'Campaign batch',
+      usage: 'Usage record',
+    }
+    return englishLabels[type] || 'Other'
+  }
   return labels[type] || '其他'
 }
 
-export function paymentStatusBadge(status: string | null | undefined): string {
+export function paymentStatusBadge(status: string | null | undefined) {
   if (status === 'credited' || status === 'refunded') return 'success'
   if (status === 'paid' || status === 'refunding') return 'outline'
   if (status === 'pending') return 'secondary'
@@ -124,6 +203,13 @@ export function refundModeLabel(mode: string | null | undefined): string {
     offline_payout: '线下打款',
   }
   if (!mode) return '-'
+  if (getI18nLocale() === 'en-US') {
+    const englishLabels: Record<string, string> = {
+      original_channel: 'Original channel',
+      offline_payout: 'Offline payout',
+    }
+    return englishLabels[mode] || mode
+  }
   return labels[mode] || mode
 }
 
@@ -137,10 +223,21 @@ export function refundStatusLabel(status: string | null | undefined): string {
     cancelled: '已取消',
   }
   if (!status) return '未知'
+  if (getI18nLocale() === 'en-US') {
+    const englishLabels: Record<string, string> = {
+      pending_approval: 'Pending approval',
+      approved: 'Approved',
+      processing: 'Processing',
+      succeeded: 'Succeeded',
+      failed: 'Failed',
+      cancelled: 'Cancelled',
+    }
+    return englishLabels[status] || status
+  }
   return labels[status] || status
 }
 
-export function refundStatusBadge(status: string | null | undefined): string {
+export function refundStatusBadge(status: string | null | undefined) {
   if (status === 'succeeded') return 'success'
   if (status === 'processing') return 'outline'
   if (status === 'pending_approval' || status === 'approved') return 'secondary'
@@ -157,10 +254,20 @@ export function callbackStatusLabel(status: string | null | undefined): string {
     error: '处理失败',
   }
   if (!status) return '未知'
+  if (getI18nLocale() === 'en-US') {
+    const englishLabels: Record<string, string> = {
+      processed: 'Processed',
+      duplicate: 'Duplicate callback',
+      ignored: 'Ignored',
+      invalid_signature: 'Invalid signature',
+      error: 'Failed',
+    }
+    return englishLabels[status] || status
+  }
   return labels[status] || status
 }
 
-export function callbackStatusBadge(status: string | null | undefined): string {
+export function callbackStatusBadge(status: string | null | undefined) {
   if (status === 'processed') return 'success'
   if (status === 'duplicate' || status === 'ignored') return 'secondary'
   if (status === 'invalid_signature' || status === 'error') return 'destructive'

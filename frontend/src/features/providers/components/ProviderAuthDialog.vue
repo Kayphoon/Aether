@@ -94,7 +94,7 @@
                 <div class="flex items-center gap-2">
                   <span class="text-xs text-muted-foreground">启用代理</span>
                   <Switch
-                    :model-value="formData[group.toggleKey] || false"
+                    :model-value="formData[group.toggleKey] === true"
                     @update:model-value="handleProxyToggle(group.toggleKey, $event)"
                   />
                 </div>
@@ -107,7 +107,7 @@
               >
                 <ProxyNodeSelect
                   ref="proxyNodeSelectRef"
-                  :model-value="formData.proxy_node_id || ''"
+                  :model-value="stringFieldValue('proxy_node_id')"
                   trigger-class="h-8"
                   @update:model-value="(v: string) => { formData.proxy_node_id = v; handleFieldChange('proxy_node_id', v) }"
                 />
@@ -146,7 +146,7 @@
                   <!-- 文本输入 -->
                   <Input
                     v-if="field.type === 'text'"
-                    v-model="formData[field.key]"
+                    :model-value="stringFieldValue(field.key)"
                     :placeholder="field.sensitive ? (sensitivePlaceholders[field.key] || field.placeholder) : field.placeholder"
                     :masked="field.sensitive"
                     disable-autofill
@@ -156,7 +156,7 @@
                   <!-- 密码/敏感输入 -->
                   <Input
                     v-else-if="field.type === 'password'"
-                    v-model="formData[field.key]"
+                    :model-value="stringFieldValue(field.key)"
                     :placeholder="sensitivePlaceholders[field.key] || field.placeholder"
                     masked
                     @update:model-value="handleFieldChange(field.key, $event)"
@@ -182,7 +182,7 @@
                   <!-- 文本输入 -->
                   <Input
                     v-if="field.type === 'text'"
-                    v-model="formData[field.key]"
+                    :model-value="stringFieldValue(field.key)"
                     :placeholder="field.sensitive ? (sensitivePlaceholders[field.key] || field.placeholder) : field.placeholder"
                     :masked="field.sensitive"
                     disable-autofill
@@ -192,7 +192,7 @@
                   <!-- 密码/敏感输入 -->
                   <Input
                     v-else-if="field.type === 'password'"
-                    v-model="formData[field.key]"
+                    :model-value="stringFieldValue(field.key)"
                     :placeholder="sensitivePlaceholders[field.key] || field.placeholder"
                     masked
                     @update:model-value="handleFieldChange(field.key, $event)"
@@ -201,7 +201,7 @@
                   <!-- 下拉选择 -->
                   <Select
                     v-else-if="field.type === 'select'"
-                    v-model="formData[field.key]"
+                    :model-value="stringFieldValue(field.key)"
                     @update:model-value="handleFieldChange(field.key, $event)"
                   >
                     <SelectTrigger>
@@ -221,7 +221,7 @@
                   <!-- 多行文本 -->
                   <Textarea
                     v-else-if="field.type === 'textarea'"
-                    v-model="formData[field.key]"
+                    :model-value="stringFieldValue(field.key)"
                     :placeholder="field.placeholder"
                     rows="3"
                     @update:model-value="handleFieldChange(field.key, $event)"
@@ -239,6 +239,47 @@
             </template>
           </template>
         </template>
+
+        <div class="rounded-lg border border-border bg-muted/20 px-4 py-3">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <Label class="text-sm font-medium">
+                额度提醒
+              </Label>
+              <p class="mt-1 text-xs text-muted-foreground">
+                余额低于阈值时通过通知服务发送提醒
+              </p>
+            </div>
+            <Switch v-model="quotaAlert.enabled" />
+          </div>
+
+          <div
+            v-if="quotaAlert.enabled"
+            class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3"
+          >
+            <div class="space-y-2">
+              <Label>提醒阈值</Label>
+              <Input
+                v-model.number="quotaAlert.threshold_amount"
+                type="number"
+                min="0"
+                step="0.0001"
+                placeholder="0"
+              />
+            </div>
+            <div class="space-y-2">
+              <Label>获取频率（秒）</Label>
+              <Input
+                v-model.number="quotaAlert.fetch_interval_seconds"
+                type="number"
+                min="30"
+                max="86400"
+                step="1"
+                placeholder="30"
+              />
+            </div>
+          </div>
+        </div>
       </div>
     </form>
 
@@ -305,6 +346,7 @@ import {
   getProviderOpsConfig,
   deleteProviderOpsConfig,
   type ArchitectureInfo,
+  type QuotaAlertConfig,
 } from '@/api/providerOps'
 import { parseApiError } from '@/utils/errorParser'
 import { useToast } from '@/composables/useToast'
@@ -375,6 +417,17 @@ const architecturesLoaded = ref(false)
 const selectedArchitectureId = ref('new_api')
 const selectedAuthType = ref('')
 const formData = ref<Record<string, unknown>>({})
+function stringFieldValue(key: string): string {
+  const value = formData.value[key]
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : ''
+}
+
+const quotaAlert = ref<QuotaAlertConfig>({
+  enabled: false,
+  threshold_amount: 0,
+  fetch_interval_seconds: 30,
+})
+const savedQuotaAlertSignature = ref(quotaAlertSignature(quotaAlert.value))
 
 // 当前架构支持的认证方式
 const currentAuthTypes = computed(() => {
@@ -391,11 +444,11 @@ const currentSchema = computed<CredentialsSchema | null>(() => {
   if (selectedAuthType.value && arch.supported_auth_types.length > 1) {
     const authType = arch.supported_auth_types.find((t) => t.type === selectedAuthType.value)
     if (authType?.credentials_schema) {
-      return authType.credentials_schema as CredentialsSchema
+      return authType.credentials_schema
     }
   }
 
-  return (arch?.credentials_schema as CredentialsSchema) ?? null
+  return arch?.credentials_schema ?? null
 })
 
 // 表单是否可以验证（必填字段已填写）
@@ -416,13 +469,20 @@ const canVerify = computed(() => {
   const error = validateFromSchema(schema, dataToValidate)
   if (error) return false
 
-  const effectiveBaseUrl = formData.value.base_url || props.providerWebsite
+  const effectiveBaseUrl = stringFieldValue('base_url') || props.providerWebsite
   return !!effectiveBaseUrl
 })
 
 // 保存按钮是否可用：验证成功且表单未变动
+const quotaAlertChanged = computed(() => {
+  return quotaAlertSignature(quotaAlert.value) !== savedQuotaAlertSignature.value
+})
+
 const canSave = computed(() => {
-  return verifyStatus.value === 'success' && !formChanged.value
+  return (
+    (verifyStatus.value === 'success' && !formChanged.value)
+    || (hasExistingConfig.value && quotaAlertChanged.value && !formChanged.value)
+  )
 })
 
 // 字段分组
@@ -448,6 +508,7 @@ function handleAuthTypeChange() {
 }
 
 function handleFieldChange(fieldKey: string, value: unknown) {
+  formData.value[fieldKey] = value
   formChanged.value = true
 
   // 执行 schema 定义的字段钩子
@@ -478,7 +539,7 @@ function resetFormData() {
   // 初始化表单数据
   const data: Record<string, unknown> = {}
   for (const [key, prop] of Object.entries(schema.properties)) {
-    data[key] = (prop as Record<string, unknown>)['x-default-value'] ?? ''
+    data[key] = prop['x-default-value'] ?? ''
   }
   // 代理相关默认值
   data.proxy_enabled = false
@@ -493,6 +554,11 @@ function formatQuota(quota: number): string {
     return formatQuotaFromSchema(schema, quota)
   }
   return quota.toLocaleString()
+}
+
+function finiteNumber(value: unknown): number | null {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : null
 }
 
 async function handleVerify() {
@@ -515,7 +581,7 @@ async function handleVerify() {
     return
   }
 
-  const effectiveBaseUrl = formData.value.base_url || props.providerWebsite
+  const effectiveBaseUrl = stringFieldValue('base_url') || props.providerWebsite
   if (!effectiveBaseUrl) {
     showError('请填写 API 地址')
     return
@@ -565,8 +631,10 @@ async function handleVerify() {
         const displayName = result.data?.display_name || result.data?.username
         const extra = result.data?.extra
         let balanceText = `余额: ${formatQuota(quota)}`
-        if (extra && extra.balance !== undefined && extra.points !== undefined) {
-          balanceText = `余额: ${formatQuota(extra.balance)} | 积分: ${formatQuota(extra.points)}`
+        const extraBalance = finiteNumber(extra?.balance)
+        const extraPoints = finiteNumber(extra?.points)
+        if (extraBalance !== null && extraPoints !== null) {
+          balanceText = `余额: ${formatQuota(extraBalance)} | 积分: ${formatQuota(extraPoints)}`
         }
         showSuccess(`用户: ${displayName} | ${balanceText}`, '验证成功')
       }
@@ -610,7 +678,7 @@ async function handleSave() {
     return
   }
 
-  const effectiveBaseUrl = formData.value.base_url || props.providerWebsite
+  const effectiveBaseUrl = stringFieldValue('base_url') || props.providerWebsite
   if (!effectiveBaseUrl) {
     showError('请填写 API 地址')
     return
@@ -624,8 +692,10 @@ async function handleSave() {
       formData.value,
       props.providerWebsite,
     )
+    request.quota_alert = normalizedQuotaAlert()
     const result = await saveProviderOpsConfig(props.providerId, request)
     if (result.success) {
+      savedQuotaAlertSignature.value = quotaAlertSignature(quotaAlert.value)
       showSuccess(result.message || '配置已保存', '保存成功')
       emit('saved')
       emit('update:open', false)
@@ -660,6 +730,7 @@ async function handleClear() {
       formChanged.value = false
       selectedArchitectureId.value = 'new_api'
       selectedAuthType.value = ''
+      loadQuotaAlert(null)
       resetFormData()
       emit('saved')
       emit('update:open', false)
@@ -673,18 +744,27 @@ async function handleClear() {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function stringOrDefault(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() ? value : fallback
+}
+
 function loadFromConfig(config: Record<string, unknown>) {
-  if (!config?.connector) return
+  const connector = isRecord(config.connector) ? config.connector : null
+  if (!connector) return
 
   hasExistingConfig.value = true
 
   // 根据已保存的 architecture_id 选择对应架构
-  const architectureId = config.architecture_id || 'new_api'
+  const architectureId = stringOrDefault(config.architecture_id, 'new_api')
   const archExists = architectures.value.some((a) => a.architecture_id === architectureId)
   selectedArchitectureId.value = archExists ? architectureId : 'new_api'
 
   // 从已保存的 connector auth_type 恢复认证方式选择
-  const savedAuthType = config.connector?.auth_type
+  const savedAuthType = stringOrDefault(connector.auth_type, '')
   const authTypes = currentAuthTypes.value
   if (savedAuthType && authTypes.some((t) => t.type === savedAuthType)) {
     selectedAuthType.value = savedAuthType
@@ -694,7 +774,10 @@ function loadFromConfig(config: Record<string, unknown>) {
 
   const schema = currentSchema.value
   if (schema) {
-    const parsedData = parseConfigFromSchema(schema, config)
+    const parsedData = parseConfigFromSchema(schema, {
+      ...config,
+      connector,
+    })
 
     // 敏感字段：脱敏值放到 placeholder，表单值设为空
     sensitivePlaceholders.value = {}
@@ -707,6 +790,46 @@ function loadFromConfig(config: Record<string, unknown>) {
 
     formData.value = parsedData
   }
+  loadQuotaAlert(config.quota_alert)
+}
+
+function defaultQuotaAlert(): QuotaAlertConfig {
+  return {
+    enabled: false,
+    threshold_amount: 0,
+    fetch_interval_seconds: 30,
+  }
+}
+
+function normalizeQuotaAlert(value: unknown): QuotaAlertConfig {
+  if (!value || typeof value !== 'object') return defaultQuotaAlert()
+  const item = value as Record<string, unknown>
+  const threshold = Number(item.threshold_amount)
+  const interval = Number(item.fetch_interval_seconds)
+  return {
+    enabled: item.enabled === true,
+    threshold_amount: Number.isFinite(threshold) && threshold >= 0 ? threshold : 0,
+    fetch_interval_seconds: Number.isFinite(interval) && interval >= 30 ? Math.min(Math.floor(interval), 86400) : 30,
+  }
+}
+
+function normalizedQuotaAlert(): QuotaAlertConfig {
+  return normalizeQuotaAlert(quotaAlert.value)
+}
+
+function quotaAlertSignature(value: QuotaAlertConfig): string {
+  const normalized = normalizeQuotaAlert(value)
+  return JSON.stringify([
+    normalized.enabled,
+    normalized.threshold_amount,
+    normalized.fetch_interval_seconds,
+  ])
+}
+
+function loadQuotaAlert(value: unknown) {
+  const normalized = normalizeQuotaAlert(value)
+  quotaAlert.value = normalized
+  savedQuotaAlertSignature.value = quotaAlertSignature(normalized)
 }
 
 /** 确保架构列表已加载 */
@@ -747,11 +870,13 @@ watch(
               architecture_id: config.architecture_id,
               base_url: config.base_url,
               connector: config.connector,
+              quota_alert: config.quota_alert,
             }
             loadFromConfig(configData)
           } else {
             hasExistingConfig.value = false
             sensitivePlaceholders.value = {}
+            loadQuotaAlert(null)
             selectedArchitectureId.value = 'new_api'
             selectedAuthType.value = ''
             resetFormData()
@@ -759,6 +884,7 @@ watch(
         } catch {
           hasExistingConfig.value = false
           sensitivePlaceholders.value = {}
+          loadQuotaAlert(null)
           selectedArchitectureId.value = 'new_api'
           selectedAuthType.value = ''
           resetFormData()
@@ -768,6 +894,7 @@ watch(
       } else {
         hasExistingConfig.value = false
         sensitivePlaceholders.value = {}
+        loadQuotaAlert(null)
         selectedArchitectureId.value = 'new_api'
         selectedAuthType.value = ''
         resetFormData()

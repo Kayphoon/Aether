@@ -8,46 +8,51 @@
           description="管理系统级别的配置和参数"
         />
 
-        <div class="mt-6 space-y-6">
+        <div
+          class="mt-6 space-y-6 transition-opacity"
+          :class="{ 'pointer-events-none opacity-60': systemConfigLoading }"
+          :inert="systemConfigLoading"
+          :aria-busy="systemConfigLoading"
+        >
+          <div
+            v-if="systemConfigLoading"
+            class="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground"
+          >
+            系统配置加载中...
+          </div>
+
           <!-- 站点信息 -->
           <SiteInfoSection
             id="section-site-info"
             :site-name="systemConfig.site_name"
             :site-subtitle="systemConfig.site_subtitle"
-            :loading="siteInfoLoading"
+            :loading="systemConfigLoading || siteInfoLoading"
             :has-changes="hasSiteInfoChanges"
             @save="saveSiteInfo"
             @update:site-name="systemConfig.site_name = $event"
             @update:site-subtitle="systemConfig.site_subtitle = $event"
           />
 
-          <!-- 配置导出/导入 -->
-          <ConfigManagementSection
-            id="section-config-mgmt"
-            :export-loading="exportLoading"
-            :import-loading="importLoading"
-            @export="handleExportConfig"
-            @file-select="handleConfigFileSelect"
-          />
-
-          <!-- 用户数据导出/导入 -->
-          <UserDataSection
-            id="section-user-data"
-            :export-loading="exportUsersLoading"
-            :import-loading="importUsersLoading"
-            @export="handleExportUsers"
-            @file-select="handleUsersFileSelect"
-          />
-
           <!-- 数据管理 -->
-          <DataManagementSection id="section-data-mgmt" />
+          <DataManagementSection
+            id="section-data-mgmt"
+            :config-export-loading="exportLoading"
+            :config-import-loading="importLoading"
+            :users-export-loading="exportUsersLoading"
+            :users-import-loading="importUsersLoading"
+            :aggregate-export-loading="exportAggregateLoading"
+            :aggregate-import-loading="importAggregateLoading"
+            @export="handleDataExport"
+            @file-select="handleDataFileSelect"
+          />
 
           <!-- 网络代理 -->
           <ProxyConfigSection
             id="section-proxy"
             :proxy-node-id="systemConfig.system_proxy_node_id"
             :online-nodes="proxyNodesStore.onlineNodes"
-            :loading="proxyConfigLoading"
+            :all-nodes="proxyNodesStore.nodes"
+            :loading="systemConfigLoading || proxyConfigLoading"
             :has-changes="hasProxyConfigChanges"
             @save="saveProxyConfig"
             @update:proxy-node-id="systemConfig.system_proxy_node_id = $event"
@@ -60,15 +65,43 @@
             :rate-limit-per-minute="systemConfig.rate_limit_per_minute"
             :enable-registration="systemConfig.enable_registration"
             :password-policy-level="systemConfig.password_policy_level"
+            :turnstile-enabled="systemConfig.turnstile_enabled"
+            :turnstile-site-key="systemConfig.turnstile_site_key"
+            :turnstile-secret-key="systemConfig.turnstile_secret_key"
+            :turnstile-secret-configured="systemConfig.turnstile_secret_key_is_set"
+            :turnstile-allowed-hostnames-str="turnstileAllowedHostnamesStr"
+            :referral-enabled="systemConfig.referral_enabled"
+            :referral-reward-mode="systemConfig.referral_reward_mode"
+            :referral-recharge-percent="systemConfig.referral_recharge_percent"
+            :referral-headcount-amount-usd="systemConfig.referral_headcount_amount_usd"
+            :referral-headcount-trigger="systemConfig.referral_headcount_trigger"
+            :registration-privacy-policy-enabled="systemConfig.registration_privacy_policy_enabled"
+            :registration-privacy-policy-format="systemConfig.registration_privacy_policy_format"
+            :registration-privacy-policy-content="systemConfig.registration_privacy_policy_content"
+            :registration-privacy-policy-version="systemConfig.registration_privacy_policy_version"
             :auto-delete-expired-keys="systemConfig.auto_delete_expired_keys"
             :enable-format-conversion="systemConfig.enable_format_conversion"
-            :loading="basicConfigLoading"
+            :loading="systemConfigLoading || basicConfigLoading"
             :has-changes="hasBasicConfigChanges"
             @save="saveBasicConfig"
             @update:default-user-initial-gift-usd="systemConfig.default_user_initial_gift_usd = $event"
             @update:rate-limit-per-minute="systemConfig.rate_limit_per_minute = $event"
             @update:enable-registration="systemConfig.enable_registration = $event"
             @update:password-policy-level="systemConfig.password_policy_level = $event"
+            @update:turnstile-enabled="systemConfig.turnstile_enabled = $event"
+            @update:turnstile-site-key="systemConfig.turnstile_site_key = $event"
+            @update:turnstile-secret-key="systemConfig.turnstile_secret_key = $event"
+            @update:turnstile-allowed-hostnames-str="turnstileAllowedHostnamesStr = $event"
+            @clear-turnstile-secret="clearTurnstileSecret"
+            @update:referral-enabled="systemConfig.referral_enabled = $event"
+            @update:referral-reward-mode="systemConfig.referral_reward_mode = $event"
+            @update:referral-recharge-percent="systemConfig.referral_recharge_percent = $event"
+            @update:referral-headcount-amount-usd="systemConfig.referral_headcount_amount_usd = $event"
+            @update:referral-headcount-trigger="systemConfig.referral_headcount_trigger = $event"
+            @update:registration-privacy-policy-enabled="systemConfig.registration_privacy_policy_enabled = $event"
+            @update:registration-privacy-policy-format="systemConfig.registration_privacy_policy_format = $event"
+            @update:registration-privacy-policy-content="systemConfig.registration_privacy_policy_content = $event"
+            @update:registration-privacy-policy-version="systemConfig.registration_privacy_policy_version = $event"
             @update:auto-delete-expired-keys="systemConfig.auto_delete_expired_keys = $event"
             @update:enable-format-conversion="systemConfig.enable_format_conversion = $event"
           />
@@ -77,15 +110,11 @@
           <RequestLogSection
             id="section-request-log"
             :request-record-level="systemConfig.request_record_level"
-            :max-request-body-size-k-b="maxRequestBodySizeKB"
-            :max-response-body-size-k-b="maxResponseBodySizeKB"
             :sensitive-headers-str="sensitiveHeadersStr"
-            :loading="logConfigLoading"
+            :loading="systemConfigLoading || logConfigLoading"
             :has-changes="hasLogConfigChanges"
             @save="saveLogConfig"
             @update:request-record-level="systemConfig.request_record_level = $event"
-            @update:max-request-body-size-k-b="maxRequestBodySizeKB = $event"
-            @update:max-response-body-size-k-b="maxResponseBodySizeKB = $event"
             @update:sensitive-headers-str="sensitiveHeadersStr = $event"
           />
 
@@ -101,7 +130,10 @@
             :audit-log-retention-days="systemConfig.audit_log_retention_days"
             :request-candidates-retention-days="systemConfig.request_candidates_retention_days"
             :request-candidates-cleanup-batch-size="systemConfig.request_candidates_cleanup_batch_size"
-            :loading="cleanupConfigLoading"
+            :proxy-node-metrics-1m-retention-days="systemConfig.proxy_node_metrics_1m_retention_days"
+            :proxy-node-metrics-1h-retention-days="systemConfig.proxy_node_metrics_1h_retention_days"
+            :proxy-node-metrics-cleanup-batch-size="systemConfig.proxy_node_metrics_cleanup_batch_size"
+            :loading="systemConfigLoading || cleanupConfigLoading"
             :has-changes="hasCleanupConfigChanges"
             @save="saveCleanupConfig"
             @toggle-auto-cleanup="handleAutoCleanupToggle"
@@ -113,6 +145,9 @@
             @update:audit-log-retention-days="systemConfig.audit_log_retention_days = $event"
             @update:request-candidates-retention-days="systemConfig.request_candidates_retention_days = $event"
             @update:request-candidates-cleanup-batch-size="systemConfig.request_candidates_cleanup_batch_size = $event"
+            @update:proxy-node-metrics-1m-retention-days="systemConfig.proxy_node_metrics_1m_retention_days = $event"
+            @update:proxy-node-metrics-1h-retention-days="systemConfig.proxy_node_metrics_1h_retention_days = $event"
+            @update:proxy-node-metrics-cleanup-batch-size="systemConfig.proxy_node_metrics_cleanup_batch_size = $event"
           />
 
           <!-- 定时任务 -->
@@ -169,6 +204,7 @@
       :merge-mode="mergeMode"
       :merge-mode-select-open="mergeModeSelectOpen"
       :import-loading="importLoading"
+      :import-progress="importProgress"
       @confirm="confirmImport"
       @update:import-dialog-open="importDialogOpen = $event"
       @update:import-result-dialog-open="importResultDialogOpen = $event"
@@ -185,11 +221,29 @@
       :users-merge-mode="usersMergeMode"
       :users-merge-mode-select-open="usersMergeModeSelectOpen"
       :import-users-loading="importUsersLoading"
+      :import-users-progress="importUsersProgress"
       @confirm="confirmImportUsers"
       @update:import-users-dialog-open="importUsersDialogOpen = $event"
       @update:import-users-result-dialog-open="importUsersResultDialogOpen = $event"
       @update:users-merge-mode="usersMergeMode = $event"
       @update:users-merge-mode-select-open="usersMergeModeSelectOpen = $event"
+    />
+
+    <!-- 完整备份导入对话框 -->
+    <AggregateImportDialog
+      :aggregate-import-dialog-open="aggregateImportDialogOpen"
+      :aggregate-import-result-dialog-open="aggregateImportResultDialogOpen"
+      :aggregate-import-preview="aggregateImportPreview"
+      :aggregate-import-result="aggregateImportResult"
+      :aggregate-merge-mode="aggregateMergeMode"
+      :aggregate-merge-mode-select-open="aggregateMergeModeSelectOpen"
+      :import-aggregate-loading="importAggregateLoading"
+      :import-aggregate-progress="importAggregateProgress"
+      @confirm="confirmImportAggregate"
+      @update:aggregate-import-dialog-open="aggregateImportDialogOpen = $event"
+      @update:aggregate-import-result-dialog-open="aggregateImportResultDialogOpen = $event"
+      @update:aggregate-merge-mode="aggregateMergeMode = $event"
+      @update:aggregate-merge-mode-select-open="aggregateMergeModeSelectOpen = $event"
     />
   </PageContainer>
 </template>
@@ -206,8 +260,6 @@ import { useScheduledTasks } from './system-settings/composables/useScheduledTas
 
 // Section components
 import SiteInfoSection from './system-settings/SiteInfoSection.vue'
-import ConfigManagementSection from './system-settings/ConfigManagementSection.vue'
-import UserDataSection from './system-settings/UserDataSection.vue'
 import DataManagementSection from './system-settings/DataManagementSection.vue'
 import ProxyConfigSection from './system-settings/ProxyConfigSection.vue'
 import BasicConfigSection from './system-settings/BasicConfigSection.vue'
@@ -219,14 +271,13 @@ import SystemInfoSection from './system-settings/SystemInfoSection.vue'
 // Dialog components
 import ConfigImportDialog from './system-settings/ConfigImportDialog.vue'
 import UsersImportDialog from './system-settings/UsersImportDialog.vue'
+import AggregateImportDialog from './system-settings/AggregateImportDialog.vue'
 
 const proxyNodesStore = useProxyNodesStore()
 
 // TOC 目录导航
 const tocItems = [
   { id: 'section-site-info', label: '站点信息' },
-  { id: 'section-config-mgmt', label: '配置管理' },
-  { id: 'section-user-data', label: '用户数据管理' },
   { id: 'section-data-mgmt', label: '数据管理' },
   { id: 'section-proxy', label: '网络代理' },
   { id: 'section-basic', label: '基础配置' },
@@ -287,6 +338,7 @@ function setupScrollSpy() {
 const {
   systemConfig,
   systemVersion,
+  systemConfigLoading,
   siteInfoLoading,
   proxyConfigLoading,
   basicConfigLoading,
@@ -297,20 +349,20 @@ const {
   hasBasicConfigChanges,
   hasLogConfigChanges,
   hasCleanupConfigChanges,
-  maxRequestBodySizeKB,
-  maxResponseBodySizeKB,
   sensitiveHeadersStr,
+  turnstileAllowedHostnamesStr,
   loadSystemConfig,
   loadSystemVersion,
   saveSiteInfo,
   saveProxyConfig,
   saveBasicConfig,
+  clearTurnstileSecret,
   saveLogConfig,
   saveCleanupConfig,
   handleAutoCleanupToggle,
 } = useSystemConfig()
 
-// Config export/import composable
+// 数据导出/导入 composable
 const {
   exportLoading,
   importLoading,
@@ -320,6 +372,7 @@ const {
   importResult,
   mergeMode,
   mergeModeSelectOpen,
+  importProgress,
   handleExportConfig,
   handleConfigFileSelect,
   confirmImport,
@@ -331,10 +384,45 @@ const {
   importUsersResult,
   usersMergeMode,
   usersMergeModeSelectOpen,
+  importUsersProgress,
   handleExportUsers,
   handleUsersFileSelect,
   confirmImportUsers,
+  exportAggregateLoading,
+  importAggregateLoading,
+  aggregateImportDialogOpen,
+  aggregateImportResultDialogOpen,
+  aggregateImportPreview,
+  aggregateImportResult,
+  aggregateMergeMode,
+  aggregateMergeModeSelectOpen,
+  importAggregateProgress,
+  handleExportAggregate,
+  handleAggregateFileSelect,
+  confirmImportAggregate,
 } = useConfigExportImport(systemConfig)
+
+type DataManagementKind = 'config' | 'users' | 'aggregate'
+
+function handleDataExport(kind: DataManagementKind) {
+  if (kind === 'config') {
+    handleExportConfig()
+  } else if (kind === 'users') {
+    handleExportUsers()
+  } else {
+    handleExportAggregate()
+  }
+}
+
+function handleDataFileSelect(kind: DataManagementKind, event: Event) {
+  if (kind === 'config') {
+    handleConfigFileSelect(event)
+  } else if (kind === 'users') {
+    handleUsersFileSelect(event)
+  } else {
+    handleAggregateFileSelect(event)
+  }
+}
 
 // Scheduled tasks composable
 const {

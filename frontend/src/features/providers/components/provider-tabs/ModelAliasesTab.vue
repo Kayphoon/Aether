@@ -33,26 +33,26 @@
     >
       <div
         v-for="group in aliasGroups"
-        :key="`${group.model.id}-${group.apiFormatsKey}`"
+        :key="getAliasGroupKey(group)"
         class="transition-colors"
       >
         <!-- 分组头部（可点击展开） -->
         <div
-          class="flex items-center justify-between px-4 py-3 hover:bg-muted/20 cursor-pointer"
-          @click="toggleAliasGroupExpand(`${group.model.id}-${group.apiFormatsKey}`)"
+          class="flex items-start justify-between px-4 py-3 hover:bg-muted/20 cursor-pointer"
+          @click="toggleAliasGroupExpand(getAliasGroupKey(group))"
         >
-          <div class="flex items-center gap-2 flex-1 min-w-0">
+          <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1.5">
             <!-- 展开/收起图标 -->
             <ChevronRight
               class="w-4 h-4 text-muted-foreground shrink-0 transition-transform"
-              :class="{ 'rotate-90': expandedAliasGroups.has(`${group.model.id}-${group.apiFormatsKey}`) }"
+              :class="{ 'rotate-90': expandedAliasGroups.has(getAliasGroupKey(group)) }"
             />
             <!-- 模型名称 -->
-            <span class="font-semibold text-sm truncate">
+            <span class="min-w-0 flex-[1_1_12rem] truncate text-sm font-semibold">
               {{ group.model.global_model_display_name || group.model.provider_model_name }}
             </span>
             <!-- 作用域标签 -->
-            <div class="flex items-center gap-1 shrink-0">
+            <div class="flex min-w-0 max-w-full flex-wrap items-center gap-1">
               <Badge
                 v-if="group.apiFormats.length === 0"
                 variant="outline"
@@ -68,6 +68,18 @@
                 class="text-xs"
               >
                 {{ formatApiFormat(format) }}
+              </Badge>
+              <Badge
+                variant="outline"
+                class="text-xs"
+              >
+                {{ getEndpointScopeLabel(group) }}
+              </Badge>
+              <Badge
+                variant="outline"
+                class="min-w-0 max-w-full text-xs"
+              >
+                <span class="truncate">{{ getOperationScopeLabel(group) }}</span>
               </Badge>
             </div>
             <!-- 映射数量 -->
@@ -103,7 +115,7 @@
 
         <!-- 展开的映射列表 -->
         <div
-          v-show="expandedAliasGroups.has(`${group.model.id}-${group.apiFormatsKey}`)"
+          v-show="expandedAliasGroups.has(getAliasGroupKey(group))"
           class="bg-muted/30 border-t border-border/30"
         >
           <div class="px-4 py-2 space-y-1">
@@ -124,15 +136,16 @@
               </div>
               <!-- 测试按钮 -->
               <Button
+                v-if="group.operations.length === 0"
                 variant="ghost"
                 size="icon"
                 class="h-7 w-7 shrink-0"
                 title="测试映射"
-                :disabled="testingMapping === `${group.model.id}-${group.apiFormatsKey}-${mapping.name}`"
+                :disabled="testingMapping === `${getAliasGroupKey(group)}-${mapping.name}`"
                 @click="testMapping(group, mapping)"
               >
                 <Loader2
-                  v-if="testingMapping === `${group.model.id}-${group.apiFormatsKey}-${mapping.name}`"
+                  v-if="testingMapping === `${getAliasGroupKey(group)}-${mapping.name}`"
                   class="w-3 h-3 animate-spin"
                 />
                 <Play
@@ -200,9 +213,16 @@ import {
   type ProviderModelAlias
 } from '@/api/endpoints'
 import { updateModel } from '@/api/endpoints/models'
+import { useI18n } from '@/i18n'
 import { parseApiError, parseTestModelError } from '@/utils/errorParser'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { buildExactModelMappingTestRequest } from './model-test-request'
 import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
+import {
+  formatModelMappingRequestScope,
+  modelMappingOperationsKey,
+  normalizeModelMappingOperations,
+} from '../../utils/modelMappingScope'
 
 const props = defineProps<{
   provider: ProviderWithEndpointsSummary
@@ -213,6 +233,7 @@ const emit = defineEmits<{
 }>()
 
 const { error: showError, success: showSuccess } = useToast()
+const { t } = useI18n()
 
 // 状态
 const loading = ref(false)
@@ -239,8 +260,55 @@ const providerApiFormats = computed(() => {
 
 // 生成作用域唯一键
 function getApiFormatsKey(formats: string[] | undefined): string {
-  if (!formats || formats.length === 0) return ''
-  return [...formats].sort().join(',')
+  return getScopeKey(formats)
+}
+
+function normalizeStringList(values: string[] | undefined): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values ?? []) {
+    const normalized = value.trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    result.push(normalized)
+  }
+  return result
+}
+
+function getScopeKey(values: string[] | undefined): string {
+  return normalizeStringList(values).sort().join(',')
+}
+
+function getEndpointIdsKey(endpointIds: string[] | undefined): string {
+  return getScopeKey(endpointIds)
+}
+
+function getOperationsKey(operations: string[] | undefined): string {
+  return modelMappingOperationsKey(operations)
+}
+
+const requestScopeLabels = computed(() => ({
+  allRequests: t('providers.modelMapping.scope.allRequests'),
+  sessionCompactionOnly: t('providers.modelMapping.scope.sessionCompactionOnly'),
+  customOperations: (operations: string[]) => t(
+    'providers.modelMapping.scope.customOperations',
+    { operations: operations.join(', ') },
+  ),
+}))
+
+function getAliasGroupKey(group: AliasGroup): string {
+  return `${group.model.id}-${group.apiFormatsKey}-${group.endpointIdsKey}-${group.operationsKey}`
+}
+
+function getEndpointScopeLabel(group: AliasGroup): string {
+  if (!group.endpointIds || group.endpointIds.length === 0) {
+    return t('providers.modelMapping.scope.allEndpoints')
+  }
+  return t('providers.modelMapping.scope.endpointCount', { count: group.endpointIds.length })
+}
+
+function getOperationScopeLabel(group: AliasGroup): string {
+  return formatModelMappingRequestScope(group.operations, requestScopeLabels.value)
 }
 
 // 按"模型+作用域"分组的映射列表
@@ -253,13 +321,19 @@ const aliasGroups = computed<AliasGroup[]>(() => {
 
     for (const alias of model.provider_model_mappings) {
       const apiFormatsKey = getApiFormatsKey(alias.api_formats)
-      const groupKey = `${model.id}|${apiFormatsKey}`
+      const endpointIdsKey = getEndpointIdsKey(alias.endpoint_ids)
+      const operationsKey = getOperationsKey(alias.operations)
+      const groupKey = `${model.id}|${apiFormatsKey}|${endpointIdsKey}|${operationsKey}`
 
       if (!groupMap.has(groupKey)) {
         const group: AliasGroup = {
           model,
           apiFormatsKey,
           apiFormats: alias.api_formats || [],
+          endpointIdsKey,
+          endpointIds: normalizeStringList(alias.endpoint_ids),
+          operationsKey,
+          operations: normalizeModelMappingOperations(alias.operations),
           aliases: []
         }
         groupMap.set(groupKey, group)
@@ -278,6 +352,8 @@ const aliasGroups = computed<AliasGroup[]>(() => {
     const nameB = (b.model.global_model_display_name || b.model.provider_model_name || '').toLowerCase()
     if (nameA !== nameB) return nameA.localeCompare(nameB)
     return a.apiFormatsKey.localeCompare(b.apiFormatsKey)
+      || a.endpointIdsKey.localeCompare(b.endpointIdsKey)
+      || a.operationsKey.localeCompare(b.operationsKey)
   })
 })
 
@@ -299,8 +375,10 @@ const deleteConfirmDescription = computed(() => {
   const { model, aliases, apiFormats } = deletingGroup.value
   const modelName = model.global_model_display_name || model.provider_model_name
   const scopeText = apiFormats.length === 0 ? '全部' : apiFormats.map(f => formatApiFormat(f)).join(', ')
+  const endpointScope = getEndpointScopeLabel(deletingGroup.value)
+  const operationScope = getOperationScopeLabel(deletingGroup.value)
   const aliasNames = aliases.map(a => a.name).join(', ')
-  return `确定要删除模型「${modelName}」在作用域「${scopeText}」下的 ${aliases.length} 个映射吗？\n\n映射名称：${aliasNames}`
+  return `确定要删除模型「${modelName}」在作用域「${scopeText} / ${endpointScope} / ${operationScope}」下的 ${aliases.length} 个映射吗？\n\n映射名称：${aliasNames}`
 })
 
 // 切换映射组展开状态
@@ -343,14 +421,19 @@ function deleteGroup(group: AliasGroup) {
 async function confirmDelete() {
   if (!deletingGroup.value) return
 
-  const { model, aliases, apiFormatsKey } = deletingGroup.value
+  const { model, aliases, apiFormatsKey, endpointIdsKey, operationsKey } = deletingGroup.value
 
   try {
     const currentAliases = model.provider_model_mappings || []
     const aliasNamesToRemove = new Set(aliases.map(a => a.name))
     const newAliases = currentAliases.filter((a: ProviderModelAlias) => {
       const currentKey = getApiFormatsKey(a.api_formats)
-      return !(currentKey === apiFormatsKey && aliasNamesToRemove.has(a.name))
+      const currentEndpointIdsKey = getEndpointIdsKey(a.endpoint_ids)
+      const currentOperationsKey = getOperationsKey(a.operations)
+      return !(currentKey === apiFormatsKey
+        && currentEndpointIdsKey === endpointIdsKey
+        && currentOperationsKey === operationsKey
+        && aliasNamesToRemove.has(a.name))
     })
 
     await updateModel(props.provider.id, model.id, {
@@ -375,7 +458,7 @@ async function onDialogSaved() {
 
 // 测试模型映射
 async function testMapping(group: AliasGroup, mapping: ProviderModelAlias) {
-  const testingKey = `${group.model.id}-${group.apiFormatsKey}-${mapping.name}`
+  const testingKey = `${getAliasGroupKey(group)}-${mapping.name}`
   testingMapping.value = testingKey
 
   try {
@@ -385,15 +468,13 @@ async function testMapping(group: AliasGroup, mapping: ProviderModelAlias) {
       apiFormat = group.apiFormats[0]
     } else if (group.apiFormats.length === 0) {
       // 如果没有指定格式，但分组显示为"全部"，则使用模型的默认格式
-      apiFormat = group.model.effective_api_format || group.model.api_format
+      const formats = group.model.effective_config?.api_formats ?? group.model.config?.api_formats ?? []
+      if (formats.length === 1) apiFormat = formats[0]
     }
 
-    const result = await testModel({
-      provider_id: props.provider.id,
-      model_name: mapping.name,  // 使用映射名称进行测试
-      message: "hello",
-      api_format: apiFormat
-    })
+    const result = await testModel(
+      buildExactModelMappingTestRequest(props.provider.id, mapping.name, apiFormat)
+    )
 
     if (result.success) {
       showSuccess(`映射 "${mapping.name}" 测试成功`)

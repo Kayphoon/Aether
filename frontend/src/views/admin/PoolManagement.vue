@@ -4,303 +4,32 @@
       variant="default"
       class="overflow-hidden"
     >
-      <!-- Header -->
-      <div class="px-4 sm:px-6 py-3 sm:py-3.5 border-b border-border/60">
-        <!-- Mobile -->
-        <div class="flex flex-col gap-3 sm:hidden">
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <h3 class="text-base font-semibold">
-                号池管理
-                <span
-                  v-if="poolHeaderMetaText"
-                  class="ml-2 text-xs font-normal text-muted-foreground"
-                >
-                  | {{ poolHeaderMetaText }}
-                </span>
-              </h3>
-            </div>
-            <div class="flex items-center gap-1.5">
-              <Button
-                v-if="selectedProviderId"
-                variant="ghost"
-                size="icon"
-                class="h-8 w-8"
-                title="添加账号"
-                @click="showImportDialog = true"
-              >
-                <Upload class="w-3.5 h-3.5" />
-              </Button>
-              <ProviderProxyPopover
-                v-if="selectedProviderId"
-                :open="providerProxyMobilePopoverOpen"
-                :node-id="selectedProviderData?.proxy?.node_id"
-                :saving="savingProviderProxy"
-                :title="getProviderProxyButtonTitle()"
-                @update:open="(open: boolean) => handleProviderProxyPopoverToggle('mobile', open)"
-                @select="setProviderProxy"
-                @clear="clearProviderProxy"
-              />
-              <Button
-                v-if="selectedProviderId"
-                variant="ghost"
-                size="icon"
-                class="h-8 w-8"
-                title="高级设置"
-                @click="showAdvancedDialog = true"
-              >
-                <Settings2 class="w-3.5 h-3.5" />
-              </Button>
-              <Button
-                v-if="selectedProviderId"
-                variant="outline"
-                size="sm"
-                class="h-8 px-2 text-xs gap-1"
-                title="号池调度"
-                @click="openSchedulingDialog()"
-              >
-                调度
-                <ChevronDown class="w-3 h-3 text-muted-foreground" />
-              </Button>
-              <Button
-                v-if="selectedProviderId"
-                variant="ghost"
-                size="icon"
-                class="h-8 w-8"
-                title="账号"
-                @click="showAccountBatchDialog = true"
-              >
-                <Users class="w-3.5 h-3.5" />
-              </Button>
-              <Button
-                v-if="selectedProviderId"
-                variant="ghost"
-                size="icon"
-                class="h-8 w-8"
-                :class="getProviderToggleButtonClass()"
-                :disabled="togglingProviderStatus"
-                :title="getProviderToggleButtonTitle()"
-                @click="toggleSelectedProviderStatus"
-              >
-                <Power class="w-3.5 h-3.5" />
-              </Button>
-              <RefreshButton
-                :loading="refreshCurrentPageLoading"
-                :title="refreshButtonTitle"
-                @click="refreshCurrentPage"
-              />
-            </div>
-          </div>
-          <!-- Filters (mobile) -->
-          <div class="flex items-center gap-2">
-            <Select
-              v-model="selectedProviderIdProxy"
-              :disabled="providerSelectDisabled"
-            >
-              <SelectTrigger
-                class="flex-1 h-8 text-xs border-border/60"
-                :disabled="providerSelectDisabled"
-              >
-                <SelectValue placeholder="选择 Provider" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem
-                  v-for="item in poolProviders"
-                  :key="item.provider_id"
-                  :value="item.provider_id"
-                >
-                  {{ item.provider_name }}
-                  <span class="text-muted-foreground ml-1">({{ item.total_keys }})</span>
-                  <span
-                    v-if="!item.pool_enabled"
-                    class="ml-1 text-[10px] text-amber-600"
-                  >未启用</span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <Select v-model="statusFilter">
-              <SelectTrigger class="w-24 h-8 text-xs border-border/60">
-                <SelectValue placeholder="状态" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">
-                  全部
-                </SelectItem>
-                <SelectItem value="active">
-                  活跃
-                </SelectItem>
-                <SelectItem value="cooldown">
-                  冷却中
-                </SelectItem>
-                <SelectItem value="inactive">
-                  禁用
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div
-            v-if="selectedProviderId"
-            class="relative"
-          >
-            <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground z-10 pointer-events-none" />
-            <Input
-              v-model="searchQuery"
-              type="text"
-              placeholder="搜索账号..."
-              class="w-full pl-8 pr-3 h-8 text-sm bg-background/50 border-border/60"
-            />
-          </div>
-        </div>
-
-        <!-- Desktop -->
-        <div class="hidden sm:flex items-center justify-between gap-4">
-          <div class="flex items-center gap-2">
-            <h3 class="text-base font-semibold">
-              号池管理
-              <span
-                v-if="poolHeaderMetaText"
-                class="ml-2 text-xs font-normal text-muted-foreground"
-              >
-                | {{ poolHeaderMetaText }}
-              </span>
-            </h3>
-          </div>
-          <div class="flex items-center gap-2">
-            <Select
-              v-model="selectedProviderIdProxy"
-              :disabled="providerSelectDisabled"
-            >
-              <SelectTrigger
-                class="w-36 h-8 text-xs border-border/60"
-                :disabled="providerSelectDisabled"
-              >
-                <SelectValue placeholder="选择 Provider" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem
-                  v-for="item in poolProviders"
-                  :key="item.provider_id"
-                  :value="item.provider_id"
-                >
-                  {{ item.provider_name }}
-                  <span class="text-muted-foreground ml-1">({{ item.total_keys }})</span>
-                  <span
-                    v-if="!item.pool_enabled"
-                    class="ml-1 text-[10px] text-amber-600"
-                  >未启用</span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <div class="h-4 w-px bg-border" />
-            <div
-              v-if="selectedProviderId"
-              class="relative"
-            >
-              <Search class="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground z-10 pointer-events-none" />
-              <Input
-                v-model="searchQuery"
-                type="text"
-                placeholder="搜索账号..."
-                class="w-40 pl-8 pr-2 h-8 text-xs bg-background/50 border-border/60"
-              />
-            </div>
-            <Select v-model="statusFilter">
-              <SelectTrigger class="w-28 h-8 text-xs border-border/60">
-                <SelectValue placeholder="全部状态" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">
-                  全部状态
-                </SelectItem>
-                <SelectItem value="active">
-                  活跃
-                </SelectItem>
-                <SelectItem value="cooldown">
-                  冷却中
-                </SelectItem>
-                <SelectItem value="inactive">
-                  禁用
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <div
-              v-if="selectedProviderId"
-              class="h-4 w-px bg-border"
-            />
-            <button
-              v-if="selectedProviderId"
-              class="group inline-flex items-center gap-1.5 px-2.5 h-8 rounded-md border border-border/50 bg-muted/20 hover:bg-muted/40 hover:border-primary/40 transition-all duration-200 text-xs"
-              title="点击调整号池调度"
-              @click="openSchedulingDialog()"
-            >
-              <span class="text-muted-foreground/80 hidden lg:inline">调度:</span>
-              <span class="font-medium text-foreground/90">{{ poolSchedulingLabel }}</span>
-              <ChevronDown class="w-3 h-3 text-muted-foreground/70 group-hover:text-foreground transition-colors" />
-            </button>
-            <div
-              v-if="selectedProviderId"
-              class="h-4 w-px bg-border"
-            />
-            <Button
-              v-if="selectedProviderId"
-              variant="ghost"
-              size="icon"
-              class="h-8 w-8"
-              title="添加账号"
-              @click="showImportDialog = true"
-            >
-              <Upload class="w-3.5 h-3.5" />
-            </Button>
-            <ProviderProxyPopover
-              v-if="selectedProviderId"
-              :open="providerProxyDesktopPopoverOpen"
-              :node-id="selectedProviderData?.proxy?.node_id"
-              :saving="savingProviderProxy"
-              :title="getProviderProxyButtonTitle()"
-              @update:open="(open: boolean) => handleProviderProxyPopoverToggle('desktop', open)"
-              @select="setProviderProxy"
-              @clear="clearProviderProxy"
-            />
-            <Button
-              v-if="selectedProviderId"
-              variant="ghost"
-              size="icon"
-              class="h-8 w-8"
-              title="高级设置"
-              @click="showAdvancedDialog = true"
-            >
-              <Settings2 class="w-3.5 h-3.5" />
-            </Button>
-            <Button
-              v-if="selectedProviderId"
-              variant="ghost"
-              size="icon"
-              class="h-8 w-8"
-              title="账号"
-              @click="showAccountBatchDialog = true"
-            >
-              <Users class="w-3.5 h-3.5" />
-            </Button>
-            <Button
-              v-if="selectedProviderId"
-              variant="ghost"
-              size="icon"
-              class="h-8 w-8"
-              :class="getProviderToggleButtonClass()"
-              :disabled="togglingProviderStatus"
-              :title="getProviderToggleButtonTitle()"
-              @click="toggleSelectedProviderStatus"
-            >
-              <Power class="w-3.5 h-3.5" />
-            </Button>
-            <RefreshButton
-              :loading="refreshCurrentPageLoading"
-              :title="refreshButtonTitle"
-              @click="refreshCurrentPage"
-            />
-          </div>
-        </div>
-      </div>
+      <PoolManagementHeader
+        v-model:provider-id="selectedProviderIdProxy"
+        v-model:status="statusFilter"
+        v-model:search="searchQuery"
+        :providers="poolProviders"
+        :provider-select-disabled="providerSelectDisabled"
+        :status-options="poolKeyStatusFilterOptions"
+        :meta-text="poolHeaderMetaText"
+        :pool-scheduling-label="poolSchedulingLabel"
+        :show-adaptive-hot-pool-metrics-button="showAdaptiveHotPoolMetricsButton"
+        :selected-count="selectedKeyCount"
+        :is-all-filtered-selected="isAllFilteredPoolKeysSelected"
+        :selection-disabled="keyPage.total === 0 || poolKeySelectionBusy"
+        :batch-actions-disabled="selectedKeyCount === 0 || poolKeySelectionBusy"
+        :refresh-loading="refreshCurrentPageLoading"
+        :refresh-title="refreshButtonTitle"
+        @view-provider="openProviderDrawer"
+        @prefetch-provider="prefetchProviderDetailDrawer"
+        @import="showImportDialog = true"
+        @scheduling="openSchedulingDialog"
+        @demand-metrics="showDemandMetricsDialog = true"
+        @advanced="openAdvancedDialog"
+        @toggle-select-all="toggleAllFilteredPoolKeys"
+        @batch-action="openAccountBatchDialog"
+        @refresh="refreshCurrentPage"
+      />
 
       <!-- Loading (initial) -->
       <div
@@ -350,17 +79,51 @@
       <template v-else>
         <!-- Desktop table -->
         <div
-          v-if="keyPage.keys.length > 0"
+          v-if="keyPage.keys.length > 0 || hasPoolKeyFilters"
           class="hidden xl:block overflow-x-auto"
         >
           <Table class="w-full table-fixed">
+            <colgroup>
+              <col :style="{ width: desktopColumnWidths.name }">
+              <col
+                v-if="showAccountQuotaColumn"
+                :style="{ width: desktopColumnWidths.quota }"
+              >
+              <col :style="{ width: desktopColumnWidths.stats }">
+              <col :style="{ width: desktopColumnWidths.imported }">
+              <col :style="{ width: desktopColumnWidths.lastUsed }">
+              <col :style="{ width: desktopColumnWidths.score }">
+              <col :style="{ width: desktopColumnWidths.status }">
+              <col :style="{ width: desktopColumnWidths.actions }">
+            </colgroup>
             <TableHeader>
               <TableRow class="border-b border-border/60 hover:bg-transparent">
                 <TableHead
-                  class="font-semibold whitespace-nowrap"
+                  class="px-4 font-semibold whitespace-nowrap"
                   :style="{ width: desktopColumnWidths.name }"
                 >
-                  名称
+                  <div class="flex items-center gap-2">
+                    <Checkbox
+                      class="h-3.5 w-3.5 shrink-0"
+                      :checked="selectAllFilteredPoolKeys || isCurrentPoolKeyPageFullySelected"
+                      :indeterminate="!selectAllFilteredPoolKeys && isCurrentPoolKeyPagePartiallySelected"
+                      :disabled="keyPage.keys.length === 0 || poolKeySelectionBusy || selectAllFilteredPoolKeys"
+                      aria-label="选择当前页账号"
+                      data-testid="pool-select-page-desktop"
+                      @update:checked="toggleCurrentPoolKeyPage"
+                    />
+                    <div class="flex items-baseline gap-2">
+                      <span class="leading-none">名称</span>
+                      <span
+                        v-if="selectedKeyCount > 0"
+                        class="text-[11px] font-medium leading-none tabular-nums text-primary"
+                        aria-live="polite"
+                        data-testid="pool-selected-count-desktop"
+                      >
+                        {{ selectedKeyCountLabel }}
+                      </span>
+                    </div>
+                  </div>
                 </TableHead>
                 <TableHead
                   v-if="showAccountQuotaColumn"
@@ -373,20 +136,66 @@
                   class="px-2 font-semibold text-center whitespace-nowrap"
                   :style="{ width: desktopColumnWidths.stats }"
                 >
-                  统计
+                  <span>统计</span>
                 </TableHead>
-                <TableHead
+                <SortableTableHead
                   class="font-semibold text-center whitespace-nowrap"
+                  column-key="imported_at"
+                  :active-key="sortBy"
+                  :direction="sortOrder"
+                  default-direction="desc"
+                  align="center"
+                  :style="{ width: desktopColumnWidths.imported }"
+                  title="按导入时间排序"
+                  @sort="handleTableSort"
+                >
+                  导入时间
+                </SortableTableHead>
+                <SortableTableHead
+                  class="font-semibold text-center whitespace-nowrap"
+                  column-key="last_used_at"
+                  :active-key="sortBy"
+                  :direction="sortOrder"
+                  default-direction="desc"
+                  align="center"
                   :style="{ width: desktopColumnWidths.lastUsed }"
+                  title="按最后使用时间排序"
+                  @sort="handleTableSort"
                 >
                   最后使用
-                </TableHead>
-                <TableHead
+                </SortableTableHead>
+                <SortableTableHead
                   class="font-semibold text-center whitespace-nowrap"
+                  column-key="score"
+                  :active-key="sortBy"
+                  :direction="sortOrder"
+                  default-direction="desc"
+                  align="center"
+                  :style="{ width: desktopColumnWidths.score }"
+                  title="按分数排序"
+                  @sort="handleTableSort"
+                >
+                  分数
+                </SortableTableHead>
+                <SortableTableHead
+                  class="font-semibold text-center whitespace-nowrap"
+                  column-key="status"
+                  :sortable="false"
+                  align="center"
+                  :filter-active="statusFilter !== 'all'"
+                  filter-title="筛选状态"
+                  filter-content-class="w-44 p-1 rounded-2xl border-border bg-card text-foreground shadow-2xl backdrop-blur-xl"
                   :style="{ width: desktopColumnWidths.status }"
                 >
                   状态
-                </TableHead>
+                  <template #filter="{ close }">
+                    <TableFilterMenu
+                      v-model="statusFilter"
+                      :options="poolKeyStatusFilterOptions"
+                      @select="close"
+                    />
+                  </template>
+                </SortableTableHead>
                 <TableHead
                   class="px-2 font-semibold text-center whitespace-nowrap"
                   :style="{ width: desktopColumnWidths.actions }"
@@ -400,193 +209,223 @@
                 v-for="key in keyPage.keys"
                 :key="key.key_id"
                 class="border-b border-border/40 last:border-b-0 hover:bg-muted/30 transition-colors"
-                :class="getRowClass(key)"
+                :class="getPoolKeyRowClass(key.key_id)"
               >
                 <TableCell
-                  class="py-3"
+                  class="px-4 py-3 align-top"
                 >
-                  <div class="min-w-0">
-                    <div class="flex items-center gap-1.5 min-w-0">
-                      <span class="text-sm truncate block">
-                        {{ key.key_name || '未命名' }}
-                      </span>
-                    </div>
-                    <div class="flex items-center flex-wrap gap-1 text-[11px] text-muted-foreground mt-0.5 min-w-0">
-                      <input
-                        v-if="editingPriorityKeyId === key.key_id"
-                        :value="editingPriorityValue"
-                        type="number"
-                        min="1"
-                        max="999999"
-                        autofocus
-                        class="h-[18px] w-10 rounded border border-primary/50 bg-background px-1 text-[10px] tabular-nums text-foreground outline-none ring-1 ring-primary/30 shrink-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                        @input="(e) => editingPriorityValue = Number((e.target as HTMLInputElement).value || 0)"
-                        @blur="(e) => finishEditInternalPriority(key, e)"
-                        @keydown.enter.prevent="(e) => finishEditInternalPriority(key, e)"
-                        @keydown.esc.prevent="cancelEditInternalPriority"
-                      >
-                      <button
-                        v-else
-                        type="button"
-                        class="h-4 px-1 rounded text-[10px] tabular-nums text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors shrink-0"
-                        title="点击编辑优先级"
-                        @click="startEditInternalPriority(key)"
-                      >
-                        P{{ key.internal_priority ?? 50 }}
-                      </button>
-                      <Button
-                        v-if="key.auth_type === 'oauth'"
-                        variant="ghost"
-                        size="icon"
-                        class="h-4 w-4 shrink-0"
-                        title="下载 OAuth 授权文件"
-                        @click.stop="downloadRefreshToken(key)"
-                      >
-                        <Download class="w-2.5 h-2.5" />
-                      </Button>
-                      <Button
-                        v-else
-                        variant="ghost"
-                        size="icon"
-                        class="h-4 w-4 shrink-0"
-                        title="复制密钥"
-                        @click.stop="copyFullKey(key)"
-                      >
-                        <Copy class="w-2.5 h-2.5" />
-                      </Button>
-                      <span class="font-mono">
-                        {{ key.auth_type === 'oauth' ? '[OAuth Token]' : (key.auth_type === 'service_account' ? '[Service Account]' : '[Key]') }}
-                      </span>
-                      <template v-if="key.auth_type === 'oauth'">
+                  <div class="flex min-w-0 items-center gap-2">
+                    <Checkbox
+                      class="h-3.5 w-3.5 shrink-0"
+                      :checked="isPoolKeySelected(key.key_id)"
+                      :disabled="poolKeySelectionBusy || selectAllFilteredPoolKeys"
+                      :aria-label="`选择账号 ${key.key_name || key.key_id}`"
+                      :data-testid="`pool-select-desktop-${key.key_id}`"
+                      @update:checked="togglePoolKeySelection(key.key_id, $event === true)"
+                    />
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-1.5 min-w-0">
+                        <span class="text-sm truncate block">
+                          {{ key.key_name || '未命名' }}
+                        </span>
+                      </div>
+                      <div class="flex items-center flex-wrap gap-1 text-[11px] text-muted-foreground mt-0.5 min-w-0">
+                        <input
+                          v-if="editingPriorityKeyId === key.key_id"
+                          :value="editingPriorityValue"
+                          type="number"
+                          min="1"
+                          max="999999"
+                          autofocus
+                          class="h-[18px] w-10 rounded border border-primary/50 bg-background px-1 text-[10px] tabular-nums text-foreground outline-none ring-1 ring-primary/30 shrink-0 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                          @input="(e) => editingPriorityValue = Number((e.target as HTMLInputElement).value || 0)"
+                          @blur="(e) => finishEditInternalPriority(key, e)"
+                          @keydown.enter.prevent="(e) => finishEditInternalPriority(key, e)"
+                          @keydown.esc.prevent="cancelEditInternalPriority"
+                        >
+                        <button
+                          v-else
+                          type="button"
+                          class="h-4 px-1 rounded text-[10px] tabular-nums text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors shrink-0"
+                          title="点击编辑优先级"
+                          @click="startEditInternalPriority(key)"
+                        >
+                          P{{ key.internal_priority ?? 50 }}
+                        </button>
                         <Button
+                          v-if="canExportOAuthCredential(key)"
                           variant="ghost"
                           size="icon"
                           class="h-4 w-4 shrink-0"
-                          :disabled="refreshingOAuthKeyId === key.key_id"
-                          :title="getKeyOAuthExpires(key)?.isInvalid ? '重新授权' : '刷新 Token'"
-                          @click.stop="handleRefreshOAuth(key)"
+                          title="下载 OAuth 授权文件"
+                          @click.stop="downloadRefreshToken(key)"
                         >
-                          <RefreshCw
-                            class="w-2.5 h-2.5"
-                            :class="{ 'animate-spin': refreshingOAuthKeyId === key.key_id }"
-                          />
+                          <Download class="w-2.5 h-2.5" />
                         </Button>
-                        <span
-                          v-if="getKeyOAuthExpires(key)"
-                          class="text-[10px]"
-                          :class="{
-                            'text-destructive': getKeyOAuthExpires(key)?.isInvalid || getKeyOAuthExpires(key)?.isExpired,
-                            'text-warning': getKeyOAuthExpires(key)?.isExpiringSoon && !getKeyOAuthExpires(key)?.isExpired && !getKeyOAuthExpires(key)?.isInvalid,
-                            'text-muted-foreground': !getKeyOAuthExpires(key)?.isExpired && !getKeyOAuthExpires(key)?.isExpiringSoon && !getKeyOAuthExpires(key)?.isInvalid
-                          }"
-                          :title="getOAuthStatusTitle(key)"
+                        <Button
+                          v-else-if="key.agent_identity !== true"
+                          variant="ghost"
+                          size="icon"
+                          class="h-4 w-4 shrink-0"
+                          title="复制密钥"
+                          @click.stop="copyFullKey(key)"
                         >
-                          {{ getKeyOAuthExpires(key)?.text }}
+                          <Copy class="w-2.5 h-2.5" />
+                        </Button>
+                        <span class="font-mono">
+                          {{ getProviderMaskedSecretLabel(key, selectedProviderType) }}
                         </span>
-                      </template>
-                      <Badge
-                        v-if="key.oauth_plan_type"
-                        variant="outline"
-                        class="text-[9px] px-1 py-0 h-4 shrink-0"
-                        :class="getOAuthPlanTypeClass(key.oauth_plan_type)"
-                      >
-                        {{ formatOAuthPlanType(key.oauth_plan_type) }}
-                      </Badge>
-                      <Badge
-                        v-if="getOAuthOrgBadge(key)"
-                        variant="secondary"
-                        class="text-[9px] px-1 py-0 h-4 shrink-0"
-                        :title="getOAuthOrgBadge(key)?.id"
-                      >
-                        {{ getOAuthOrgBadge(key)?.label }}
-                      </Badge>
+                        <template v-if="keyUiStateMap[key.key_id]?.showOAuthRefreshControl">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            class="h-4 w-4 shrink-0"
+                            :disabled="refreshingOAuthKeyId === key.key_id || !keyUiStateMap[key.key_id]?.canRefreshToken"
+                            :title="keyUiStateMap[key.key_id]?.oauthRefreshButtonTitle || ''"
+                            @click.stop="handleRefreshOAuth(key)"
+                          >
+                            <RefreshCw
+                              class="w-2.5 h-2.5"
+                              :class="{ 'animate-spin': refreshingOAuthKeyId === key.key_id }"
+                            />
+                          </Button>
+                          <span
+                            v-if="keyUiStateMap[key.key_id]?.visibleOAuthState"
+                            class="text-[10px]"
+                            :class="{
+                              'text-destructive': keyUiStateMap[key.key_id]?.visibleOAuthState?.isInvalid || keyUiStateMap[key.key_id]?.visibleOAuthState?.isExpired,
+                              'text-warning': keyUiStateMap[key.key_id]?.visibleOAuthState?.isExpiringSoon && !keyUiStateMap[key.key_id]?.visibleOAuthState?.isExpired && !keyUiStateMap[key.key_id]?.visibleOAuthState?.isInvalid,
+                              'text-muted-foreground': !keyUiStateMap[key.key_id]?.visibleOAuthState?.isExpired && !keyUiStateMap[key.key_id]?.visibleOAuthState?.isExpiringSoon && !keyUiStateMap[key.key_id]?.visibleOAuthState?.isInvalid
+                            }"
+                            :title="keyUiStateMap[key.key_id]?.oauthStatusTitle || ''"
+                          >
+                            {{ keyUiStateMap[key.key_id]?.visibleOAuthState?.text }}
+                          </span>
+                        </template>
+                        <Badge
+                          v-if="keyUiStateMap[key.key_id]?.planLabel"
+                          variant="outline"
+                          class="text-[9px] px-1 py-0 h-4 shrink-0"
+                          :class="keyUiStateMap[key.key_id]?.planClass || ''"
+                        >
+                          {{ keyUiStateMap[key.key_id]?.planLabel }}
+                        </Badge>
+                        <Badge
+                          v-if="keyUiStateMap[key.key_id]?.oauthOrgBadge"
+                          variant="secondary"
+                          class="text-[9px] px-1 py-0 h-4 shrink-0"
+                          :title="keyUiStateMap[key.key_id]?.oauthOrgBadge?.title"
+                        >
+                          {{ keyUiStateMap[key.key_id]?.oauthOrgBadge?.label }}
+                        </Badge>
+                      </div>
                     </div>
                   </div>
                 </TableCell>
                 <TableCell
                   v-if="showAccountQuotaColumn"
-                  class="py-3 align-middle"
+                  class="py-3 align-top"
                 >
-                  <div
-                    v-if="quotaProgressMap[key.key_id]?.length"
-                    class="space-y-1 max-w-[220px]"
-                  >
-                    <div
-                      v-for="(item, idx) in quotaProgressMap[key.key_id].slice(0, 2)"
-                      :key="`${key.key_id}-quota-${idx}`"
-                      class="w-full"
-                    >
-                      <div class="min-h-4 grid grid-cols-[20px_minmax(0,1fr)_42px] items-center gap-1 text-[10px] leading-tight">
-                        <span
-                          class="text-muted-foreground whitespace-nowrap text-right tabular-nums"
-                          :title="getQuotaProgressTooltip(item)"
-                        >
-                          {{ getQuotaProgressLabel(item.label) }}
-                        </span>
-                        <div class="relative flex-1 h-1.5 bg-border rounded-full overflow-hidden">
-                          <div
-                            class="absolute left-0 top-0 h-full transition-all duration-300"
-                            :class="getQuotaRemainingBarColorByRemaining(item.remainingPercent)"
-                            :style="{ width: `${item.remainingPercent}%` }"
-                          />
-                        </div>
-                        <span
-                          class="tabular-nums text-right whitespace-nowrap"
-                          :class="getQuotaRemainingClassByRemaining(item.remainingPercent)"
-                        >
-                          {{ item.remainingPercent.toFixed(1) }}%
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <span
-                    v-else-if="key.account_quota"
-                    :class="getQuotaTextClass(key.account_quota)"
-                  >
-                    {{ key.account_quota }}
-                  </span>
-                  <span
-                    v-else
-                    class="text-xs text-muted-foreground"
-                  >-</span>
+                  <PoolKeyQuotaPanel
+                    :items="quotaProgressDisplayMap[key.key_id] || []"
+                    :account-quota-text="keyUiStateMap[key.key_id]?.accountQuotaText"
+                    :fallback-text="keyUiStateMap[key.key_id]?.quotaFallbackText"
+                    :text-class="keyUiStateMap[key.key_id]?.quotaTextClass || ''"
+                    :reset-credit-text="getCodexResetCreditCountText(key)"
+                    :reset-credit-items="getCodexResetCreditItemTexts(key)"
+                    :can-consume-reset-credit="canConsumeCodexResetCredit(key)"
+                    :consuming-reset-credit="consumingCodexResetCreditKeyId === key.key_id"
+                    @consume-reset-credit="handleConsumeCodexResetCredit(key)"
+                  />
                 </TableCell>
-                <TableCell class="py-3 px-2 align-middle">
-                  <div class="grid grid-rows-3 gap-0.5 w-[136px] mx-auto text-[10px] leading-4">
-                    <div class="flex items-center justify-between gap-2">
-                      <span class="text-muted-foreground">请求</span>
-                      <span class="tabular-nums text-foreground/90">
-                        {{ formatStatInteger(key.request_count) }}
-                      </span>
-                    </div>
-                    <div class="flex items-center justify-between gap-2">
-                      <span class="text-muted-foreground">Token</span>
-                      <span class="tabular-nums text-foreground/90">
-                        {{ formatTokenCount(key.total_tokens) }}
-                      </span>
-                    </div>
-                    <div class="flex items-center justify-between gap-2">
-                      <span class="text-muted-foreground">费用</span>
-                      <span class="tabular-nums text-foreground/90">
-                        {{ formatStatUsd(key.total_cost_usd) }}
-                      </span>
-                    </div>
-                  </div>
+                <TableCell class="py-3 px-2 align-top">
+                  <PoolKeyStatsPanel
+                    :cycle="isPoolKeyCycleStatsDisplay(key)"
+                    :cycle-groups="getPoolKeyCycleStatsGroups(key)"
+                    :account-metrics="getPoolKeyAccountStatsMetrics(key)"
+                  />
                 </TableCell>
-                <TableCell class="py-3 text-center">
+                <TableCell class="py-3 text-center align-top">
                   <span class="text-[10px] text-muted-foreground whitespace-nowrap">
-                    {{ key.last_used_at ? formatRelativeTime(key.last_used_at) : '-' }}
+                    {{ keyUiStateMap[key.key_id]?.importedAtRelative || '-' }}
                   </span>
                 </TableCell>
-                <TableCell class="py-3 text-center">
+                <TableCell class="py-3 text-center align-top">
+                  <span class="text-[10px] text-muted-foreground whitespace-nowrap">
+                    {{ keyUiStateMap[key.key_id]?.lastUsedRelative || '-' }}
+                  </span>
+                </TableCell>
+                <TableCell class="py-3 text-center align-top">
+                  <div class="inline-flex items-center justify-center gap-1">
+                    <span class="font-mono text-xs tabular-nums text-foreground/90">
+                      {{ formatPoolScore(key.pool_score?.score) }}
+                    </span>
+                    <Popover
+                      v-if="key.pool_score"
+                      :open="scoreDesktopPopoverOpenKeyId === key.key_id"
+                      @update:open="(open: boolean) => handleScoreDesktopPopoverToggle(key.key_id, open)"
+                    >
+                      <PopoverTrigger as-child>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          class="h-5 w-5 rounded-full border border-transparent text-muted-foreground/80 hover:border-border/60 hover:bg-muted/60 hover:text-foreground"
+                          title="查看评分计算结果"
+                          aria-label="查看评分计算结果"
+                          @click.stop
+                        >
+                          <CircleHelp class="h-3.5 w-3.5" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        v-if="scoreDesktopPopoverOpenKeyId === key.key_id"
+                        class="w-[22rem] max-w-[calc(100vw-1rem)] overflow-hidden rounded-xl border-border/60 bg-card/95 p-0 text-card-foreground shadow-xl shadow-black/5 backdrop-blur supports-[backdrop-filter]:bg-card/90"
+                        side="bottom"
+                        align="end"
+                        :side-offset="8"
+                      >
+                        <div class="text-left">
+                          <div class="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/30 px-3 py-2.5">
+                            <span class="text-xs font-semibold text-foreground">评分计算结果</span>
+                            <span class="font-mono text-xs tabular-nums text-foreground/90">
+                              {{ formatPoolScore(key.pool_score?.score) }}
+                            </span>
+                          </div>
+                          <div class="space-y-2 px-3 py-2.5">
+                            <div class="flex flex-wrap items-center gap-1.5">
+                              <Badge
+                                variant="outline"
+                                class="h-5 rounded-md border-border/60 bg-background/60 px-2 text-[10px] font-normal"
+                              >
+                                {{ getPoolScoreHardStateLabel(key.pool_score?.hard_state) }}
+                              </Badge>
+                              <Badge
+                                variant="secondary"
+                                class="h-5 rounded-md px-2 text-[10px] font-normal"
+                              >
+                                {{ getPoolScoreProbeStatusLabel(key.pool_score?.probe_status) }}
+                              </Badge>
+                              <span class="text-[10px] text-muted-foreground">
+                                更新 {{ formatUnixSeconds(key.pool_score?.updated_at) }}
+                              </span>
+                            </div>
+                            <pre class="max-h-56 overflow-auto rounded-md border border-border/50 bg-muted/30 px-3 py-2 font-mono text-[11px] leading-5 text-muted-foreground whitespace-pre-wrap break-words">{{ formatPoolScoreReason(key.pool_score?.score_reason) }}</pre>
+                          </div>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                </TableCell>
+                <TableCell class="py-3 text-center align-top">
                   <Badge
-                    :variant="getSchedulingBadgeVariant(key)"
+                    :variant="keyUiStateMap[key.key_id]?.schedulingBadgeVariant || 'default'"
                     class="text-[10px]"
-                    :title="getSchedulingTitle(key)"
+                    :title="keyUiStateMap[key.key_id]?.schedulingTitle || ''"
                   >
-                    {{ getSchedulingBadgeLabel(key) }}
+                    {{ keyUiStateMap[key.key_id]?.schedulingBadgeLabel }}
                   </Badge>
                 </TableCell>
-                <TableCell class="py-3 px-2 align-middle">
+                <TableCell class="py-3 px-2 align-top">
                   <div class="flex justify-center gap-0.5">
                     <Button
                       v-if="key.cooldown_reason"
@@ -599,17 +438,18 @@
                       <RefreshCw class="w-3.5 h-3.5" />
                     </Button>
                     <Button
-                      v-if="key.circuit_breaker_open || (key.health_score ?? 1) < 0.5"
+                      v-if="canResetCycleStats(key)"
                       variant="ghost"
                       size="icon"
-                      class="h-7 w-7 text-green-600"
-                      :disabled="recoveringHealthKeyId === key.key_id"
-                      title="刷新健康状态"
-                      @click="handleRecoverKey(key)"
+                      class="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      :disabled="resettingCycleKeyId === key.key_id"
+                      title="重置周期统计"
+                      data-testid="pool-reset-cycle-stats"
+                      @click="handleResetCycleStats(key)"
                     >
-                      <RefreshCw
+                      <RotateCcw
                         class="w-3.5 h-3.5"
-                        :class="{ 'animate-spin': recoveringHealthKeyId === key.key_id }"
+                        :class="{ 'animate-spin': resettingCycleKeyId === key.key_id }"
                       />
                     </Button>
                     <Button
@@ -683,6 +523,8 @@
                       class="h-7 w-7 text-foreground hover:text-foreground"
                       :disabled="togglingKeyId === key.key_id"
                       :title="key.is_active ? '禁用' : '启用'"
+                      :aria-label="key.is_active ? '禁用账号' : '启用账号'"
+                      :data-testid="`pool-toggle-active-desktop-${key.key_id}`"
                       @click="toggleKeyActive(key)"
                     >
                       <Power class="w-3.5 h-3.5" />
@@ -713,298 +555,329 @@
             v-for="key in keyPage.keys"
             :key="key.key_id"
             class="p-4 sm:p-5 hover:bg-muted/30 transition-colors"
-            :class="getRowClass(key)"
+            :class="getPoolKeyRowClass(key.key_id)"
           >
-            <div class="flex items-center gap-3">
-              <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="text-sm font-medium truncate">
-                    {{ key.key_name || '未命名' }}
-                  </span>
-                  <Badge
-                    :variant="getSchedulingBadgeVariant(key)"
-                    class="text-[10px] shrink-0"
-                    :title="getSchedulingTitle(key)"
-                  >
-                    {{ getSchedulingBadgeLabel(key) }}
-                  </Badge>
-                  <span
-                    class="text-[10px] font-medium tabular-nums"
-                    :class="getHealthScoreColor(key.health_score ?? 1)"
-                  >
-                    {{ ((key.health_score ?? 1) * 100).toFixed(0) }}%
-                  </span>
+            <div class="space-y-3">
+              <div class="flex items-center gap-1.5">
+                <Checkbox
+                  class="h-3.5 w-3.5 shrink-0"
+                  :checked="isPoolKeySelected(key.key_id)"
+                  :disabled="poolKeySelectionBusy || selectAllFilteredPoolKeys"
+                  :aria-label="`选择账号 ${key.key_name || key.key_id}`"
+                  :data-testid="`pool-select-mobile-${key.key_id}`"
+                  @update:checked="togglePoolKeySelection(key.key_id, $event === true)"
+                />
+                <div class="min-w-0 truncate text-sm font-medium">
+                  {{ key.key_name || '未命名' }}
                 </div>
-                <div class="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5 min-w-0">
+              </div>
+
+              <div class="flex flex-wrap items-center gap-1.5">
+                <Badge
+                  :variant="keyUiStateMap[key.key_id]?.schedulingBadgeVariant || 'default'"
+                  class="text-[10px] shrink-0"
+                  :title="keyUiStateMap[key.key_id]?.schedulingTitle || ''"
+                >
+                  {{ keyUiStateMap[key.key_id]?.schedulingBadgeLabel }}
+                </Badge>
+                <span
+                  v-if="key.cooldown_ttl_seconds"
+                  class="inline-flex items-center rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium leading-4 text-red-700 dark:text-red-300"
+                >
+                  冷却 {{ formatTTL(key.cooldown_ttl_seconds) }}
+                </span>
+                <template
+                  v-for="item in keyUiStateMap[key.key_id]?.mobileTagItems || []"
+                  :key="`${key.key_id}-${item.key}`"
+                >
                   <button
+                    v-if="item.key === 'priority'"
                     type="button"
-                    class="h-4 px-1 rounded text-[10px] tabular-nums text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors shrink-0"
-                    title="点击修改优先级"
+                    class="inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[10px] font-medium leading-4 hover:border-primary/40 hover:text-foreground"
+                    :class="getMobileTagClass(item)"
+                    :title="`${item.label}，点击编辑优先级`"
                     @click="quickEditInternalPriority(key)"
                   >
-                    P{{ key.internal_priority ?? 50 }}
+                    {{ item.label }}
                   </button>
+                  <Badge
+                    v-else-if="item.key === 'plan'"
+                    variant="outline"
+                    class="text-[9px] px-1 py-0 h-4 shrink-0"
+                    :class="keyUiStateMap[key.key_id]?.planClass || ''"
+                  >
+                    {{ item.label }}
+                  </Badge>
+                  <Badge
+                    v-else-if="item.key === 'org'"
+                    variant="secondary"
+                    class="text-[9px] px-1 py-0 h-4 shrink-0"
+                    :title="keyUiStateMap[key.key_id]?.oauthOrgBadge?.title"
+                  >
+                    {{ item.label }}
+                  </Badge>
+                  <span
+                    v-else
+                    class="inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[10px] font-medium leading-4"
+                    :class="getMobileTagClass(item)"
+                    :title="item.label"
+                  >
+                    {{ item.label }}
+                  </span>
+                </template>
+              </div>
+
+              <div class="overflow-x-auto rounded-xl border border-border/50 bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+                <div class="space-y-1 text-center">
+                  <PoolKeyStatsPanel
+                    :cycle="isPoolKeyCycleStatsDisplay(key)"
+                    :cycle-groups="getPoolKeyCycleStatsGroups(key)"
+                    :account-metrics="getPoolKeyAccountStatsMetrics(key)"
+                    variant="mobile"
+                  />
+                  <div class="flex items-center justify-between gap-2 border-t border-border/40 pt-1 mt-1">
+                    <span class="text-muted-foreground">导入</span>
+                    <span class="font-medium text-foreground/90">{{ keyUiStateMap[key.key_id]?.importedAtRelative || '-' }}</span>
+                  </div>
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-muted-foreground">最后使用</span>
+                    <span class="font-medium text-foreground/90">{{ keyUiStateMap[key.key_id]?.lastUsedRelative || '-' }}</span>
+                  </div>
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-muted-foreground">分数</span>
+                    <div class="flex items-center gap-1">
+                      <span class="font-mono font-medium text-foreground/90 tabular-nums">
+                        {{ formatPoolScore(key.pool_score?.score) }}
+                      </span>
+                      <Popover
+                        v-if="key.pool_score"
+                        :open="scoreMobilePopoverOpenKeyId === key.key_id"
+                        @update:open="(open: boolean) => handleScoreMobilePopoverToggle(key.key_id, open)"
+                      >
+                        <PopoverTrigger as-child>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            class="h-5 w-5 rounded-full border border-transparent text-muted-foreground/80 hover:border-border/60 hover:bg-muted/60 hover:text-foreground"
+                            title="查看评分计算结果"
+                            aria-label="查看评分计算结果"
+                            @click.stop
+                          >
+                            <CircleHelp class="h-3.5 w-3.5" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                          v-if="scoreMobilePopoverOpenKeyId === key.key_id"
+                          class="w-[22rem] max-w-[calc(100vw-1rem)] overflow-hidden rounded-xl border-border/60 bg-card/95 p-0 text-card-foreground shadow-xl shadow-black/5 backdrop-blur supports-[backdrop-filter]:bg-card/90"
+                          side="bottom"
+                          align="end"
+                          :side-offset="8"
+                        >
+                          <div class="text-left">
+                            <div class="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/30 px-3 py-2.5">
+                              <span class="text-xs font-semibold text-foreground">评分计算结果</span>
+                              <span class="font-mono text-xs tabular-nums text-foreground/90">
+                                {{ formatPoolScore(key.pool_score?.score) }}
+                              </span>
+                            </div>
+                            <div class="space-y-2 px-3 py-2.5">
+                              <div class="flex flex-wrap items-center gap-1.5">
+                                <Badge
+                                  variant="outline"
+                                  class="h-5 rounded-md border-border/60 bg-background/60 px-2 text-[10px] font-normal"
+                                >
+                                  {{ getPoolScoreHardStateLabel(key.pool_score?.hard_state) }}
+                                </Badge>
+                                <Badge
+                                  variant="secondary"
+                                  class="h-5 rounded-md px-2 text-[10px] font-normal"
+                                >
+                                  {{ getPoolScoreProbeStatusLabel(key.pool_score?.probe_status) }}
+                                </Badge>
+                                <span class="text-[10px] text-muted-foreground">
+                                  更新 {{ formatUnixSeconds(key.pool_score?.updated_at) }}
+                                </span>
+                              </div>
+                              <pre class="max-h-56 overflow-auto rounded-md border border-border/50 bg-muted/30 px-3 py-2 font-mono text-[11px] leading-5 text-muted-foreground whitespace-pre-wrap break-words">{{ formatPoolScoreReason(key.pool_score?.score_reason) }}</pre>
+                            </div>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <PoolKeyQuotaPanel
+                v-if="showAccountQuotaColumn"
+                :items="quotaProgressDisplayMap[key.key_id] || []"
+                :account-quota-text="keyUiStateMap[key.key_id]?.accountQuotaText"
+                :fallback-text="keyUiStateMap[key.key_id]?.quotaFallbackText"
+                :text-class="keyUiStateMap[key.key_id]?.quotaTextClass || ''"
+                :reset-credit-text="getCodexResetCreditCountText(key)"
+                :reset-credit-items="getCodexResetCreditItemTexts(key)"
+                :can-consume-reset-credit="canConsumeCodexResetCredit(key)"
+                :consuming-reset-credit="consumingCodexResetCreditKeyId === key.key_id"
+                variant="mobile"
+                @consume-reset-credit="handleConsumeCodexResetCredit(key)"
+              />
+
+              <div class="flex items-center gap-0.5">
+                <div
+                  v-for="actionId in keyUiStateMap[key.key_id]?.mobileActionIds || []"
+                  :key="`${key.key_id}-${actionId}`"
+                  class="min-w-0 flex-1 flex justify-center"
+                >
                   <Button
-                    v-if="key.auth_type === 'oauth'"
+                    v-if="actionId === 'copy_or_download' && canExportOAuthCredential(key)"
                     variant="ghost"
                     size="icon"
-                    class="h-4 w-4 shrink-0"
+                    class="h-7 w-7 shrink-0"
                     title="下载 OAuth 授权文件"
                     @click.stop="downloadRefreshToken(key)"
                   >
-                    <Download class="w-2.5 h-2.5" />
+                    <Download class="w-3.5 h-3.5" />
                   </Button>
                   <Button
-                    v-else
+                    v-else-if="actionId === 'copy_or_download' && key.agent_identity !== true"
                     variant="ghost"
                     size="icon"
-                    class="h-4 w-4 shrink-0"
+                    class="h-7 w-7 shrink-0"
                     title="复制密钥"
                     @click.stop="copyFullKey(key)"
                   >
-                    <Copy class="w-2.5 h-2.5" />
+                    <Copy class="w-3.5 h-3.5" />
                   </Button>
-                  <span class="font-mono">
-                    {{ key.auth_type === 'oauth' ? '[OAuth Token]' : (key.auth_type === 'service_account' ? '[Service Account]' : '[Key]') }}
-                  </span>
-                  <template v-if="key.auth_type === 'oauth'">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      class="h-4 w-4 shrink-0"
-                      :disabled="refreshingOAuthKeyId === key.key_id"
-                      :title="getKeyOAuthExpires(key)?.isInvalid ? '重新授权' : '刷新 Token'"
-                      @click.stop="handleRefreshOAuth(key)"
-                    >
-                      <RefreshCw
-                        class="w-2.5 h-2.5"
-                        :class="{ 'animate-spin': refreshingOAuthKeyId === key.key_id }"
-                      />
-                    </Button>
-                    <span
-                      v-if="getKeyOAuthExpires(key)"
-                      class="text-[10px]"
-                      :class="{
-                        'text-destructive': getKeyOAuthExpires(key)?.isInvalid || getKeyOAuthExpires(key)?.isExpired,
-                        'text-warning': getKeyOAuthExpires(key)?.isExpiringSoon && !getKeyOAuthExpires(key)?.isExpired && !getKeyOAuthExpires(key)?.isInvalid,
-                        'text-muted-foreground': !getKeyOAuthExpires(key)?.isExpired && !getKeyOAuthExpires(key)?.isExpiringSoon && !getKeyOAuthExpires(key)?.isInvalid
-                      }"
-                      :title="getOAuthStatusTitle(key)"
-                    >
-                      {{ getKeyOAuthExpires(key)?.text }}
-                    </span>
-                  </template>
-                  <Badge
-                    v-if="key.oauth_plan_type"
-                    variant="outline"
-                    class="text-[9px] px-1 py-0 h-4 shrink-0"
-                    :class="getOAuthPlanTypeClass(key.oauth_plan_type)"
+                  <Button
+                    v-else-if="actionId === 'refresh_token'"
+                    variant="ghost"
+                    size="icon"
+                    class="h-7 w-7 shrink-0"
+                    :disabled="refreshingOAuthKeyId === key.key_id || !keyUiStateMap[key.key_id]?.canRefreshToken"
+                    :title="keyUiStateMap[key.key_id]?.oauthRefreshButtonTitle || ''"
+                    @click.stop="handleRefreshOAuth(key)"
                   >
-                    {{ formatOAuthPlanType(key.oauth_plan_type) }}
-                  </Badge>
-                  <Badge
-                    v-if="getOAuthOrgBadge(key)"
-                    variant="secondary"
-                    class="text-[9px] px-1 py-0 h-4 shrink-0"
-                    :title="getOAuthOrgBadge(key)?.id"
+                    <RefreshCw
+                      class="w-3.5 h-3.5"
+                      :class="{ 'animate-spin': refreshingOAuthKeyId === key.key_id }"
+                    />
+                  </Button>
+                  <Button
+                    v-else-if="actionId === 'clear_cooldown'"
+                    variant="ghost"
+                    size="icon"
+                    class="h-7 w-7 shrink-0 text-muted-foreground hover:text-green-600"
+                    title="清除冷却"
+                    @click="clearCooldown(key.key_id)"
                   >
-                    {{ getOAuthOrgBadge(key)?.label }}
-                  </Badge>
-                </div>
-              </div>
-              <div class="flex items-center gap-0.5 shrink-0 flex-wrap justify-end max-w-[210px]">
-                <Button
-                  v-if="key.cooldown_reason"
-                  variant="ghost"
-                  size="icon"
-                  class="h-7 w-7 text-muted-foreground hover:text-green-600"
-                  title="清除冷却"
-                  @click="clearCooldown(key.key_id)"
-                >
-                  <RefreshCw class="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  v-if="key.circuit_breaker_open || (key.health_score ?? 1) < 0.5"
-                  variant="ghost"
-                  size="icon"
-                  class="h-7 w-7 text-green-600"
-                  :disabled="recoveringHealthKeyId === key.key_id"
-                  title="刷新健康状态"
-                  @click="handleRecoverKey(key)"
-                >
-                  <RefreshCw
-                    class="w-3.5 h-3.5"
-                    :class="{ 'animate-spin': recoveringHealthKeyId === key.key_id }"
-                  />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-7 w-7"
-                  title="模型权限"
-                  @click="handleKeyPermissions(key)"
-                >
-                  <Shield class="w-3.5 h-3.5" />
-                </Button>
-                <Popover
-                  :open="proxyMobilePopoverOpenKeyId === key.key_id"
-                  @update:open="(v: boolean) => handleProxyMobilePopoverToggle(key.key_id, v)"
-                >
-                  <PopoverTrigger as-child>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      class="h-7 w-7"
-                      :class="key.proxy?.node_id ? 'text-blue-500' : ''"
-                      :disabled="savingProxyKeyId === key.key_id"
-                      :title="key.proxy?.node_id ? `代理: ${getKeyProxyNodeName(key)}` : '设置代理节点'"
-                      @click.stop
-                    >
-                      <Globe class="w-3.5 h-3.5" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    class="w-72 p-3"
-                    side="bottom"
-                    align="end"
+                    <RefreshCw class="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    v-else-if="actionId === 'permissions'"
+                    variant="ghost"
+                    size="icon"
+                    class="h-7 w-7 shrink-0"
+                    title="模型权限"
+                    @click="handleKeyPermissions(key)"
                   >
-                    <div class="space-y-2">
-                      <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium">代理节点</span>
-                        <Button
-                          v-if="key.proxy?.node_id"
-                          variant="ghost"
-                          size="sm"
-                          class="h-6 px-2 text-[10px] text-muted-foreground"
-                          :disabled="savingProxyKeyId === key.key_id"
-                          @click="clearKeyProxy(key)"
-                        >
-                          清除
-                        </Button>
-                      </div>
-                      <ProxyNodeSelect
-                        :model-value="key.proxy?.node_id || ''"
-                        trigger-class="h-8"
-                        @update:model-value="(v: string) => setKeyProxy(key, v)"
-                      />
-                      <p class="text-[10px] text-muted-foreground">
-                        {{ key.proxy?.node_id ? '当前使用独立代理' : '未设置，使用提供商级别代理' }}
-                      </p>
-                    </div>
-                  </PopoverContent>
-                </Popover>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-7 w-7"
-                  title="编辑账号"
-                  @click="handleEditKey(key)"
-                >
-                  <SquarePen class="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-7 w-7 text-foreground hover:text-foreground"
-                  :disabled="togglingKeyId === key.key_id"
-                  :title="key.is_active ? '禁用' : '启用'"
-                  @click="toggleKeyActive(key)"
-                >
-                  <Power class="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  class="h-7 w-7 text-destructive hover:text-destructive"
-                  :disabled="deletingKeyId === key.key_id"
-                  title="删除账号"
-                  @click="handleDeleteKey(key)"
-                >
-                  <Trash2 class="w-3.5 h-3.5" />
-                </Button>
-              </div>
-            </div>
-            <div
-              class="mt-2.5 grid gap-2"
-              :class="showAccountQuotaColumn ? 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4' : 'grid-cols-2 sm:grid-cols-3'"
-            >
-              <div class="p-2 bg-muted/50 rounded-lg text-xs">
-                <div class="text-muted-foreground mb-0.5">
-                  最后使用
-                </div>
-                <div class="text-[11px]">
-                  {{ key.last_used_at ? formatRelativeTime(key.last_used_at) : '-' }}
-                </div>
-              </div>
-              <div class="p-2 bg-muted/50 rounded-lg text-xs">
-                <div class="text-muted-foreground mb-0.5">
-                  统计
-                </div>
-                <div class="space-y-0.5 text-[10px]">
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="text-muted-foreground">请求</span>
-                    <span class="tabular-nums">{{ formatStatInteger(key.request_count) }}</span>
-                  </div>
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="text-muted-foreground">Token</span>
-                    <span class="tabular-nums">{{ formatTokenCount(key.total_tokens) }}</span>
-                  </div>
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="text-muted-foreground">费用</span>
-                    <span class="tabular-nums">{{ formatStatUsd(key.total_cost_usd) }}</span>
-                  </div>
-                </div>
-              </div>
-              <div
-                v-if="showAccountQuotaColumn"
-                class="p-2 bg-muted/50 rounded-lg text-xs"
-              >
-                <div class="text-muted-foreground mb-0.5">
-                  配额
-                </div>
-                <div
-                  v-if="quotaProgressMap[key.key_id]?.length"
-                  class="space-y-1"
-                >
-                  <div
-                    v-for="(item, idx) in quotaProgressMap[key.key_id]"
-                    :key="`${key.key_id}-quota-mobile-${idx}`"
-                    class="w-full"
+                    <Shield class="w-3.5 h-3.5" />
+                  </Button>
+                  <Popover
+                    v-else-if="actionId === 'proxy'"
+                    :open="proxyMobilePopoverOpenKeyId === key.key_id"
+                    @update:open="(v: boolean) => handleProxyMobilePopoverToggle(key.key_id, v)"
                   >
-                    <div class="grid grid-cols-[20px_minmax(0,1fr)_42px] items-center gap-1 text-[10px] leading-tight">
-                      <span
-                        class="text-muted-foreground whitespace-nowrap text-right tabular-nums"
-                        :title="getQuotaProgressTooltip(item)"
+                    <PopoverTrigger as-child>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        class="h-7 w-7 shrink-0"
+                        :class="key.proxy?.node_id ? 'text-blue-500' : ''"
+                        :disabled="savingProxyKeyId === key.key_id"
+                        :title="key.proxy?.node_id ? `代理: ${getKeyProxyNodeName(key)}` : '设置代理节点'"
+                        @click.stop
                       >
-                        {{ getQuotaProgressLabel(item.label) }}
-                      </span>
-                      <div class="relative flex-1 h-1.5 bg-border rounded-full overflow-hidden">
-                        <div
-                          class="absolute left-0 top-0 h-full transition-all duration-300"
-                          :class="getQuotaRemainingBarColorByRemaining(item.remainingPercent)"
-                          :style="{ width: `${item.remainingPercent}%` }"
+                        <Globe class="w-3.5 h-3.5" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      class="w-72 p-3"
+                      side="bottom"
+                      align="end"
+                    >
+                      <div class="space-y-2">
+                        <div class="flex items-center justify-between">
+                          <span class="text-xs font-medium">代理节点</span>
+                          <Button
+                            v-if="key.proxy?.node_id"
+                            variant="ghost"
+                            size="sm"
+                            class="h-6 px-2 text-[10px] text-muted-foreground"
+                            :disabled="savingProxyKeyId === key.key_id"
+                            @click="clearKeyProxy(key)"
+                          >
+                            清除
+                          </Button>
+                        </div>
+                        <ProxyNodeSelect
+                          :model-value="key.proxy?.node_id || ''"
+                          trigger-class="h-8"
+                          @update:model-value="(v: string) => setKeyProxy(key, v)"
                         />
+                        <p class="text-[10px] text-muted-foreground">
+                          {{ key.proxy?.node_id ? '当前使用独立代理' : '未设置，使用提供商级别代理' }}
+                        </p>
                       </div>
-                      <span
-                        class="tabular-nums text-right whitespace-nowrap"
-                        :class="getQuotaRemainingClassByRemaining(item.remainingPercent)"
-                      >
-                        {{ item.remainingPercent.toFixed(1) }}%
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <div
-                  v-else-if="key.account_quota"
-                  :class="getQuotaTextClass(key.account_quota)"
-                >
-                  {{ key.account_quota }}
-                </div>
-                <div
-                  v-else
-                  class="text-muted-foreground"
-                >
-                  -
+                    </PopoverContent>
+                  </Popover>
+                  <Button
+                    v-else-if="actionId === 'reset_cycle_stats'"
+                    variant="ghost"
+                    size="icon"
+                    class="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                    :disabled="resettingCycleKeyId === key.key_id"
+                    title="重置周期统计"
+                    @click="handleResetCycleStats(key)"
+                  >
+                    <RotateCcw
+                      class="w-3.5 h-3.5"
+                      :class="{ 'animate-spin': resettingCycleKeyId === key.key_id }"
+                    />
+                  </Button>
+                  <Button
+                    v-else-if="actionId === 'edit'"
+                    variant="ghost"
+                    size="icon"
+                    class="h-7 w-7 shrink-0"
+                    title="编辑账号"
+                    @click="handleEditKey(key)"
+                  >
+                    <SquarePen class="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    v-else-if="actionId === 'toggle'"
+                    variant="ghost"
+                    size="icon"
+                    class="h-7 w-7 shrink-0 text-foreground hover:text-foreground"
+                    :disabled="togglingKeyId === key.key_id"
+                    :title="key.is_active ? '禁用' : '启用'"
+                    :aria-label="key.is_active ? '禁用账号' : '启用账号'"
+                    :data-testid="`pool-toggle-active-mobile-${key.key_id}`"
+                    @click="toggleKeyActive(key)"
+                  >
+                    <Power class="w-3.5 h-3.5" />
+                  </Button>
+                  <Button
+                    v-else-if="actionId === 'delete'"
+                    variant="ghost"
+                    size="icon"
+                    class="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                    :disabled="deletingKeyId === key.key_id"
+                    title="删除账号"
+                    @click="handleDeleteKey(key)"
+                  >
+                    <Trash2 class="w-3.5 h-3.5" />
+                  </Button>
                 </div>
               </div>
             </div>
@@ -1013,16 +886,26 @@
 
         <!-- Empty keys -->
         <div
-          v-if="keyPage.keys.length === 0 && !keysLoading"
+          v-if="keyPage.keys.length === 0 && !keysLoading && keysLoadedOnce"
           class="flex flex-col items-center justify-center py-16 text-center"
         >
           <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-muted">
             <KeyRound class="h-8 w-8 text-muted-foreground" />
           </div>
           <p class="text-sm text-muted-foreground mt-4">
-            暂无账号
+            {{ hasPoolKeyFilters ? '未找到匹配账号' : '暂无账号' }}
           </p>
           <Button
+            v-if="hasPoolKeyFilters"
+            variant="outline"
+            size="sm"
+            class="mt-3"
+            @click="clearPoolKeyFilters"
+          >
+            清除筛选
+          </Button>
+          <Button
+            v-else
             variant="outline"
             size="sm"
             class="mt-3"
@@ -1072,20 +955,56 @@
       :current-claude-config="selectedProviderClaudeConfig"
       @saved="handleSchedulingSaved"
     />
+    <PoolDemandMetricsDialog
+      v-model="showDemandMetricsDialog"
+      :provider-name="selectedProviderOverview?.provider_name"
+      :samples="providerDemandMetricSamples"
+    />
+    <ProviderDetailDrawer
+      v-if="providerDrawerMounted && selectedProviderId"
+      :open="providerDrawerOpen"
+      :provider-id="selectedProviderId"
+      :initial-provider="selectedProviderData"
+      @update:open="providerDrawerOpen = $event"
+      @edit="openProviderEditDialog"
+      @toggle-status="toggleSelectedProviderStatus"
+      @refresh="handleProviderDrawerRefresh"
+    />
+    <ProviderFormDialog
+      v-model="providerEditDialogOpen"
+      :provider="providerToEdit"
+      @provider-updated="handleProviderEditSaved"
+    />
     <PoolAccountBatchDialog
       v-if="selectedProviderId"
       v-model="showAccountBatchDialog"
       :provider-id="selectedProviderId"
       :provider-name="selectedProviderData?.name || ''"
-      :provider-type="selectedProviderData?.provider_type || selectedProviderType"
+      :provider-type="selectedProviderData?.provider_type ?? selectedProviderOverview?.provider_type ?? undefined"
       :batch-concurrency="selectedProviderConfig?.batch_concurrency"
+      :selected-keys="selectedPoolKeys"
+      :select-all-filtered="selectAllFilteredPoolKeys"
+      :selected-count="selectedKeyCount"
+      :selection-filters="poolKeySelectionFilters"
+      :initial-action="pendingAccountBatchAction"
       @changed="handleAccountBatchChanged"
+      @edit-config="openKeyBatchEditDialog"
+    />
+    <PoolKeyBatchEditDialog
+      v-if="selectedProviderId"
+      :open="keyBatchEditDialogOpen"
+      :provider-id="selectedProviderId"
+      :provider-name="selectedProviderData?.name || ''"
+      :key-ids="keyBatchEditKeyIds"
+      :available-api-formats="selectedProviderData?.api_formats || []"
+      @close="closeKeyBatchEditDialog"
+      @saved="handleKeyBatchEditSaved"
     />
     <KeyFormDialog
       v-if="selectedProviderId"
       :open="keyFormDialogOpen"
       :endpoint="null"
-      :provider-type="selectedProviderData?.provider_type || selectedProviderType"
+      :provider-type="selectedProviderData?.provider_type ?? selectedProviderOverview?.provider_type ?? null"
       :editing-key="editingKey"
       :provider-id="selectedProviderId"
       :available-api-formats="selectedProviderData?.api_formats || []"
@@ -1110,11 +1029,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, defineAsyncComponent } from 'vue'
 import {
-  Search,
   Upload,
-  ChevronDown,
   RefreshCw,
   Power,
   Database,
@@ -1123,38 +1040,37 @@ import {
   Copy,
   Shield,
   Globe,
+  RotateCcw,
   SquarePen,
   Trash2,
-  Users,
-  Settings2,
+  CircleHelp,
 } from 'lucide-vue-next'
 
 import {
   Card,
   Badge,
   Button,
-  Input,
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
+  Checkbox,
   Table,
   TableHeader,
   TableBody,
   TableRow,
   TableHead,
+  SortableTableHead,
+  TableFilterMenu,
   TableCell,
   Pagination,
   Popover,
   PopoverTrigger,
   PopoverContent,
 } from '@/components/ui'
-import RefreshButton from '@/components/ui/refresh-button.vue'
 import { useToast } from '@/composables/useToast'
 import { useClipboard } from '@/composables/useClipboard'
-import { useCountdownTimer, getOAuthExpiresCountdown, getCodexResetCountdown } from '@/composables/useCountdownTimer'
+import { useCountdownTimer, getCodexResetCountdown } from '@/composables/useCountdownTimer'
 import { useConfirm } from '@/composables/useConfirm'
+import { useRouteQuery } from '@/composables/useRouteQuery'
+import { useBatchSelection } from '@/composables/useBatchSelection'
+import { useI18n } from '@/i18n'
 import { parseApiError } from '@/utils/errorParser'
 import {
   getPoolOverview,
@@ -1168,12 +1084,14 @@ import {
   deleteEndpointKey,
   updateProviderKey,
   refreshProviderQuota,
+  consumeCodexResetCredit,
+  resetProviderKeyCycleStats,
 } from '@/api/endpoints/keys'
 import { refreshProviderOAuth } from '@/api/endpoints/provider_oauth'
-import { recoverKeyHealth } from '@/api/endpoints/health'
 import type {
   PoolOverviewItem,
   PoolKeyDetail,
+  PoolKeySelectionRequest,
   PoolKeysPageResponse,
   PoolPresetMeta,
 } from '@/api/endpoints/pool'
@@ -1183,25 +1101,120 @@ import type {
   PoolAdvancedConfig,
   ProviderWithEndpointsSummary,
 } from '@/api/endpoints/types/provider'
+import type { QuotaStatusSnapshot, QuotaWindowSnapshot } from '@/api/endpoints/types'
 import { getProvider, updateProvider } from '@/api/endpoints'
 import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import PoolSchedulingDialog from '@/features/pool/components/PoolSchedulingDialog.vue'
 import PoolAdvancedDialog from '@/features/pool/components/PoolAdvancedDialog.vue'
+import PoolDemandMetricsDialog from '@/features/pool/components/PoolDemandMetricsDialog.vue'
 import PoolAccountBatchDialog from '@/features/pool/components/PoolAccountBatchDialog.vue'
-import ProviderProxyPopover from '@/features/pool/components/ProviderProxyPopover.vue'
+import PoolKeyBatchEditDialog from '@/features/pool/components/PoolKeyBatchEditDialog.vue'
+import PoolManagementHeader from '@/features/pool/components/PoolManagementHeader.vue'
+import PoolKeyQuotaPanel from '@/features/pool/components/PoolKeyQuotaPanel.vue'
+import PoolKeyStatsPanel from '@/features/pool/components/PoolKeyStatsPanel.vue'
 import KeyAllowedModelsEditDialog from '@/features/providers/components/KeyAllowedModelsEditDialog.vue'
 import KeyFormDialog from '@/features/providers/components/KeyFormDialog.vue'
 import OAuthKeyEditDialog from '@/features/providers/components/OAuthKeyEditDialog.vue'
 import OAuthAccountDialog from '@/features/providers/components/OAuthAccountDialog.vue'
+import ProviderFormDialog from '@/features/providers/components/ProviderFormDialog.vue'
 import ProxyNodeSelect from '@/features/providers/components/ProxyNodeSelect.vue'
-import { isAccountLevelBlockReason, classifyAccountBlockLabel, cleanAccountBlockReason } from '@/utils/accountBlock'
+import {
+  buildPoolMobileTagItems,
+  splitPoolMobileActions,
+  type PoolMobileActionId,
+  type PoolMobileTagItem,
+  type PoolMobileTagTone,
+} from '@/features/pool/utils/poolMobilePresentation'
+import {
+  buildPoolManagementQueryPatch,
+  readPoolManagementViewState,
+  resolvePoolManagementPageAfterLoad,
+  type PoolManagementSortBy,
+  type PoolManagementSortOrder,
+  type PoolManagementViewState,
+  writePoolManagementViewState,
+} from '@/features/pool/utils/poolManagementState'
+import type { PoolBatchActionValue } from '@/features/pool/utils/poolBatchActions'
+import {
+  buildAccountTotalStatsDisplay,
+  buildPoolStatsDisplay,
+  type PoolCodexCycleStatsGroup,
+  type PoolStatsDisplay,
+  type PoolStatsMetric,
+} from '@/features/pool/utils/poolStatsDisplay'
+import { resetCodexCycleUsageWindows } from '@/features/pool/utils/poolCycleStats'
+import { mergePoolKeyQuotaSnapshots } from '@/features/pool/utils/poolQuotaRefresh'
+import { resolveAntigravityQuotaGroupLabel } from '@/features/providers/utils/antigravityQuota'
+import {
+  clearPendingCodexResetCreditIdempotencyKey,
+  clearPendingCodexResetCreditIdempotencyKeyForOutcome,
+  createCodexResetCreditIdempotencyKey,
+  formatCodexResetCreditCount,
+  formatCodexResetCreditExpiresAt,
+  getCodexResetCreditAvailableCount,
+  getCodexResetCreditReservationIdempotencyKey,
+  getVisibleCodexResetCreditItems,
+  mergeCodexQuotaDisplays,
+  readPendingCodexResetCreditIdempotencyKey,
+  rememberPendingCodexResetCreditIdempotencyKey,
+} from '@/features/providers/components/codex-reset-credit-display'
+import { getCodexQuotaWindowPresentation } from '@/utils/codexQuotaWindow'
 import { getOAuthOrgBadge } from '@/utils/oauthIdentity'
+import { formatOAuthPlanType, getOAuthPlanTypeClass } from '@/utils/oauthPlanType'
+import { getOAuthRefreshFeedback } from '@/utils/oauthRefreshFeedback'
+import {
+  canEditOAuthCredential,
+  canExportOAuthCredential,
+  canRefreshOAuthCredential,
+  getProviderAuthLabel,
+  getProviderMaskedSecretLabel,
+  isOAuthManagedCredential,
+  isServiceAccountCredential,
+  shouldShowOAuthRefreshControl,
+} from '@/utils/providerKeyAuth'
+import {
+  getAccountStatusDisplay,
+  getAccountStatusTitle,
+  getOAuthRefreshButtonTitle as resolveOAuthRefreshButtonTitle,
+  getOAuthStatusDisplayWithFallback,
+  getOAuthStatusTitle as resolveOAuthStatusTitle,
+} from '@/utils/providerKeyStatus'
+import {
+  getGeminiCliAccountCreditsText,
+  getLegacyAccountQuotaText,
+  getQuotaDisplayText,
+} from '@/utils/providerKeyQuota'
+
+const loadProviderDetailDrawer = () => import('@/features/providers/components/ProviderDetailDrawer.vue')
+const ProviderDetailDrawer = defineAsyncComponent(loadProviderDetailDrawer)
+
+function prefetchProviderDetailDrawer(): void {
+  void loadProviderDetailDrawer().catch(() => {})
+}
+
+type PoolKeyScore = NonNullable<PoolKeyDetail['pool_score']>
 
 const { success, error: showError, warning: showWarning } = useToast()
+const { legacyT, t } = useI18n()
 const { confirm } = useConfirm()
 const { copyToClipboard } = useClipboard()
 const { tick: countdownTick, start: startCountdownTimer } = useCountdownTimer()
 const proxyNodesStore = useProxyNodesStore()
+const { getQueryValue, patchQuery } = useRouteQuery()
+
+const poolManagementViewStorage = typeof window === 'undefined' ? undefined : window.sessionStorage
+const restoredViewState = readPoolManagementViewState(
+  {
+    providerId: getQueryValue('providerId'),
+    search: getQueryValue('search'),
+    status: getQueryValue('status'),
+    page: getQueryValue('page'),
+    pageSize: getQueryValue('pageSize'),
+    sortBy: getQueryValue('sortBy'),
+    sortOrder: getQueryValue('sortOrder'),
+  },
+  poolManagementViewStorage,
+)
 
 // --- Overview ---
 const poolProviders = ref<PoolOverviewItem[]>([])
@@ -1211,39 +1224,168 @@ let selectProviderRequestId = 0
 let providerDataRequestId = 0
 let keysRequestId = 0
 let keysSearchDebounceTimer: number | null = null
+let providerDetailDrawerPrefetchIdleId: number | null = null
+let providerDetailDrawerPrefetchTimer: number | null = null
+const keysSearchPending = ref(false)
+let demandMetricsPollingTimer: number | null = null
+let demandMetricsRequestId = 0
 let suppressFiltersWatch = false
+let hasHydratedInitialProviderSelection = false
+const POOL_OVERVIEW_CACHE_TTL_MS = 10 * 1000
+const POOL_KEYS_CACHE_TTL_MS = 10 * 1000
+const POOL_SCHEDULING_PRESETS_CACHE_TTL_MS = 5 * 60 * 1000
+const POOL_DEMAND_METRICS_SAMPLES_LIMIT = 120
+const POOL_DEMAND_METRICS_POLL_INTERVAL_MS = 10 * 1000
 
-async function loadOverview() {
+type IdleCallbackWindow = typeof window & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
+  cancelIdleCallback?: (handle: number) => void
+}
+
+function scheduleProviderDetailDrawerPrefetch(): void {
+  const idleWindow = window as IdleCallbackWindow
+  if (idleWindow.requestIdleCallback) {
+    providerDetailDrawerPrefetchIdleId = idleWindow.requestIdleCallback(() => {
+      providerDetailDrawerPrefetchIdleId = null
+      prefetchProviderDetailDrawer()
+    }, { timeout: 1500 })
+    return
+  }
+  providerDetailDrawerPrefetchTimer = window.setTimeout(() => {
+    providerDetailDrawerPrefetchTimer = null
+    prefetchProviderDetailDrawer()
+  }, 800)
+}
+
+function cancelProviderDetailDrawerPrefetch(): void {
+  const idleWindow = window as IdleCallbackWindow
+  if (providerDetailDrawerPrefetchIdleId !== null) {
+    idleWindow.cancelIdleCallback?.(providerDetailDrawerPrefetchIdleId)
+    providerDetailDrawerPrefetchIdleId = null
+  }
+  if (providerDetailDrawerPrefetchTimer !== null) {
+    clearTimeout(providerDetailDrawerPrefetchTimer)
+    providerDetailDrawerPrefetchTimer = null
+  }
+}
+
+interface PoolDemandMetricSample {
+  providerId: string
+  sampledAt: number
+  hotCount: number
+  desiredHot: number
+  inFlight: number
+  emaInFlight: number
+  burstPending: boolean
+}
+
+const showDemandMetricsDialog = ref(false)
+const providerDemandMetricSamples = ref<PoolDemandMetricSample[]>([])
+const poolKeyStatusFilterOptions: Array<{ value: PoolManagementViewState['status'], label: string }> = [
+  { value: 'all', label: '全部状态' },
+  { value: 'available', label: '可用' },
+  { value: 'cooldown', label: '冷却中' },
+  { value: 'inactive', label: '已禁用' },
+  { value: 'invalid', label: '已失效' },
+  { value: 'expired', label: '已过期' },
+  { value: 'account_banned', label: '账号封禁' },
+  { value: 'quota_exhausted', label: '额度耗尽' },
+  { value: 'account_forbidden', label: '访问受限' },
+  { value: 'account_disabled', label: '账号停用' },
+  { value: 'workspace_deactivated', label: '工作区停用' },
+  { value: 'account_verification', label: '需要验证' },
+  { value: 'account_quarantined', label: '账号隔离' },
+  { value: 'account_blocked', label: '账号异常' },
+  { value: 'rate_limited', label: '速率受限' },
+  { value: 'cost_exhausted', label: '超限' },
+]
+const poolScoreHardStateOptions = [
+  { value: 'all', label: '全部状态' },
+  { value: 'available', label: '可用' },
+  { value: 'unknown', label: '未知' },
+  { value: 'cooldown', label: '冷却' },
+  { value: 'quota_exhausted', label: '额度耗尽' },
+  { value: 'auth_invalid', label: '授权无效' },
+  { value: 'banned', label: '封禁' },
+  { value: 'inactive', label: '禁用' },
+]
+const poolScoreProbeStatusOptions = [
+  { value: 'all', label: '全部探测' },
+  { value: 'never', label: '未探测' },
+  { value: 'ok', label: '正常' },
+  { value: 'failed', label: '失败' },
+  { value: 'stale', label: '过期' },
+  { value: 'in_progress', label: '探测中' },
+]
+
+async function loadOverview(options: { cacheTtlMs?: number, silent?: boolean } = {}) {
   const requestId = ++overviewRequestId
-  overviewLoading.value = true
+  if (!options.silent) {
+    overviewLoading.value = true
+  }
   try {
-    const res = await getPoolOverview()
+    const res = await getPoolOverview({ cacheTtlMs: options.cacheTtlMs ?? 0 })
     if (requestId !== overviewRequestId) return
     const allProviders = Array.isArray(res.items) ? res.items : []
     const enabledProviders = allProviders.filter(item => item.pool_enabled)
     poolProviders.value = enabledProviders
 
-    // Keep selected provider aligned with dropdown options.
-    const selectedId = selectedProviderId.value
+    const queryProviderId = getQueryValue('providerId')
+    const queryProviderExists = Boolean(
+      queryProviderId && enabledProviders.some(item => item.provider_id === queryProviderId),
+    )
+    const currentSelectedId = selectedProviderId.value
+    const currentSelectedExists = Boolean(
+      currentSelectedId && enabledProviders.some(item => item.provider_id === currentSelectedId),
+    )
+    const selectedId = currentSelectedExists
+      ? currentSelectedId
+      : (queryProviderExists ? queryProviderId : currentSelectedId)
     const selectedStillExists = Boolean(
       selectedId && enabledProviders.some(item => item.provider_id === selectedId),
     )
 
-    if (!selectedStillExists) {
-      if (enabledProviders.length > 0) {
-        // Do not block overview loading on key list fetch; keys area has its own loader.
-        void selectProvider(enabledProviders[0].provider_id)
-      } else {
-        selectedProviderId.value = null
-        selectedProviderData.value = null
-        showAccountBatchDialog.value = false
-        closeProviderProxyPopovers()
-        resetKeyPage()
+    if (selectedStillExists && selectedId) {
+      // 页面刷新时可能先恢复了选中的 Provider，但列表请求尚未触发；
+      // overview 回来后补一次初始化拉取，确保空态不会卡住。
+      if (!hasHydratedInitialProviderSelection || selectedId !== selectedProviderId.value) {
+        await selectProvider(selectedId, {
+          preserveSearch: true,
+          preserveStatus: true,
+          preservePagination: true,
+          cacheTtlMs: options.cacheTtlMs ? POOL_KEYS_CACHE_TTL_MS : 0,
+        })
       }
+      return
+    }
+
+    if (enabledProviders.length > 0) {
+      const fallbackProviderId = enabledProviders[0].provider_id
+      const shouldPreserveViewState = Boolean(selectedId)
+      await selectProvider(fallbackProviderId, {
+        preserveSearch: shouldPreserveViewState,
+        preserveStatus: shouldPreserveViewState,
+        preservePagination: shouldPreserveViewState,
+        cacheTtlMs: options.cacheTtlMs ? POOL_KEYS_CACHE_TTL_MS : 0,
+      })
+    } else {
+      selectedProviderId.value = null
+      selectedProviderData.value = null
+      keysLoadedOnce.value = false
+      resetPoolKeySelection(true)
+      providerDrawerOpen.value = false
+      showAccountBatchDialog.value = false
+      keyBatchEditDialogOpen.value = false
+      keyBatchEditKeyIds.value = []
+      resetKeyPage()
     }
   } catch (err) {
     if (requestId !== overviewRequestId) return
-    showError(parseApiError(err))
+    if (!options.silent) {
+      showError(parseApiError(err))
+    } else {
+      showWarning(parseApiError(err, '同步 Provider 概览失败'))
+    }
   } finally {
     if (requestId === overviewRequestId) {
       overviewLoading.value = false
@@ -1252,17 +1394,20 @@ async function loadOverview() {
 }
 
 async function handleSchedulingSaved(updatedProvider: ProviderWithEndpointsSummary) {
+  if (!selectedProviderId.value || updatedProvider.id !== selectedProviderId.value) return
   // 优先回写保存接口返回值，避免弹窗立即重开时读到旧配置。
-  if (selectedProviderId.value && updatedProvider.id === selectedProviderId.value) {
+  if (selectedProviderData.value) {
+    Object.assign(selectedProviderData.value, updatedProvider)
+  } else {
     selectedProviderData.value = updatedProvider
   }
   showSchedulingDialog.value = false
   showAdvancedDialog.value = false
-  await loadOverview()
+  await loadOverview({ silent: true })
 }
 
 // --- Provider Selection ---
-const selectedProviderId = ref<string | null>(null)
+const selectedProviderId = ref<string | null>(restoredViewState.providerId)
 const selectedProviderData = ref<ProviderWithEndpointsSummary | null>(null)
 
 // Proxy for Select v-model (string, not string|null)
@@ -1270,7 +1415,7 @@ const selectedProviderIdProxy = computed({
   get: () => selectedProviderId.value ?? '',
   set: (val: string) => {
     if (val && val !== selectedProviderId.value) {
-      selectProvider(val)
+      void selectProvider(val, { cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
     }
   },
 })
@@ -1285,11 +1430,17 @@ const selectedProviderClaudeConfig = computed(() => {
   return (selectedProviderData.value as Record<string, unknown> | null)?.claude_code_advanced as ClaudeCodeAdvancedConfig | null ?? null
 })
 
-const DEFAULT_ENABLED_PRESETS = new Set(['cache_affinity', 'recent_refresh'])
+function defaultEnabledPresetCount(providerType: string): number {
+  return ['codex', 'windsurf'].includes(providerType) ? 2 : 1
+}
 
 const DEFAULT_PRESET_LABELS: Record<string, string> = {
   lru: 'LRU',
   free_team_first: 'Free/Team',
+  free_first: 'Free',
+  team_first: 'Team',
+  plus_first: 'Plus',
+  pro_first: 'Pro',
   recent_refresh: '刷新优先',
   quota_balanced: '额度均衡',
   single_account: '单号优先',
@@ -1300,9 +1451,9 @@ function normalizePresetName(value: unknown): string {
   return String(value ?? '').trim().toLowerCase()
 }
 
-async function loadSchedulingPresetMetas(): Promise<void> {
+async function loadSchedulingPresetMetas(options: { cacheTtlMs?: number } = {}): Promise<void> {
   try {
-    const metas = await getPoolSchedulingPresets()
+    const metas = await getPoolSchedulingPresets({ cacheTtlMs: options.cacheTtlMs ?? 0 })
     const next: Record<string, string> = {}
     for (const meta of metas as PoolPresetMeta[]) {
       const name = normalizePresetName(meta.name)
@@ -1324,6 +1475,97 @@ const selectedProviderOverview = computed<PoolOverviewItem | null>(() => {
   return poolProviders.value.find(item => item.provider_id === selectedId) || null
 })
 
+const showAdaptiveHotPoolMetricsButton = computed(() => {
+  if (!selectedProviderId.value) return false
+  return selectedProviderConfig.value?.probing_enabled === true
+})
+
+function normalizeDemandMetricNumber(value: unknown): number {
+  const normalized = Number(value ?? 0)
+  if (!Number.isFinite(normalized) || normalized <= 0) return 0
+  return normalized
+}
+
+function buildDemandMetricSample(overview: PoolOverviewItem): PoolDemandMetricSample {
+  return {
+    providerId: overview.provider_id,
+    sampledAt: Date.now(),
+    hotCount: Math.floor(normalizeDemandMetricNumber(overview.provider_hot_count)),
+    desiredHot: Math.floor(normalizeDemandMetricNumber(overview.provider_desired_hot)),
+    inFlight: Math.floor(normalizeDemandMetricNumber(overview.provider_in_flight)),
+    emaInFlight: normalizeDemandMetricNumber(overview.provider_ema_in_flight),
+    burstPending: overview.provider_burst_pending === true,
+  }
+}
+
+function appendDemandMetricSample(overview: PoolOverviewItem | null): void {
+  if (!overview || !showDemandMetricsDialog.value || !showAdaptiveHotPoolMetricsButton.value) return
+  const nextSample = buildDemandMetricSample(overview)
+  const existing = providerDemandMetricSamples.value.filter(
+    sample => sample.providerId === overview.provider_id,
+  )
+  const lastSample = existing[existing.length - 1]
+  if (
+    lastSample
+    && nextSample.sampledAt - lastSample.sampledAt < 1000
+    && lastSample.hotCount === nextSample.hotCount
+    && lastSample.desiredHot === nextSample.desiredHot
+    && lastSample.inFlight === nextSample.inFlight
+    && lastSample.emaInFlight === nextSample.emaInFlight
+    && lastSample.burstPending === nextSample.burstPending
+  ) {
+    providerDemandMetricSamples.value = existing
+    return
+  }
+  providerDemandMetricSamples.value = [...existing, nextSample]
+    .slice(-POOL_DEMAND_METRICS_SAMPLES_LIMIT)
+}
+
+function stopDemandMetricsPolling(): void {
+  if (demandMetricsPollingTimer !== null) {
+    window.clearInterval(demandMetricsPollingTimer)
+    demandMetricsPollingTimer = null
+  }
+}
+
+async function refreshDemandMetricsOverview(): Promise<void> {
+  const providerId = selectedProviderId.value
+  if (!showDemandMetricsDialog.value || !showAdaptiveHotPoolMetricsButton.value || !providerId) {
+    return
+  }
+
+  const requestId = ++demandMetricsRequestId
+  try {
+    const res = await getPoolOverview({ cacheTtlMs: 0 })
+    if (
+      requestId !== demandMetricsRequestId
+      || !showDemandMetricsDialog.value
+      || selectedProviderId.value !== providerId
+    ) {
+      return
+    }
+    const allProviders = Array.isArray(res.items) ? res.items : []
+    const enabledProviders = allProviders.filter(item => item.pool_enabled)
+    poolProviders.value = enabledProviders
+    appendDemandMetricSample(
+      enabledProviders.find(item => item.provider_id === providerId) || null,
+    )
+  } catch {
+    // 指标弹窗只做尽力刷新，失败不打断主流程。
+  }
+}
+
+function startDemandMetricsPolling(): void {
+  stopDemandMetricsPolling()
+  appendDemandMetricSample(selectedProviderOverview.value)
+  void refreshDemandMetricsOverview()
+  demandMetricsPollingTimer = window.setInterval(() => {
+    if (!showDemandMetricsDialog.value || !showAdaptiveHotPoolMetricsButton.value) return
+    if (document.visibilityState === 'hidden') return
+    void refreshDemandMetricsOverview()
+  }, POOL_DEMAND_METRICS_POLL_INTERVAL_MS)
+}
+
 const poolSchedulingLabel = computed(() => {
   if (!selectedProviderConfig.value && selectedProviderOverview.value?.pool_enabled === false) {
     return '未启用'
@@ -1332,7 +1574,7 @@ const poolSchedulingLabel = computed(() => {
   const cfg = selectedProviderConfig.value
 
   // No pool_advanced config at all: use default enabled presets count
-  if (!cfg) return `${DEFAULT_ENABLED_PRESETS.size} 维度`
+  if (!cfg) return `${defaultEnabledPresetCount(selectedProviderType.value)} 维度`
 
   const presets = Array.isArray(cfg.scheduling_presets) ? cfg.scheduling_presets : []
   const presetLabels = presetLabelsByName.value
@@ -1361,12 +1603,15 @@ const poolSchedulingLabel = computed(() => {
     return '多维评分'
   }
 
-  const lruEnabled = cfg.lru_enabled !== false
+  const lruEnabled = cfg.scheduling_mode === 'lru' || cfg.lru_enabled === true
   const stickyTtl = Number(cfg.sticky_session_ttl_seconds ?? 3600)
   const stickyEnabled = Number.isFinite(stickyTtl) && stickyTtl > 0
 
   if (lruEnabled && stickyEnabled) return 'LRU + 粘性'
   if (lruEnabled) return 'LRU'
+  if (!cfg.scheduling_mode && (cfg.lru_enabled === null || cfg.lru_enabled === undefined)) {
+    return `${defaultEnabledPresetCount(selectedProviderType.value)} 维度`
+  }
   if (stickyEnabled) return '粘性'
   return '随机'
 })
@@ -1388,79 +1633,170 @@ const selectedProviderStatusText = computed(() => {
   return ''
 })
 
+function formatDemandEma(value: number | undefined): string {
+  const normalized = Number(value ?? 0)
+  if (!Number.isFinite(normalized) || normalized <= 0) return '0.0'
+  return normalized.toFixed(1)
+}
+
+const selectedProviderDemandMetaText = computed(() => {
+  const overview = selectedProviderOverview.value
+  if (!overview) return ''
+  const segments: string[] = []
+  const desiredHot = Number(overview.provider_desired_hot ?? 0)
+  const hotCount = Number(overview.provider_hot_count ?? 0)
+  const inFlight = Number(overview.provider_in_flight ?? 0)
+  if (Number.isFinite(desiredHot) && desiredHot > 0) {
+    segments.push(`热池 ${hotCount} / ${desiredHot}`)
+    segments.push(`EMA ${formatDemandEma(overview.provider_ema_in_flight)}`)
+  }
+  if (Number.isFinite(inFlight) && inFlight > 0) {
+    segments.push(`in-flight ${inFlight}`)
+  }
+  if (overview.provider_burst_pending) {
+    segments.push('补热中')
+  }
+  return segments.join(' | ')
+})
+
 const poolHeaderMetaText = computed(() => {
-  const providerType = selectedProviderType.value
-  const status = selectedProviderStatusText.value
-  if (providerType && status) return `${providerType} | ${status}`
-  return providerType || status || ''
+  return [
+    selectedProviderType.value,
+    selectedProviderStatusText.value,
+    selectedProviderDemandMetaText.value,
+  ].filter(Boolean).join(' | ')
+})
+
+watch(showDemandMetricsDialog, (open) => {
+  if (open) {
+    startDemandMetricsPolling()
+  } else {
+    stopDemandMetricsPolling()
+  }
+})
+
+watch(selectedProviderId, () => {
+  providerDemandMetricSamples.value = []
+  if (showDemandMetricsDialog.value) {
+    appendDemandMetricSample(selectedProviderOverview.value)
+  }
+})
+
+watch(selectedProviderOverview, (overview) => {
+  appendDemandMetricSample(overview)
+})
+
+watch(showAdaptiveHotPoolMetricsButton, (enabled) => {
+  if (!enabled && showDemandMetricsDialog.value) {
+    showDemandMetricsDialog.value = false
+  }
 })
 
 const showAccountQuotaColumn = computed(() => {
   return selectedProviderType.value === 'codex'
     || selectedProviderType.value === 'gemini_cli'
     || selectedProviderType.value === 'kiro'
+    || selectedProviderType.value === 'windsurf'
     || selectedProviderType.value === 'antigravity'
+    || selectedProviderType.value === 'grok'
+    || selectedProviderType.value === 'chatgpt_web'
 })
 
 const desktopColumnWidths = computed(() => {
   if (showAccountQuotaColumn.value) {
     return {
-      name: '28%',
-      quota: '23%',
+      name: '19%',
+      quota: '18%',
       stats: '15%',
-      lastUsed: '10%',
-      status: '8%',
-      actions: '16%',
+      imported: '10%',
+      lastUsed: '8%',
+      score: '9%',
+      status: '7%',
+      actions: '14%',
     }
   }
   return {
-    name: '40%',
+    name: '31%',
     quota: '0%',
-    stats: '18%',
-    lastUsed: '12%',
-    status: '10%',
-    actions: '20%',
+    stats: '15%',
+    imported: '11%',
+    lastUsed: '11%',
+    score: '9%',
+    status: '8%',
+    actions: '15%',
   }
 })
 
-async function selectProvider(id: string) {
+async function selectProvider(
+  id: string,
+  options: {
+    preserveSearch?: boolean
+    preserveStatus?: boolean
+    preservePagination?: boolean
+    cacheTtlMs?: number
+  } = {},
+) {
   const requestId = ++selectProviderRequestId
+  hasHydratedInitialProviderSelection = true
   selectedProviderId.value = id
   selectedProviderData.value = null
+  showSchedulingDialog.value = false
+  showAdvancedDialog.value = false
+  resetPoolKeySelection(true)
+  providerDrawerOpen.value = false
   editingKeyDetail.value = null
   showAccountBatchDialog.value = false
+  keyBatchEditDialogOpen.value = false
+  keyBatchEditKeyIds.value = []
   keyPermissionsDialogOpen.value = false
   keyFormDialogOpen.value = false
   oauthKeyEditDialogOpen.value = false
-  closeProviderProxyPopovers()
   proxyDesktopPopoverOpenKeyId.value = null
   proxyMobilePopoverOpenKeyId.value = null
+  scoreDesktopPopoverOpenKeyId.value = null
+  scoreMobilePopoverOpenKeyId.value = null
   suppressFiltersWatch = true
-  currentPage.value = 1
-  searchQuery.value = ''
-  statusFilter.value = 'all'
+  if (!options.preservePagination) {
+    currentPage.value = 1
+  }
+  if (!options.preserveSearch) {
+    searchQuery.value = ''
+  }
+  if (!options.preserveStatus) {
+    statusFilter.value = 'all'
+  }
   suppressFiltersWatch = false
   if (keysSearchDebounceTimer !== null) {
     clearTimeout(keysSearchDebounceTimer)
     keysSearchDebounceTimer = null
   }
-  resetKeyPage(1, pageSize.value)
-  const keysTask = loadKeys()
+  keysSearchPending.value = false
+  keysLoadedOnce.value = false
+  resetKeyPage(currentPage.value, pageSize.value)
+  const keysTask = loadKeys({ cacheTtlMs: options.cacheTtlMs ?? 0 })
   // Provider summary is non-blocking for key list rendering.
   void loadProviderData(id)
   await keysTask
   if (requestId !== selectProviderRequestId) return
 }
 
-async function loadProviderData(id: string) {
+async function loadProviderData(id: string, options: { preserveOnError?: boolean } = {}) {
   const requestId = ++providerDataRequestId
   try {
     const providerData = await getProvider(id)
     if (requestId !== providerDataRequestId || selectedProviderId.value !== id) return
-    selectedProviderData.value = providerData
+    if (selectedProviderData.value?.id === providerData.id) {
+      Object.assign(selectedProviderData.value, providerData)
+    } else {
+      selectedProviderData.value = providerData
+    }
   } catch {
     if (requestId !== providerDataRequestId || selectedProviderId.value !== id) return
-    selectedProviderData.value = null
+    if (options.preserveOnError) {
+      showWarning('同步 Provider 详情失败，已保留当前数据')
+    } else {
+      selectedProviderData.value = null
+    }
   }
 }
 
@@ -1475,17 +1811,81 @@ function createEmptyKeyPage(page = 1, pageSizeValue = 50): PoolKeysPageResponse 
 
 const keyPage = ref<PoolKeysPageResponse>(createEmptyKeyPage())
 const keysLoading = ref(false)
+const poolKeySelectionBusy = computed(() => keysLoading.value || keysSearchPending.value)
+const keysLoadedOnce = ref(false)
+const poolKeyPageItems = computed(() => keyPage.value.keys)
+const poolKeyFilteredTotal = computed(() => keyPage.value.total)
+const {
+  selectedIds: selectedPoolKeyIds,
+  selectedIdSet: selectedPoolKeyIdSet,
+  selectedCount: selectedKeyCount,
+  selectAllFiltered: selectAllFilteredPoolKeys,
+  isAllFilteredSelected: isAllFilteredPoolKeysSelected,
+  isCurrentPageFullySelected: isCurrentPoolKeyPageFullySelected,
+  rememberItems: rememberPoolKeys,
+  knownItemsById: knownPoolKeysById,
+  resetSelection: resetPoolKeySelection,
+  toggleOne: togglePoolKeySelection,
+  toggleSelectFiltered: toggleSelectFilteredPoolKeys,
+  toggleSelectCurrentPage: toggleCurrentPoolKeyPage,
+} = useBatchSelection<PoolKeyDetail>({
+  pageItems: poolKeyPageItems,
+  filteredTotal: poolKeyFilteredTotal,
+  getItemId: key => key.key_id,
+})
+const selectedKeyCountLabel = computed(() => legacyT(`已选 ${selectedKeyCount.value} 个`))
+const selectedPoolKeys = computed(() => selectedPoolKeyIds.value
+  .map(keyId => knownPoolKeysById.value[keyId])
+  .filter((key): key is PoolKeyDetail => Boolean(key)))
+const selectedOnCurrentPoolKeyPageCount = computed(() => poolKeyPageItems.value
+  .filter(key => selectedPoolKeyIdSet.value.has(key.key_id)).length)
+const isCurrentPoolKeyPagePartiallySelected = computed(() => (
+  selectedOnCurrentPoolKeyPageCount.value > 0
+  && !isCurrentPoolKeyPageFullySelected.value
+))
+
+watch(poolKeyPageItems, (keys) => rememberPoolKeys(keys), { immediate: true })
+
+function isPoolKeySelected(keyId: string): boolean {
+  return selectAllFilteredPoolKeys.value || selectedPoolKeyIdSet.value.has(keyId)
+}
+
+function toggleAllFilteredPoolKeys(): void {
+  if (poolKeySelectionBusy.value || keyPage.value.total === 0) return
+  toggleSelectFilteredPoolKeys(!isAllFilteredPoolKeysSelected.value)
+}
+
+function getPoolKeyRowClass(keyId: string): string {
+  return [
+    keyUiStateMap.value[keyId]?.rowClass || '',
+    isPoolKeySelected(keyId) ? 'bg-primary/5' : '',
+  ].filter(Boolean).join(' ')
+}
+
 const refreshingCurrentPageQuota = ref(false)
-const searchQuery = ref('')
-const statusFilter = ref('all')
-const currentPage = ref(1)
-const pageSize = ref(50)
+const searchQuery = ref(restoredViewState.search)
+const statusFilter = ref(restoredViewState.status)
+const poolKeySelectionFilters = computed<PoolKeySelectionRequest>(() => {
+  const search = searchQuery.value.trim()
+  return {
+    ...(search ? { search } : {}),
+    status: statusFilter.value,
+  }
+})
+const currentPage = ref(restoredViewState.page)
+const pageSize = ref(restoredViewState.pageSize)
+const sortBy = ref<PoolManagementSortBy | null>(restoredViewState.sortBy)
+const sortOrder = ref<PoolManagementSortOrder>(restoredViewState.sortOrder)
+const hasPoolKeyFilters = computed(() => searchQuery.value.trim().length > 0 || statusFilter.value !== 'all')
 const MANUAL_QUOTA_REFRESH_COOLDOWN_SECONDS = 5 * 60
 const refreshingOAuthKeyId = ref<string | null>(null)
-const recoveringHealthKeyId = ref<string | null>(null)
+const consumingCodexResetCreditKeyId = ref<string | null>(null)
+const resettingCycleKeyId = ref<string | null>(null)
 const savingProxyKeyId = ref<string | null>(null)
 const proxyDesktopPopoverOpenKeyId = ref<string | null>(null)
 const proxyMobilePopoverOpenKeyId = ref<string | null>(null)
+const scoreDesktopPopoverOpenKeyId = ref<string | null>(null)
+const scoreMobilePopoverOpenKeyId = ref<string | null>(null)
 const deletingKeyId = ref<string | null>(null)
 const togglingKeyId = ref<string | null>(null)
 const editingPriorityKeyId = ref<string | null>(null)
@@ -1494,29 +1894,266 @@ const prioritySavingKeyId = ref<string | null>(null)
 
 const keyPermissionsDialogOpen = ref(false)
 const keyFormDialogOpen = ref(false)
+const keyBatchEditDialogOpen = ref(false)
+const keyBatchEditKeyIds = ref<string[]>([])
 const oauthKeyEditDialogOpen = ref(false)
 const editingKeyDetail = ref<PoolKeyDetail | null>(null)
 
+function clearPoolKeyFilters() {
+  if (!hasPoolKeyFilters.value) return
+  resetPoolKeySelection(true)
+  if (keysSearchDebounceTimer !== null) {
+    clearTimeout(keysSearchDebounceTimer)
+    keysSearchDebounceTimer = null
+  }
+  keysSearchPending.value = false
+  suppressFiltersWatch = true
+  searchQuery.value = ''
+  statusFilter.value = 'all'
+  suppressFiltersWatch = false
+  if (currentPage.value !== 1) {
+    currentPage.value = 1
+    return
+  }
+  void loadKeys({ cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
+}
+
+watch(
+  () => getQueryValue('search') ?? '',
+  (value) => {
+    if (searchQuery.value === value) return
+    searchQuery.value = value
+  },
+  { immediate: true },
+)
+
+watch(
+  () => readPoolManagementViewState({ status: getQueryValue('status') }).status,
+  (value) => {
+    if (statusFilter.value === value) return
+    suppressFiltersWatch = true
+    statusFilter.value = value
+    suppressFiltersWatch = false
+  },
+  { immediate: true },
+)
+
+watch(
+  () => readPoolManagementViewState({ page: getQueryValue('page') }).page,
+  (value) => {
+    if (currentPage.value === value) return
+    currentPage.value = value
+  },
+  { immediate: true },
+)
+
+watch(
+  () => readPoolManagementViewState({ pageSize: getQueryValue('pageSize') }).pageSize,
+  (value) => {
+    if (pageSize.value === value) return
+    pageSize.value = value
+  },
+  { immediate: true },
+)
+
+watch(
+  () => readPoolManagementViewState({
+    sortBy: getQueryValue('sortBy'),
+    sortOrder: getQueryValue('sortOrder'),
+  }),
+  (value) => {
+    if (sortBy.value === value.sortBy && sortOrder.value === value.sortOrder) return
+    sortBy.value = value.sortBy
+    sortOrder.value = value.sortOrder
+  },
+  { immediate: true },
+)
+
+watch(
+  () => getQueryValue('providerId'),
+  (value) => {
+    if (overviewLoading.value) return
+    if (!value || value === selectedProviderId.value) return
+    if (!poolProviders.value.some(item => item.provider_id === value)) return
+    void selectProvider(value, {
+      preserveSearch: true,
+      preserveStatus: true,
+      preservePagination: true,
+      cacheTtlMs: POOL_KEYS_CACHE_TTL_MS,
+    })
+  },
+)
+
+watch(
+  [selectedProviderId, searchQuery, statusFilter, currentPage, pageSize, sortBy, sortOrder],
+  ([providerId, search, status, page, pageSizeValue, sortByValue, sortOrderValue]) => {
+    const nextState: PoolManagementViewState = {
+      providerId,
+      search,
+      status: status as PoolManagementViewState['status'],
+      page,
+      pageSize: pageSizeValue,
+      sortBy: sortByValue,
+      sortOrder: sortOrderValue,
+      statsMode: 'current_cycle',
+    }
+    patchQuery(buildPoolManagementQueryPatch(nextState))
+    writePoolManagementViewState(nextState, poolManagementViewStorage)
+  },
+  { immediate: true },
+)
 interface QuotaProgressItem {
   label: string
   remainingPercent: number
+  numericOnly?: boolean
+  sortOrder?: number
   detail?: string
   resetAtSeconds?: number | null
+  resetSeconds?: number | null
+  updatedAtSeconds?: number | null
+  allowDynamicReset?: boolean
+}
+
+interface QuotaProgressDisplayItem {
+  label: string
+  remainingPercent: number
+  resetText: string
+  meterText: string
+  barClass: string
+  meterClass: string
+  numericOnly?: boolean
+}
+
+type PoolKeyUiState = {
+  rowClass: string
+  schedulingBadgeLabel: string
+  schedulingBadgeVariant: PoolStatusVariant
+  schedulingTitle: string
+  oauthOrgBadge: ReturnType<typeof getOAuthOrgBadge>
+  visibleOAuthState: ReturnType<typeof getOAuthStatusDisplayWithFallback>
+  oauthStatusTitle: string
+  oauthRefreshButtonTitle: string
+  showOAuthRefreshControl: boolean
+  canRefreshToken: boolean
+  planLabel: string
+  planClass: string
+  accountQuotaText: string | null
+  quotaFallbackText: string | null
+  quotaTextClass: string
+  importedAtRelative: string
+  lastUsedRelative: string
+  statsDisplay: PoolStatsDisplay
+  mobileTagItems: PoolMobileTagItem[]
+  mobileActionIds: PoolMobileActionId[]
 }
 
 const quotaProgressMap = computed<Record<string, QuotaProgressItem[]>>(() => {
   const map: Record<string, QuotaProgressItem[]> = {}
   for (const key of keyPage.value.keys) {
-    map[key.key_id] = parseQuotaProgressItems(key.account_quota)
+    map[key.key_id] = parseQuotaProgressItems(key)
   }
   return map
 })
 
+const quotaProgressDisplayMap = computed<Record<string, QuotaProgressDisplayItem[]>>(() => {
+  const map: Record<string, QuotaProgressDisplayItem[]> = {}
+  for (const key of keyPage.value.keys) {
+    map[key.key_id] = (quotaProgressMap.value[key.key_id] || []).map(item => ({
+      label: getQuotaProgressLabel(item.label),
+      remainingPercent: item.remainingPercent,
+      resetText: getQuotaProgressResetDisplayText(item),
+      meterText: item.numericOnly
+        ? item.detail || formatQuotaValue(item.remainingPercent)
+        : getQuotaProgressMeterDisplayText(item),
+      barClass: getQuotaRemainingBarColorByRemaining(item.remainingPercent),
+      meterClass: getQuotaRemainingClassByRemaining(item.remainingPercent),
+      numericOnly: item.numericOnly,
+    }))
+  }
+  return map
+})
+
+const keyUiStateMap = computed<Record<string, PoolKeyUiState>>(() => {
+  const map: Record<string, PoolKeyUiState> = {}
+
+  for (const key of keyPage.value.keys) {
+    const visibleOAuthState = getVisibleOAuthState(key)
+    const oauthOrgBadge = getOAuthOrgBadge(key)
+    const accountQuotaText = getAccountQuotaText(key)
+    const quotaFallbackText = getQuotaFallbackText(key)
+    const planType = resolvePoolKeyPlanType(key)
+    const canRefreshToken = canRefreshOAuthCredential(key)
+    const showOAuthRefreshControl = shouldShowOAuthRefreshControl(key, selectedProviderType.value)
+
+    map[key.key_id] = {
+      rowClass: getRowClass(key),
+      schedulingBadgeLabel: getSchedulingBadgeLabel(key),
+      schedulingBadgeVariant: getSchedulingBadgeVariant(key),
+      schedulingTitle: getSchedulingTitle(key),
+      oauthOrgBadge,
+      visibleOAuthState,
+      oauthStatusTitle: visibleOAuthState ? getOAuthStatusTitle(key) : '',
+      oauthRefreshButtonTitle: showOAuthRefreshControl ? getOAuthRefreshButtonTitle(key) : '',
+      showOAuthRefreshControl,
+      canRefreshToken,
+      planLabel: planType ? formatOAuthPlanType(planType) : '',
+      planClass: planType ? getOAuthPlanTypeClass(planType) : '',
+      accountQuotaText,
+      quotaFallbackText,
+      quotaTextClass: accountQuotaText || quotaFallbackText
+        ? getQuotaTextClass(accountQuotaText || quotaFallbackText || '')
+        : '',
+      importedAtRelative: formatPoolKeyImportedAt(key),
+      lastUsedRelative: key.last_used_at ? formatRelativeTime(key.last_used_at) : '-',
+      statsDisplay: buildPoolStatsDisplay(key, selectedProviderType.value, 'current_cycle'),
+      mobileTagItems: getMobileTagItems(key),
+      mobileActionIds: splitPoolMobileActions({
+        canDownloadOrCopy: true,
+        showRefreshToken: showOAuthRefreshControl,
+        canResetCycleStats: canResetCycleStats(key),
+        canClearCooldown: Boolean(key.cooldown_reason),
+        hasProxy: true,
+      }).primary,
+    }
+  }
+
+  return map
+})
+
+function getPoolKeyStatsDisplay(key: PoolKeyDetail): PoolStatsDisplay {
+  return keyUiStateMap.value[key.key_id]?.statsDisplay
+    ?? buildPoolStatsDisplay(key, selectedProviderType.value, 'current_cycle')
+}
+
+function isPoolKeyCycleStatsDisplay(key: PoolKeyDetail): boolean {
+  return getPoolKeyStatsDisplay(key).kind === 'codex_cycle'
+}
+
+function getPoolKeyCycleStatsGroups(key: PoolKeyDetail): PoolCodexCycleStatsGroup[] {
+  const display = getPoolKeyStatsDisplay(key)
+  return display.kind === 'codex_cycle' ? display.groups : []
+}
+
+function getPoolKeyAccountStatsMetrics(key: PoolKeyDetail): PoolStatsMetric[] {
+  const display = getPoolKeyStatsDisplay(key)
+  return display.kind === 'account_total'
+    ? display.metrics
+    : buildAccountTotalStatsDisplay(key).metrics
+}
+
 const quotaRefreshSupported = computed(() => {
   return selectedProviderType.value === 'codex'
     || selectedProviderType.value === 'kiro'
+    || selectedProviderType.value === 'gemini_cli'
+    || selectedProviderType.value === 'windsurf'
     || selectedProviderType.value === 'antigravity'
+    || selectedProviderType.value === 'grok'
+    || selectedProviderType.value === 'chatgpt_web'
 })
+
+function canResetCycleStats(_key: PoolKeyDetail): boolean {
+  return selectedProviderType.value === 'codex' && Boolean(_key.key_id)
+}
 
 const refreshCurrentPageLoading = computed(() => {
   return keysLoading.value || refreshingCurrentPageQuota.value
@@ -1527,7 +2164,185 @@ function resetKeyPage(page = currentPage.value, pageSizeValue = pageSize.value):
 }
 
 function refreshOverviewInBackground(): void {
-  void loadOverview()
+  void loadOverview({ silent: true })
+}
+
+function clampActiveKeyCount(current: unknown, total: unknown, delta: number): number {
+  const currentValue = Number(current)
+  const nextValue = Math.max(0, (Number.isFinite(currentValue) ? currentValue : 0) + delta)
+  const totalValue = Number(total)
+  if (!Number.isFinite(totalValue)) return nextValue
+  return Math.min(Math.max(0, totalValue), nextValue)
+}
+
+function isManualInactiveReason(reason: { code?: string; source?: string }): boolean {
+  const code = String(reason.code || '').trim().toLowerCase()
+  return code === 'inactive' || code === 'manual_disabled'
+}
+
+function applyPoolKeyActiveState(key: PoolKeyDetail, nextStatus: boolean): void {
+  const previousStatus = key.is_active
+  key.is_active = nextStatus
+
+  if (nextStatus) {
+    const remainingReasons = (key.scheduling_reasons ?? []).filter(
+      reason => !isManualInactiveReason(reason),
+    )
+    key.scheduling_reasons = remainingReasons
+    const remainingBlockingReason = remainingReasons.find(reason => reason.blocking)
+    if (remainingBlockingReason) {
+      key.scheduling_reason = remainingBlockingReason.code
+      key.scheduling_label = remainingBlockingReason.label
+      key.scheduling_status = remainingBlockingReason.code === 'cooldown' ? 'degraded' : 'blocked'
+    } else if (key.cooldown_reason) {
+      key.scheduling_reason = 'cooldown'
+      key.scheduling_label = '冷却中'
+      key.scheduling_status = 'degraded'
+    } else {
+      key.scheduling_reason = 'available'
+      key.scheduling_label = '可用'
+      key.scheduling_status = 'available'
+    }
+  } else {
+    key.scheduling_label = '已禁用'
+    key.scheduling_status = 'blocked'
+    key.scheduling_reason = 'inactive'
+    key.scheduling_reasons = [{
+      code: 'inactive',
+      label: '已禁用',
+      blocking: true,
+      source: 'manual',
+      ttl_seconds: null,
+      detail: null,
+    }]
+  }
+
+  if (previousStatus === nextStatus) return
+  const delta = nextStatus ? 1 : -1
+  const overview = poolProviders.value.find(item => item.provider_id === selectedProviderId.value)
+  if (overview) {
+    overview.active_keys = clampActiveKeyCount(overview.active_keys, overview.total_keys, delta)
+  }
+  if (selectedProviderData.value) {
+    selectedProviderData.value.active_keys = clampActiveKeyCount(
+      selectedProviderData.value.active_keys,
+      selectedProviderData.value.total_keys,
+      delta,
+    )
+  }
+}
+
+function applyQuotaRefreshResultToCurrentPage(result: Awaited<ReturnType<typeof refreshProviderQuota>>): void {
+  keyPage.value.keys = mergePoolKeyQuotaSnapshots(keyPage.value.keys, result.results)
+}
+
+function getCodexResetCredits(key: PoolKeyDetail) {
+  if (getQuotaSnapshotProviderType(key) !== 'codex') return null
+
+  const snapshot = key.status_snapshot?.quota?.reset_credits
+  const snapshotUpdatedAt = key.status_snapshot?.quota?.updated_at
+  const snapshotDisplay = snapshot
+    ? {
+        ...(typeof snapshotUpdatedAt === 'number' ? { updated_at: snapshotUpdatedAt } : {}),
+        reset_credits: snapshot,
+      }
+    : null
+  return mergeCodexQuotaDisplays(snapshotDisplay, key.upstream_metadata?.codex)?.reset_credits ?? null
+}
+
+function getCodexCredentialGeneration(key: PoolKeyDetail): string | null | undefined {
+  const codex = key.upstream_metadata?.codex
+  return codex && typeof codex === 'object'
+    ? codex.credential_generation?.trim() || null
+    : undefined
+}
+
+function getPendingCodexResetCreditIdempotencyKey(key: PoolKeyDetail): string | null {
+  const codex = key.upstream_metadata?.codex
+  const serverReservation = getCodexResetCreditReservationIdempotencyKey(codex)
+  if (serverReservation) return serverReservation
+  const generation = getCodexCredentialGeneration(key)
+  return generation === undefined
+    ? null
+    : readPendingCodexResetCreditIdempotencyKey(key.key_id, generation)
+}
+
+function getCodexResetCreditCountText(key: PoolKeyDetail): string | null {
+  const count = getCodexResetCreditAvailableCount(getCodexResetCredits(key))
+  return count === null && !getPendingCodexResetCreditIdempotencyKey(key)
+    ? null
+    : formatCodexResetCreditCount(count)
+}
+
+function getCodexResetCreditItemTexts(key: PoolKeyDetail): string[] {
+  return getVisibleCodexResetCreditItems(getCodexResetCredits(key), undefined, 3)
+    .map(item => `${item.displayKey} ${formatCodexResetCreditExpiresAt(item.expiresAt)}`)
+}
+
+function canConsumeCodexResetCredit(key: PoolKeyDetail): boolean {
+  return getQuotaSnapshotProviderType(key) === 'codex'
+    && getCodexCredentialGeneration(key) !== undefined
+    && (getPendingCodexResetCreditIdempotencyKey(key) !== null
+      || (getCodexResetCreditAvailableCount(getCodexResetCredits(key)) ?? 0) > 0)
+    && consumingCodexResetCreditKeyId.value === null
+}
+
+async function handleConsumeCodexResetCredit(key: PoolKeyDetail): Promise<void> {
+  if (!canConsumeCodexResetCredit(key)) return
+  const generation = getCodexCredentialGeneration(key)
+  if (generation === undefined) return
+  const pendingIdempotencyKey = getPendingCodexResetCreditIdempotencyKey(key)
+  const confirmed = await confirm({
+    title: '确认使用 Codex 重置机会',
+    message: pendingIdempotencyKey
+      ? '将继续确认上次尚未完成的 Codex 重置请求。'
+      : '将消耗 1 次 Codex 重置机会，完成后自动刷新账号额度。',
+    confirmText: '确认重置',
+    cancelText: '取消',
+    variant: 'warning',
+  })
+  if (!confirmed) return
+
+  consumingCodexResetCreditKeyId.value = key.key_id
+  try {
+    const idempotencyKey = pendingIdempotencyKey
+      || readPendingCodexResetCreditIdempotencyKey(key.key_id, generation)
+      || createCodexResetCreditIdempotencyKey()
+    rememberPendingCodexResetCreditIdempotencyKey(key.key_id, idempotencyKey, generation)
+    const result = await consumeCodexResetCredit(key.key_id, {
+      idempotency_key: idempotencyKey,
+      expected_credential_generation: generation,
+    })
+    clearPendingCodexResetCreditIdempotencyKeyForOutcome(key.key_id, result.outcome)
+    keyPage.value.keys = mergePoolKeyQuotaSnapshots(keyPage.value.keys, [{
+      key_id: result.key_id,
+      key_name: key.key_name,
+      status: result.refresh_status === 'success' ? 'success' : result.status as 'success',
+      metadata: result.metadata,
+      quota_snapshot: result.quota_snapshot,
+    }])
+    if (result.outcome === 'reset' || result.outcome === 'already_redeemed') {
+      success('Codex 重置机会已使用，账号额度已刷新')
+    } else {
+      showWarning(result.message || '重置请求已处理，请查看最新额度')
+    }
+  } catch (err: unknown) {
+    const responseData = typeof err === 'object' && err !== null && 'response' in err
+      ? (err as { response?: { data?: Record<string, unknown> } }).response?.data
+      : undefined
+    if (responseData?.outcome === 'credential_changed') {
+      clearPendingCodexResetCreditIdempotencyKey(key.key_id)
+    } else if (typeof responseData?.active_idempotency_key === 'string') {
+      rememberPendingCodexResetCreditIdempotencyKey(
+        key.key_id,
+        responseData.active_idempotency_key,
+        generation,
+      )
+    }
+    showError(parseApiError(err, 'Codex 重置机会使用失败'))
+  } finally {
+    consumingCodexResetCreditKeyId.value = null
+  }
 }
 
 function normalizeQuotaUpdatedAt(raw: number | null | undefined): number | null {
@@ -1574,7 +2389,7 @@ const currentPageQuotaRefreshStats = computed(() => {
 })
 
 async function refreshCurrentPageQuotaInBackground(
-  options: { silent?: boolean; reloadAfter?: boolean } = {},
+  options: { silent?: boolean; reloadAfter?: boolean | 'silent' } = {},
 ): Promise<boolean> {
   if (!selectedProviderId.value || !quotaRefreshSupported.value) return false
 
@@ -1597,18 +2412,24 @@ async function refreshCurrentPageQuotaInBackground(
   refreshingCurrentPageQuota.value = true
   try {
     const result = await refreshProviderQuota(providerId, quotaStats.eligibleIds)
+    applyQuotaRefreshResultToCurrentPage(result)
     const successCount = Number(result.success || 0)
     const failedCount = Number(result.failed || 0)
     const skippedCount = Math.max(quotaStats.total - quotaStats.eligibleIds.length, 0)
 
     // 刷新当前页数据，展示最新额度与状态
     if (selectedProviderId.value === providerId && options.reloadAfter !== false) {
-      await loadKeys()
+      await loadKeys({ silent: options.reloadAfter === 'silent' })
     }
 
     if (!options.silent) {
       const skippedText = skippedCount > 0 ? `，冷却跳过 ${skippedCount}` : ''
-      success(`当前页额度刷新完成：成功 ${successCount}，失败 ${failedCount}${skippedText}`)
+      const firstFailureMessage = result.results.find(item => item.status !== 'success')?.message?.trim()
+      if (successCount === 0 && failedCount > 0 && firstFailureMessage) {
+        showError(`当前页额度刷新失败：${firstFailureMessage}${skippedText}`)
+      } else {
+        success(`当前页额度刷新完成：成功 ${successCount}，失败 ${failedCount}${skippedText}`)
+      }
     }
     return true
   } catch (err) {
@@ -1645,28 +2466,50 @@ async function refreshCurrentPage() {
   }
 }
 
-async function loadKeys() {
+async function loadKeys(options: { cacheTtlMs?: number, silent?: boolean } = {}) {
   if (!selectedProviderId.value) return
   const requestId = ++keysRequestId
   const providerId = selectedProviderId.value
   const page = currentPage.value
   const pageSizeValue = pageSize.value
   const search = searchQuery.value || undefined
-  const status = statusFilter.value as 'all' | 'active' | 'cooldown' | 'inactive'
-  keysLoading.value = true
+  const status = statusFilter.value
+  const sortByValue = sortBy.value || undefined
+  if (!options.silent) {
+    keysLoading.value = true
+  }
   try {
     const nextPage = await listPoolKeys(providerId, {
       page,
       page_size: pageSizeValue,
       search,
       status,
+      sort_by: sortByValue || undefined,
+      sort_order: sortByValue ? sortOrder.value : undefined,
+    }, {
+      cacheTtlMs: options.cacheTtlMs ?? 0,
     })
     if (requestId !== keysRequestId || selectedProviderId.value !== providerId) return
+    const resolvedPage = resolvePoolManagementPageAfterLoad({
+      requestedPage: page,
+      pageSize: pageSizeValue,
+      total: nextPage.total,
+    })
+    if (resolvedPage !== page) {
+      currentPage.value = resolvedPage
+      return
+    }
     keyPage.value = nextPage
+    keysLoadedOnce.value = true
   } catch (err) {
     if (requestId !== keysRequestId || selectedProviderId.value !== providerId) return
-    resetKeyPage(page, pageSizeValue)
-    showError(parseApiError(err))
+    if (!options.silent) {
+      resetKeyPage(page, pageSizeValue)
+      keysLoadedOnce.value = true
+      showError(parseApiError(err))
+    } else {
+      showWarning(parseApiError(err, '同步账号列表失败'))
+    }
   } finally {
     if (requestId === keysRequestId) {
       keysLoading.value = false
@@ -1674,30 +2517,53 @@ async function loadKeys() {
   }
 }
 
-watch([currentPage, pageSize], () => {
-  void loadKeys()
+watch(currentPage, () => {
+  void loadKeys({ cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
+})
+
+watch(pageSize, () => {
+  void loadKeys({ cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
 })
 
 watch(statusFilter, () => {
   if (suppressFiltersWatch) return
+  resetPoolKeySelection(true)
+  if (keysSearchDebounceTimer !== null) {
+    clearTimeout(keysSearchDebounceTimer)
+    keysSearchDebounceTimer = null
+  }
+  keysSearchPending.value = false
   currentPage.value = 1
-  void loadKeys()
+  void loadKeys({ cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
+})
+
+watch([sortBy, sortOrder], () => {
+  if (currentPage.value !== 1) {
+    currentPage.value = 1
+    return
+  }
+  void loadKeys({ cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
 })
 
 watch(searchQuery, () => {
   if (suppressFiltersWatch) return
+  resetPoolKeySelection(true)
   currentPage.value = 1
   if (keysSearchDebounceTimer !== null) {
     clearTimeout(keysSearchDebounceTimer)
   }
+  keysSearchPending.value = true
   keysSearchDebounceTimer = window.setTimeout(() => {
     keysSearchDebounceTimer = null
-    void loadKeys()
+    keysSearchPending.value = false
+    void loadKeys({ cacheTtlMs: POOL_KEYS_CACHE_TTL_MS })
   }, 300)
 })
 
-function normalizeAuthTypeForEdit(authType: string): EndpointAPIKey['auth_type'] {
-  if (authType === 'oauth' || authType === 'service_account') return authType
+function normalizeAuthTypeForEdit(key: PoolKeyDetail): EndpointAPIKey['auth_type'] {
+  if (isOAuthManagedCredential(key)) return 'oauth'
+  if (isServiceAccountCredential(key)) return 'service_account'
+  if ((key.auth_type || '').trim().toLowerCase() === 'bearer') return 'bearer'
   return 'api_key'
 }
 
@@ -1707,16 +2573,22 @@ function toEndpointApiKey(key: PoolKeyDetail): EndpointAPIKey {
     id: key.key_id,
     provider_id: selectedProviderId.value || '',
     api_formats: key.api_formats || [],
-    api_key_masked: key.auth_type === 'oauth'
-      ? '[OAuth Token]'
-      : key.auth_type === 'service_account'
-        ? '[Service Account]'
-        : '[Key]',
-    auth_type: normalizeAuthTypeForEdit(key.auth_type),
+    api_key_masked: getProviderMaskedSecretLabel(key, selectedProviderType.value),
+    auth_type: normalizeAuthTypeForEdit(key),
+    auth_type_by_format: key.auth_type_by_format ?? null,
+    credential_kind: key.credential_kind ?? null,
+    runtime_auth_kind: key.runtime_auth_kind ?? null,
+    oauth_managed: key.oauth_managed ?? undefined,
+    agent_identity: key.agent_identity ?? undefined,
+    oauth_header_auth: key.oauth_header_auth ?? undefined,
+    can_refresh_oauth: key.can_refresh_oauth ?? undefined,
+    can_export_oauth: key.can_export_oauth ?? undefined,
+    can_edit_oauth: key.can_edit_oauth ?? undefined,
     name: key.key_name || '未命名',
     rate_multipliers: key.rate_multipliers ?? null,
     internal_priority: key.internal_priority ?? 50,
     rpm_limit: key.rpm_limit ?? null,
+    concurrent_limit: key.concurrent_limit ?? null,
     allowed_models: key.allowed_models ?? null,
     capabilities: key.capabilities ?? null,
     cache_ttl_minutes: key.cache_ttl_minutes ?? 5,
@@ -1743,9 +2615,12 @@ function toEndpointApiKey(key: PoolKeyDetail): EndpointAPIKey {
     oauth_plan_type: key.oauth_plan_type ?? null,
     oauth_account_id: key.oauth_account_id ?? null,
     oauth_account_user_id: key.oauth_account_user_id ?? null,
+    oauth_account_name: key.oauth_account_name ?? null,
     oauth_organizations: key.oauth_organizations ?? [],
+    oauth_temporary: key.oauth_temporary ?? false,
     oauth_invalid_at: key.oauth_invalid_at ?? null,
     oauth_invalid_reason: key.oauth_invalid_reason ?? null,
+    status_snapshot: key.status_snapshot ?? null,
     proxy: key.proxy ?? null,
   }
 }
@@ -1762,6 +2637,12 @@ function sortCurrentPageKeysByPriority() {
     if (pa !== pb) return pa - pb
     return (a.created_at || '').localeCompare(b.created_at || '')
   })
+}
+
+function handleTableSort(payload: { key: string, direction: PoolManagementSortOrder }) {
+  if (payload.key !== 'imported_at' && payload.key !== 'last_used_at' && payload.key !== 'score') return
+  sortBy.value = payload.key
+  sortOrder.value = payload.direction
 }
 
 function startEditInternalPriority(key: PoolKeyDetail) {
@@ -1817,7 +2698,7 @@ async function finishEditInternalPriority(
 
 function handleEditKey(key: PoolKeyDetail) {
   editingKeyDetail.value = key
-  if (key.auth_type === 'oauth') {
+  if (canEditOAuthCredential(key)) {
     oauthKeyEditDialogOpen.value = true
   } else {
     keyFormDialogOpen.value = true
@@ -1829,9 +2710,24 @@ function handleKeyPermissions(key: PoolKeyDetail) {
   keyPermissionsDialogOpen.value = true
 }
 
+function openKeyBatchEditDialog(keyIds: string[]): void {
+  keyBatchEditKeyIds.value = [...new Set(keyIds)]
+  keyBatchEditDialogOpen.value = keyBatchEditKeyIds.value.length > 0
+}
+
+function closeKeyBatchEditDialog(): void {
+  keyBatchEditDialogOpen.value = false
+  keyBatchEditKeyIds.value = []
+}
+
+async function handleKeyBatchEditSaved(): Promise<void> {
+  resetPoolKeySelection(true)
+  await Promise.all([loadKeys({ silent: true }), loadOverview({ silent: true })])
+}
+
 async function handleDialogSaved() {
   editingKeyDetail.value = null
-  await loadKeys()
+  await loadKeys({ silent: true })
 }
 
 function closeKeyFormDialog() {
@@ -1853,6 +2749,20 @@ function getKeyProxyNodeName(key: PoolKeyDetail): string | null {
   if (!key.proxy?.node_id) return null
   const node = proxyNodesStore.nodes.find(n => n.id === key.proxy?.node_id)
   return node ? node.name : `${key.proxy.node_id.slice(0, 8)}...`
+}
+
+function handleScoreDesktopPopoverToggle(keyId: string, open: boolean) {
+  scoreDesktopPopoverOpenKeyId.value = open ? keyId : null
+  if (open) {
+    scoreMobilePopoverOpenKeyId.value = null
+  }
+}
+
+function handleScoreMobilePopoverToggle(keyId: string, open: boolean) {
+  scoreMobilePopoverOpenKeyId.value = open ? keyId : null
+  if (open) {
+    scoreDesktopPopoverOpenKeyId.value = null
+  }
 }
 
 function handleProxyDesktopPopoverToggle(keyId: string, open: boolean) {
@@ -1907,20 +2817,6 @@ async function clearKeyProxy(key: PoolKeyDetail) {
   }
 }
 
-async function handleRecoverKey(key: PoolKeyDetail) {
-  if (recoveringHealthKeyId.value) return
-  recoveringHealthKeyId.value = key.key_id
-  try {
-    const result = await recoverKeyHealth(key.key_id)
-    success(result.message || 'Key 已恢复')
-    await loadKeys()
-  } catch (err) {
-    showError(parseApiError(err, 'Key恢复失败'))
-  } finally {
-    recoveringHealthKeyId.value = null
-  }
-}
-
 async function handleDeleteKey(key: PoolKeyDetail) {
   const confirmed = await confirm({
     title: '删除账号',
@@ -1934,6 +2830,7 @@ async function handleDeleteKey(key: PoolKeyDetail) {
   try {
     await deleteEndpointKey(key.key_id)
     success('账号已删除')
+    togglePoolKeySelection(key.key_id, false)
     // 乐观更新：直接从本地列表移除，避免等待网络重载
     keyPage.value.keys = keyPage.value.keys.filter(k => k.key_id !== key.key_id)
     keyPage.value.total = Math.max(0, keyPage.value.total - 1)
@@ -2002,17 +2899,36 @@ async function handleRefreshOAuth(key: PoolKeyDetail) {
   refreshingOAuthKeyId.value = key.key_id
   try {
     const result = await refreshProviderOAuth(key.key_id)
+    const refreshedExpiresAt = typeof result.expires_at === 'number' ? result.expires_at : null
     const target = keyPage.value.keys.find(k => k.key_id === key.key_id)
     if (target) {
-      target.oauth_expires_at = result.expires_at ?? null
-      target.oauth_invalid_at = null
-      target.oauth_invalid_reason = null
+      target.oauth_expires_at = refreshedExpiresAt
     }
-    success('Token 刷新成功')
-    await loadKeys()
+    await loadKeys({ silent: true })
+    if (refreshedExpiresAt != null) {
+      const reloadedTarget = keyPage.value.keys.find(k => k.key_id === key.key_id)
+      if (
+        reloadedTarget
+        && (typeof reloadedTarget.oauth_expires_at !== 'number'
+          || reloadedTarget.oauth_expires_at < refreshedExpiresAt)
+      ) {
+        reloadedTarget.oauth_expires_at = refreshedExpiresAt
+      }
+    }
+    const refreshedKey = keyPage.value.keys.find(k => k.key_id === key.key_id) ?? null
+    const feedback = getOAuthRefreshFeedback({
+      accountStateRecheckAttempted: result.account_state_recheck_attempted,
+      accountStateRecheckError: result.account_state_recheck_error,
+      snapshot: refreshedKey,
+    })
+    if (feedback.tone === 'warning') {
+      showWarning(feedback.message)
+    } else {
+      success(feedback.message)
+    }
   } catch (err) {
     showError(parseApiError(err, 'Token 刷新失败'))
-    await loadKeys()
+    await Promise.all([loadKeys({ silent: true }), loadOverview({ silent: true })])
   } finally {
     refreshingOAuthKeyId.value = null
   }
@@ -2024,10 +2940,54 @@ async function clearCooldown(keyId: string) {
   try {
     const res = await clearPoolCooldown(selectedProviderId.value, keyId)
     success(res.message)
-    await loadKeys()
-    refreshOverviewInBackground()
+    const key = keyPage.value.keys.find(item => item.key_id === keyId)
+    if (key) {
+      key.cooldown_reason = null
+      key.cooldown_ttl_seconds = null
+      if (key.scheduling_reason === 'cooldown') {
+        key.scheduling_reason = key.is_active ? 'available' : 'inactive'
+        key.scheduling_status = key.is_active ? 'available' : 'blocked'
+        key.scheduling_label = key.is_active ? '可用' : '已禁用'
+      }
+      key.scheduling_reasons = key.scheduling_reasons?.filter(
+        item => item.code !== 'cooldown',
+      )
+    }
+    await Promise.all([loadKeys({ silent: true }), loadOverview({ silent: true })])
   } catch (err) {
     showError(parseApiError(err))
+  }
+}
+
+async function handleResetCycleStats(key: PoolKeyDetail) {
+  if (resettingCycleKeyId.value || !canResetCycleStats(key)) return
+
+  const confirmed = await confirm({
+    title: '重置周期统计',
+    message: `确定要将账号 "${key.key_name || key.key_id.slice(0, 8)}" 的 5H / 周统计从当前时间重新开始计算吗？`,
+    confirmText: '重置',
+  })
+  if (!confirmed) return
+
+  resettingCycleKeyId.value = key.key_id
+  try {
+    const result = await resetProviderKeyCycleStats(key.key_id)
+    success(result.message || '周期统计已重置')
+    if (key.status_snapshot?.quota?.windows) {
+      const resetAt = Number(result.reset_at)
+      key.status_snapshot = {
+        ...key.status_snapshot,
+        quota: {
+          ...key.status_snapshot.quota,
+          windows: resetCodexCycleUsageWindows(key.status_snapshot.quota.windows, resetAt),
+        },
+      }
+    }
+    await loadKeys({ silent: true })
+  } catch (err) {
+    showError(parseApiError(err, '重置周期统计失败'))
+  } finally {
+    resettingCycleKeyId.value = null
   }
 }
 
@@ -2037,21 +2997,9 @@ async function toggleKeyActive(key: PoolKeyDetail) {
   try {
     const nextStatus = !key.is_active
     await updateProviderKey(key.key_id, { is_active: nextStatus })
-    key.is_active = nextStatus
-    if (nextStatus) {
-      delete key.scheduling_label
-      delete key.scheduling_status
-      if (key.scheduling_reason === 'manual_disabled') {
-        delete key.scheduling_reason
-      }
-    } else {
-      key.scheduling_label = '禁用'
-      key.scheduling_status = 'blocked'
-      key.scheduling_reason = 'manual_disabled'
-    }
+    applyPoolKeyActiveState(key, nextStatus)
+    await Promise.all([loadKeys({ silent: true }), loadOverview({ silent: true })])
     success(nextStatus ? '账号已启用' : '账号已停用')
-    await loadKeys()
-    refreshOverviewInBackground()
   } catch (err) {
     showError(parseApiError(err))
   } finally {
@@ -2063,104 +3011,111 @@ async function toggleKeyActive(key: PoolKeyDetail) {
 const showImportDialog = ref(false)
 const showSchedulingDialog = ref(false)
 const showAdvancedDialog = ref(false)
+const providerDrawerOpen = ref(false)
+const providerDrawerMounted = ref(false)
+const providerEditDialogOpen = ref(false)
+const providerToEdit = ref<ProviderWithEndpointsSummary | null>(null)
 const showAccountBatchDialog = ref(false)
-const providerProxyMobilePopoverOpen = ref(false)
-const providerProxyDesktopPopoverOpen = ref(false)
-const savingProviderProxy = ref(false)
+const pendingAccountBatchAction = ref<PoolBatchActionValue | null>(null)
 const togglingProviderStatus = ref(false)
 
-function openSchedulingDialog() {
-  showSchedulingDialog.value = true
-}
-
-function getProviderProxyNodeName(): string | null {
-  const nodeId = selectedProviderData.value?.proxy?.node_id
-  if (!nodeId) return null
-  const node = proxyNodesStore.nodes.find(n => n.id === nodeId)
-  return node ? node.name : `${nodeId.slice(0, 8)}...`
-}
-
-function getProviderProxyButtonTitle(): string {
-  const nodeName = getProviderProxyNodeName()
-  if (nodeName) return `提供商代理（当前: ${nodeName}）`
-  return '提供商代理（未设置）'
-}
-
-function closeProviderProxyPopovers(): void {
-  providerProxyMobilePopoverOpen.value = false
-  providerProxyDesktopPopoverOpen.value = false
-}
-
-function handleProviderProxyPopoverToggle(scope: 'mobile' | 'desktop', open: boolean): void {
-  if (scope === 'mobile') {
-    providerProxyMobilePopoverOpen.value = open
-    if (open) {
-      providerProxyDesktopPopoverOpen.value = false
-    }
-  } else {
-    providerProxyDesktopPopoverOpen.value = open
-    if (open) {
-      providerProxyMobilePopoverOpen.value = false
-    }
+async function ensureSelectedProviderDetail(): Promise<boolean> {
+  const providerId = selectedProviderId.value
+  if (!providerId) return false
+  if (selectedProviderData.value?.id !== providerId) {
+    await loadProviderData(providerId, { preserveOnError: true })
   }
-  if (open) {
-    proxyNodesStore.ensureLoaded()
-    proxyDesktopPopoverOpenKeyId.value = null
-    proxyMobilePopoverOpenKeyId.value = null
+  if (selectedProviderData.value?.id === providerId) return true
+  showWarning('Provider 详情尚未加载，无法编辑调度配置')
+  return false
+}
+
+async function openSchedulingDialog() {
+  if (await ensureSelectedProviderDetail()) {
+    showSchedulingDialog.value = true
   }
 }
 
-async function setProviderProxy(nodeId: string): Promise<void> {
+async function openAdvancedDialog() {
+  if (await ensureSelectedProviderDetail()) {
+    showAdvancedDialog.value = true
+  }
+}
+
+function openAccountBatchDialog(action: PoolBatchActionValue = 'refresh_quota'): void {
+  if (!selectedProviderId.value || selectedKeyCount.value === 0) return
+  pendingAccountBatchAction.value = action
+  showAccountBatchDialog.value = true
+}
+
+watch(showAccountBatchDialog, (open) => {
+  if (!open) pendingAccountBatchAction.value = null
+})
+
+function openProviderDrawer(): void {
+  prefetchProviderDetailDrawer()
+  if (!selectedProviderId.value) return
+  providerDrawerMounted.value = true
+  providerDrawerOpen.value = true
+}
+
+async function handleProviderDrawerRefresh(): Promise<void> {
   const providerId = selectedProviderId.value
   if (!providerId) return
-  savingProviderProxy.value = true
-  try {
-    const updated = await updateProvider(providerId, {
-      proxy: { node_id: nodeId, enabled: true },
-    })
-    if (selectedProviderId.value === providerId) {
-      selectedProviderData.value = updated
-    }
-    closeProviderProxyPopovers()
-    success('提供商代理已设置')
-  } catch (err) {
-    showError(parseApiError(err, '设置提供商代理失败'))
-  } finally {
-    savingProviderProxy.value = false
-  }
+
+  await Promise.all([
+    loadKeys({ silent: true }),
+    loadOverview({ silent: true }),
+    loadProviderData(providerId, { preserveOnError: true }),
+  ])
+  resetPoolKeySelection(true)
 }
 
-async function clearProviderProxy(): Promise<void> {
-  const providerId = selectedProviderId.value
+async function openProviderEditDialog(provider?: ProviderWithEndpointsSummary): Promise<void> {
+  const providerId = provider?.id || selectedProviderId.value
   if (!providerId) return
-  savingProviderProxy.value = true
+
   try {
-    const updated = await updateProvider(providerId, { proxy: null })
-    if (selectedProviderId.value === providerId) {
-      selectedProviderData.value = updated
+    const latest = await getProvider(providerId)
+    if (selectedProviderId.value !== providerId) return
+    if (selectedProviderData.value?.id === latest.id) {
+      Object.assign(selectedProviderData.value, latest)
+      providerToEdit.value = selectedProviderData.value
+    } else {
+      selectedProviderData.value = latest
+      providerToEdit.value = latest
     }
-    closeProviderProxyPopovers()
-    success('提供商代理已清除')
   } catch (err) {
-    showError(parseApiError(err, '清除提供商代理失败'))
-  } finally {
-    savingProviderProxy.value = false
+    if (selectedProviderId.value !== providerId) return
+    const fallbackProvider = provider ?? selectedProviderData.value
+    if (!fallbackProvider) {
+      showError(parseApiError(err, '刷新提供商状态失败'))
+      return
+    }
+    providerToEdit.value = fallbackProvider
   }
+
+  providerEditDialogOpen.value = true
 }
 
-function getProviderToggleButtonTitle(): string {
-  const active = selectedProviderData.value?.is_active !== false
-  return active ? '当前状态：已启用，点击禁用提供商' : '当前状态：已禁用，点击启用提供商'
+async function handleProviderEditSaved(updatedProvider: ProviderWithEndpointsSummary): Promise<void> {
+  if (selectedProviderId.value === updatedProvider.id) {
+    if (selectedProviderData.value) {
+      Object.assign(selectedProviderData.value, updatedProvider)
+      providerToEdit.value = selectedProviderData.value
+    } else {
+      selectedProviderData.value = updatedProvider
+      providerToEdit.value = updatedProvider
+    }
+  }
+  providerEditDialogOpen.value = false
+  await loadOverview({ silent: true })
 }
 
-function getProviderToggleButtonClass(): string {
-  return ''
-}
-
-async function toggleSelectedProviderStatus(): Promise<void> {
+async function toggleSelectedProviderStatus(provider?: ProviderWithEndpointsSummary): Promise<void> {
   if (togglingProviderStatus.value) return
   const providerId = selectedProviderId.value
-  const current = selectedProviderData.value
+  const current = provider?.id === providerId ? provider : selectedProviderData.value
   if (!providerId || !current) return
 
   const nextStatus = !current.is_active
@@ -2177,11 +3132,16 @@ async function toggleSelectedProviderStatus(): Promise<void> {
   togglingProviderStatus.value = true
   try {
     const updated = await updateProvider(providerId, { is_active: nextStatus })
-    if (selectedProviderId.value === providerId) {
-      selectedProviderData.value = updated
+    Object.assign(current, updated)
+    if (selectedProviderId.value === providerId && selectedProviderData.value !== current) {
+      if (selectedProviderData.value) {
+        Object.assign(selectedProviderData.value, updated)
+      } else {
+        selectedProviderData.value = updated
+      }
     }
     success(nextStatus ? '提供商已启用' : '提供商已禁用')
-    await loadOverview()
+    await loadOverview({ silent: true })
   } catch (err) {
     showError(parseApiError(err, nextStatus ? '启用提供商失败' : '禁用提供商失败'))
   } finally {
@@ -2190,14 +3150,15 @@ async function toggleSelectedProviderStatus(): Promise<void> {
 }
 
 async function handleAccountBatchChanged(): Promise<void> {
-  await Promise.all([loadKeys(), loadOverview()])
+  resetPoolKeySelection(true)
+  await Promise.all([loadKeys({ silent: true }), loadOverview({ silent: true })])
 }
 
 async function handleAccountDialogSaved() {
   showImportDialog.value = false
-  await Promise.all([loadKeys(), loadOverview()])
+  await Promise.all([loadKeys({ silent: true }), loadOverview({ silent: true })])
   // 导入账号后补一次静默额度刷新，避免新账号在列表里暂无额度信息
-  await refreshCurrentPageQuotaInBackground({ silent: true })
+  await refreshCurrentPageQuotaInBackground({ silent: true, reloadAfter: 'silent' })
 }
 
 // --- Formatting ---
@@ -2223,50 +3184,135 @@ function formatCooldownReason(reason: string): string {
 
 type PoolStatusVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'dark'
 
+function isHealthDerivedSchedulingReason(reason: string | null | undefined): boolean {
+  const normalized = String(reason || '').trim().toLowerCase()
+  return normalized === 'health_low'
+    || normalized === 'health_degraded'
+    || normalized === 'health'
+    || normalized === 'circuit_open'
+    || normalized === 'circuit_breaker'
+}
+
+function isHealthDerivedSchedulingLabel(label: string | null | undefined): boolean {
+  const normalized = String(label || '').trim()
+  return normalized === '健康低'
+    || normalized === '健康度较低'
+    || normalized === '降级'
+    || normalized === '熔断'
+    || normalized === '熔断中'
+}
+
+function getVisibleSchedulingReason(key: PoolKeyDetail): string | null {
+  const reason = String(key.scheduling_reason || '').trim()
+  if (!reason || isHealthDerivedSchedulingReason(reason)) return null
+  return reason
+}
+
+function getVisibleSchedulingReasons(key: PoolKeyDetail) {
+  return (key.scheduling_reasons ?? []).filter((item) => {
+    const source = String(item.source || '').trim().toLowerCase()
+    return source !== 'health'
+      && !isHealthDerivedSchedulingReason(item.code)
+      && !isHealthDerivedSchedulingLabel(item.label)
+  })
+}
+
 function getSchedulingStatus(key: PoolKeyDetail): 'available' | 'degraded' | 'blocked' {
   if (getAccountAlertLabel(key)) return 'blocked'
+  if (getBlockingOAuthStatusLabel(key)) return 'blocked'
 
   const status = key.scheduling_status
-  if (status === 'available' || status === 'degraded' || status === 'blocked') {
+  if (
+    (status === 'available' || status === 'degraded' || status === 'blocked')
+    && !isHealthDerivedSchedulingReason(key.scheduling_reason)
+    && !isHealthDerivedSchedulingLabel(key.scheduling_label)
+  ) {
     return status
   }
 
   if (!key.is_active) return 'blocked'
-  if (key.cooldown_reason) return 'blocked'
-  if (key.circuit_breaker_open) return 'blocked'
+  if (key.cooldown_reason) return 'degraded'
   if (key.cost_limit != null && key.cost_limit > 0 && key.cost_window_usage >= key.cost_limit) return 'blocked'
-  if ((key.health_score ?? 1) < 0.8) return 'degraded'
   return 'available'
+}
+
+function compactPoolStatusLabel(label: string | null | undefined): string | null {
+  const normalized = String(label || '').trim()
+  if (!normalized) return null
+
+  const mapped: Record<string, string> = {
+    'Token 失效': '已失效',
+    'Token 过期': '已过期',
+    Token失效: '已失效',
+    Token过期: '已过期',
+    账号已封禁: '账号封禁',
+    工作区已停用: '工作区停用',
+    账号访问受限: '访问受限',
+    健康度较低: '健康低',
+  }
+  const labelText = mapped[normalized] || normalized
+  return Array.from(labelText).slice(0, 5).join('')
+}
+
+function getOAuthStatusBadgeLabel(status: ReturnType<typeof getVisibleOAuthState>): string | null {
+  if (!status) return null
+  if (status.requiresReauth) return '续期失败'
+  if (status.isInvalid) return '已失效'
+  if (status.isExpired) return '已过期'
+  if (status.text === '未添加') return '未添加'
+  if (status.text === '有效期未知') return '未知'
+  if (status.isExpiringSoon) return '将过期'
+  return '有效'
+}
+
+function getBlockingOAuthStatusLabel(key: PoolKeyDetail): string | null {
+  const oauthState = getVisibleOAuthState(key)
+  if (!oauthState?.isInvalid && !oauthState?.isExpired) return null
+  return getOAuthStatusBadgeLabel(oauthState)
+}
+
+function isPoolKeyCostExhausted(key: PoolKeyDetail): boolean {
+  return key.cost_limit != null
+    && key.cost_limit > 0
+    && key.cost_window_usage >= key.cost_limit
 }
 
 function getSchedulingBadgeLabel(key: PoolKeyDetail): string {
   const accountAlert = getAccountAlertLabel(key)
-  if (accountAlert) return accountAlert
+  if (accountAlert) return compactPoolStatusLabel(accountAlert) || accountAlert
+  const oauthAlert = getBlockingOAuthStatusLabel(key)
+  if (oauthAlert) return oauthAlert
 
   const rawLabel = String(key.scheduling_label || '').trim()
-  if (rawLabel) {
+  if (
+    rawLabel
+    && !isHealthDerivedSchedulingReason(key.scheduling_reason)
+    && !isHealthDerivedSchedulingLabel(rawLabel)
+  ) {
+    if ((rawLabel === '可用' || key.scheduling_reason === 'available') && isPoolKeyCostExhausted(key)) {
+      return '超限'
+    }
     if (rawLabel === '禁用' || rawLabel === '停用') return '禁用'
-    return rawLabel
+    return compactPoolStatusLabel(rawLabel) || rawLabel
   }
 
-  if (!key.is_active) return '禁用'
-  if (key.cooldown_reason) return '冷却'
-  if (key.circuit_breaker_open) return '熔断'
-  if (key.cost_limit != null && key.cost_limit > 0 && key.cost_window_usage >= key.cost_limit) return '超限'
-  if ((key.health_score ?? 1) < 0.5) return '健康低'
-  if ((key.health_score ?? 1) < 0.8) return '降级'
+  if (!key.is_active) return '已禁用'
+  if (key.cooldown_reason) return '冷却中'
   return '可用'
 }
 
 function getSchedulingBadgeVariant(key: PoolKeyDetail): PoolStatusVariant {
   if (getAccountAlertLabel(key)) return 'destructive'
+  if (getBlockingOAuthStatusLabel(key)) return 'destructive'
 
-  const reason = key.scheduling_reason
-  if (reason === 'manual_disabled') return 'secondary'
-  if (reason === 'cooldown' || reason === 'circuit_open' || reason === 'cost_exhausted') return 'destructive'
+  const reason = getVisibleSchedulingReason(key)
+  if (reason === 'manual_disabled' || reason === 'inactive') return 'secondary'
+  if (reason === 'account_blocked' || reason === 'account_quota_exhausted' || reason === 'cost_exhausted') return 'destructive'
+  if (reason === 'cooldown') return 'warning'
   if (reason === 'cost_soft' || reason === 'cost') return 'warning'
-  if (reason === 'health_low' || reason === 'health_degraded' || reason === 'health') return 'warning'
+  if (isPoolKeyCostExhausted(key)) return 'destructive'
   if (reason === 'available') return 'default'
+  if (!reason && !key.is_active) return 'secondary'
 
   const status = getSchedulingStatus(key)
   if (status === 'blocked') return 'destructive'
@@ -2277,8 +3323,9 @@ function getSchedulingBadgeVariant(key: PoolKeyDetail): PoolStatusVariant {
 function getSchedulingTitle(key: PoolKeyDetail): string {
   const accountAlertTitle = getAccountAlertTitle(key)
   if (accountAlertTitle) return accountAlertTitle
+  if (getBlockingOAuthStatusLabel(key)) return getOAuthStatusTitle(key)
 
-  const reasons = key.scheduling_reasons ?? []
+  const reasons = getVisibleSchedulingReasons(key)
   if (reasons.length > 0) {
     return reasons.map((item) => {
       const ttl = item.ttl_seconds && item.ttl_seconds > 0 ? ` (${formatTTL(item.ttl_seconds)})` : ''
@@ -2291,6 +3338,7 @@ function getSchedulingTitle(key: PoolKeyDetail): string {
     const ttl = key.cooldown_ttl_seconds ? ` (${formatTTL(key.cooldown_ttl_seconds)})` : ''
     return `${formatCooldownReason(key.cooldown_reason)}${ttl}`
   }
+  if (isPoolKeyCostExhausted(key)) return '超限'
   return getSchedulingBadgeLabel(key)
 }
 
@@ -2307,83 +3355,103 @@ function getRowClass(key: PoolKeyDetail): string {
   return ''
 }
 
-function getHealthScoreColor(score: number): string {
-  if (score >= 0.8) return 'text-green-600 dark:text-green-400'
-  if (score >= 0.5) return 'text-yellow-600 dark:text-yellow-400'
-  return 'text-red-600 dark:text-red-400'
+function getAuthTypeChipLabel(key: PoolKeyDetail): string {
+  return getProviderAuthLabel(key)
 }
 
-function formatOAuthPlanType(planType: string): string {
-  const labelMap: Record<string, string> = {
-    plus: 'Plus',
-    pro: 'Pro',
-    free: 'Free',
-    paid: 'Paid',
-    team: 'Team',
-    enterprise: 'Enterprise',
-    ultra: 'Ultra',
-    'pro+': 'Pro+',
-    power: 'Power',
+function getMobileOAuthTone(key: PoolKeyDetail): PoolMobileTagTone | null {
+  const oauthState = getVisibleOAuthState(key)
+  if (!oauthState) return null
+  if (oauthState.isInvalid || oauthState.isExpired) return 'danger'
+  if (oauthState.isExpiringSoon) return 'warning'
+  return 'muted'
+}
+
+function getMobileTagItems(key: PoolKeyDetail): PoolMobileTagItem[] {
+  const accountAlert = getAccountAlertLabel(key)
+  const oauthState = getVisibleOAuthState(key)
+  const orgBadge = getOAuthOrgBadge(key)
+  const planType = resolvePoolKeyPlanType(key)
+
+  return buildPoolMobileTagItems({
+    accountStatusLabel: compactPoolStatusLabel(accountAlert),
+    accountStatusTone: accountAlert ? 'danger' : null,
+    oauthStatusLabel: getOAuthStatusBadgeLabel(oauthState),
+    oauthStatusTone: getMobileOAuthTone(key),
+    priorityLabel: `P${key.internal_priority ?? 50}`,
+    authLabel: getAuthTypeChipLabel(key),
+    planLabel: planType ? formatOAuthPlanType(planType) : null,
+    orgLabel: orgBadge?.label ?? null,
+    proxyLabel: key.proxy?.node_id ? '独立代理' : null,
+  })
+}
+
+function getMobileTagClass(item: PoolMobileTagItem): string {
+  if (item.tone === 'danger') {
+    return 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
   }
-  return labelMap[planType.toLowerCase()] || planType
-}
-
-function getOAuthPlanTypeClass(planType: string): string {
-  const classes: Record<string, string> = {
-    plus: 'border-green-500/50 text-green-600 dark:text-green-400',
-    pro: 'border-blue-500/50 text-blue-600 dark:text-blue-400',
-    free: 'border-primary/50 text-primary',
-    paid: 'border-blue-500/50 text-blue-600 dark:text-blue-400',
-    team: 'border-purple-500/50 text-purple-600 dark:text-purple-400',
-    enterprise: 'border-amber-500/50 text-amber-600 dark:text-amber-400',
-    ultra: 'border-amber-500/50 text-amber-600 dark:text-amber-400',
-    'pro+': 'border-purple-500/50 text-purple-600 dark:text-purple-400',
-    power: 'border-amber-500/50 text-amber-600 dark:text-amber-400',
+  if (item.tone === 'warning') {
+    return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
   }
-  return classes[planType.toLowerCase()] || ''
+  if (item.tone === 'accent') {
+    return 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300'
+  }
+  if (item.tone === 'muted') {
+    return 'border-border/60 bg-background/70 text-muted-foreground'
+  }
+  return 'border-border/60 bg-background/80 text-foreground/80'
 }
 
-function getKeyOAuthExpires(key: PoolKeyDetail) {
-  if (key.auth_type !== 'oauth') return null
-  if (!key.oauth_expires_at && !key.oauth_invalid_at) return null
-  return getOAuthExpiresCountdown(
-    key.oauth_expires_at,
-    countdownTick.value,
-    key.oauth_invalid_at,
-    key.oauth_invalid_reason
-  )
+function getVisibleOAuthState(key: PoolKeyDetail) {
+  return getOAuthStatusDisplayWithFallback(key, countdownTick.value)
+}
+
+function getOAuthRefreshButtonTitle(key: PoolKeyDetail): string {
+  return resolveOAuthRefreshButtonTitle(key, countdownTick.value)
 }
 
 function getOAuthStatusTitle(key: PoolKeyDetail): string {
-  const status = getKeyOAuthExpires(key)
-  if (!status) return ''
-  if (status.isInvalid) {
-    const cleaned = status.invalidReason && isAccountLevelBlockReason(status.invalidReason)
-      ? cleanAccountBlockReason(status.invalidReason)
-      : status.invalidReason
-    return cleaned ? `Token 已失效: ${cleaned}` : 'Token 已失效'
-  }
-  if (status.isExpired) {
-    return 'Token 已过期，请重新授权'
-  }
-  return `Token 剩余有效期: ${status.text}`
+  return resolveOAuthStatusTitle(key, countdownTick.value)
 }
 
 const _accountAlertCache = new WeakMap<PoolKeyDetail, string | null>()
+
+function getQuotaAlertSnapshotState(key: PoolKeyDetail): { label: string, title: string } | null {
+  const quota = getQuotaSnapshot(key)
+  if (!quota) return null
+
+  const code = String(quota.code || '').trim().toLowerCase()
+  if (!['banned', 'forbidden', 'quarantined', 'rate_limited', 'exhausted'].includes(code)) return null
+
+  let label = String(quota.label || '').trim()
+  if (!label) {
+    if (code === 'banned') label = '账号封禁'
+    else if (code === 'forbidden') label = '访问受限'
+    else if (code === 'quarantined') label = '账号隔离'
+    else if (code === 'rate_limited') label = '速率受限'
+    else label = '额度耗尽'
+  } else if (label === '账号已封禁' || label === '封禁') {
+    label = '账号封禁'
+  }
+
+  const reason = String(quota.reason || '').trim()
+  return {
+    label,
+    title: reason ? `${label}: ${reason}` : label,
+  }
+}
 
 function getAccountAlertLabel(key: PoolKeyDetail): string | null {
   const cached = _accountAlertCache.get(key)
   if (cached !== undefined) return cached
 
-  let result: string | null = null
-  const quotaText = String(key.account_quota || '').trim()
-  // 后端 _build_account_quota 返回的确切文本: "账号已封禁" / "访问受限"
-  if (quotaText === '账号已封禁' || quotaText === '封禁') result = '账号封禁'
-  else if (quotaText === '访问受限') result = '访问受限'
-  else if (isAccountLevelBlockReason(key.oauth_invalid_reason)) {
-    const reason = String(key.oauth_invalid_reason || '').trim()
-    const cleaned = cleanAccountBlockReason(reason)
-    result = classifyAccountBlockLabel(cleaned || reason)
+  let result: string | null = getAccountStatusDisplay(key).label
+  const quotaAlert = getQuotaAlertSnapshotState(key)
+  if (!result && quotaAlert) result = quotaAlert.label
+  if (!result && !getQuotaSnapshot(key)) {
+    const quotaText = getLegacyAccountQuotaText(key)
+    if (quotaText === '账号已封禁' || quotaText === '封禁') result = '账号封禁'
+    else if (quotaText === '访问受限') result = '访问受限'
   }
 
   _accountAlertCache.set(key, result)
@@ -2394,16 +3462,13 @@ function getAccountAlertTitle(key: PoolKeyDetail): string {
   const label = getAccountAlertLabel(key)
   if (!label) return ''
 
-  const reason = String(key.oauth_invalid_reason || '').trim()
-  if (reason) {
-    if (isAccountLevelBlockReason(reason)) {
-      const cleaned = cleanAccountBlockReason(reason)
-      return cleaned ? `${label}: ${cleaned}` : label
-    }
-    return `${label}: ${reason}`
-  }
+  const accountTitle = getAccountStatusTitle(key)
+  if (accountTitle) return accountTitle
 
-  const quotaText = String(key.account_quota || '').trim()
+  const quotaAlert = getQuotaAlertSnapshotState(key)
+  if (quotaAlert?.title) return quotaAlert.title
+
+  const quotaText = getLegacyAccountQuotaText(key)
   if (quotaText) return `${label}: ${quotaText}`
   return label
 }
@@ -2411,6 +3476,8 @@ function getAccountAlertTitle(key: PoolKeyDetail): string {
 function normalizeQuotaLabel(label: string): string {
   const normalized = label.trim()
   if (!normalized) return '额度'
+  if (/spark\s*5h/i.test(normalized) || normalized.includes('Spark5H')) return 'Spark5H'
+  if (/spark/i.test(normalized) && normalized.includes('周')) return 'Spark周'
   if (normalized.includes('5H')) return '5H'
   if (normalized.includes('周')) return '周'
   if (normalized.includes('最低剩余')) return '最低'
@@ -2419,39 +3486,92 @@ function normalizeQuotaLabel(label: string): string {
 }
 
 function getQuotaProgressLabel(label: string): string {
+  if (label === '日') return '日'
   if (label === '5H') return '5H'
   if (label === '周') return '周'
+  if (label === '月') return '月'
+  if (label === 'Spark5H') return 'Spark5H'
+  if (label === 'Spark周') return 'Spark周'
   if (label === '最低') return '最低'
   if (label === '剩余') return '剩余'
   return label
 }
 
 function getQuotaProgressCountdown(item: QuotaProgressItem) {
-  if ((item.label !== '5H' && item.label !== '周') || item.resetAtSeconds == null) return null
-  return getCodexResetCountdown(item.resetAtSeconds, null, null, countdownTick.value)
+  const staticResetLabels = ['日', '5H', '周', '月', 'Spark5H', 'Spark周', 'Spark月', 'Auto', 'Fast', 'Expert', 'Heavy', 'Grok 4.3', '生图']
+  if (!item.allowDynamicReset && !staticResetLabels.includes(item.label)) return null
+  if (item.resetAtSeconds == null && item.resetSeconds == null) return null
+  return getCodexResetCountdown(
+    item.resetAtSeconds,
+    item.resetSeconds,
+    item.updatedAtSeconds,
+    countdownTick.value,
+    item.remainingPercent
+  )
 }
 
 function getQuotaProgressCountdownText(item: QuotaProgressItem): string {
   const status = getQuotaProgressCountdown(item)
   if (!status) return ''
-  return status.isExpired ? status.text : `${status.text} 后重置`
+  return status.isExpired ? '' : `${status.text} 后重置`
 }
 
-function getQuotaProgressTooltip(item: QuotaProgressItem): string {
-  const detail = item.detail?.trim() || ''
-  const countdownText = getQuotaProgressCountdownText(item)
-  if (countdownText) {
-    return countdownText
+function formatCompactQuotaCountdownText(text: string): string {
+  const normalized = text.trim()
+  const dayMatch = normalized.match(/^(\d+)天\s+(.+?)(?:\s+后重置)?$/)
+  if (dayMatch) {
+    return `${dayMatch[1]}天 ${dayMatch[2]}`
   }
-  return detail
+  return normalized.replace(/\s+后重置$/, '')
 }
+
+function shouldHideQuotaProgressDetailText(text: string | null | undefined): boolean {
+  return (text ?? '').trim().includes('已重置')
+}
+
+function getQuotaProgressResetDisplayText(item: QuotaProgressItem): string {
+  const countdownText = getQuotaProgressCountdownText(item)
+  if (countdownText) return formatCompactQuotaCountdownText(countdownText)
+  return ''
+}
+
+function getQuotaProgressMeterDisplayText(item: QuotaProgressItem): string {
+  const detail = item.detail?.trim() || ''
+  if (!shouldHideQuotaProgressDetailText(detail) && detail) return detail
+  return `${item.remainingPercent.toFixed(1)}%`
+}
+
+function getQuotaFallbackText(key: PoolKeyDetail): string | null {
+  return getQuotaDisplayText(key, selectedProviderType.value)
+}
+
+function getAccountQuotaText(key: PoolKeyDetail): string | null {
+  return getGeminiCliAccountCreditsText(key, selectedProviderType.value)
+}
+
+
 
 function getQuotaLabelOrder(label: string): number {
-  if (label === '5H') return 0
-  if (label === '周') return 1
-  if (label === '剩余') return 2
-  if (label === '最低') return 3
-  return 10
+  if (label === 'Auto') return 0
+  if (label === 'Fast') return 1
+  if (label === 'Expert') return 2
+  if (label === 'Heavy') return 3
+  if (label === 'Grok 4.3') return 4
+  if (label === '日') return 5
+  if (label === '5H') return 6
+  if (label === '周') return 7
+  if (label === '月') return 8
+  if (label === 'Spark5H') return 9
+  if (label === 'Spark周') return 10
+  if (label === 'Spark月') return 11
+  if (label === 'Prompt') return 12
+  if (label === 'Flex') return 13
+  if (label === '剩余') return 14
+  if (label === '最低') return 15
+  if (label === '生图') return 16
+  if (label === '速率') return 17
+  if (label === '模型') return 18
+  return 20
 }
 
 function clampPercent(value: number): number {
@@ -2459,6 +3579,396 @@ function clampPercent(value: number): number {
   if (value < 0) return 0
   if (value > 100) return 100
   return value
+}
+
+function normalizeUnixSeconds(raw: number | null | undefined): number | null {
+  const value = Number(raw ?? 0)
+  if (!Number.isFinite(value) || value <= 0) return null
+  if (value > 1_000_000_000_000) return Math.floor(value / 1000)
+  return Math.floor(value)
+}
+
+function normalizeRemainingSeconds(raw: number | null | undefined): number | null {
+  const value = Number(raw ?? NaN)
+  if (!Number.isFinite(value) || value < 0) return null
+  return Math.floor(value)
+}
+
+function getQuotaSnapshot(key: PoolKeyDetail): QuotaStatusSnapshot | null {
+  const quota = key.status_snapshot?.quota
+  if (!quota) return null
+  return quota
+}
+
+function getQuotaSnapshotProviderType(key: PoolKeyDetail): string {
+  const snapshotProviderType = String(getQuotaSnapshot(key)?.provider_type || '').trim().toLowerCase()
+  if (snapshotProviderType) return snapshotProviderType
+  return selectedProviderType.value
+}
+
+function getCodexQuotaSnapshot(key: PoolKeyDetail): QuotaStatusSnapshot | null {
+  const quota = getQuotaSnapshot(key)
+  if (!quota) return null
+  return getQuotaSnapshotProviderType(key) === 'codex' ? quota : null
+}
+
+function getQuotaSnapshotUpdatedAtSeconds(quota: QuotaStatusSnapshot | null | undefined): number | null {
+  return normalizeUnixSeconds(quota?.updated_at ?? quota?.observed_at ?? null)
+}
+
+function getQuotaSnapshotResetAtSeconds(quota: QuotaStatusSnapshot | null | undefined): number | null {
+  return normalizeUnixSeconds(quota?.reset_at ?? null)
+}
+
+function getQuotaSnapshotResetSeconds(quota: QuotaStatusSnapshot | null | undefined): number | null {
+  return normalizeRemainingSeconds(quota?.reset_seconds ?? null)
+}
+
+function getQuotaSnapshotWindow(
+  quota: QuotaStatusSnapshot | null | undefined,
+  code: string,
+): QuotaWindowSnapshot | null {
+  const windows = quota?.windows
+  if (!Array.isArray(windows)) return null
+
+  const normalizedCode = code.trim().toLowerCase()
+  return windows.find(window => String(window?.code || '').trim().toLowerCase() === normalizedCode) ?? null
+}
+
+function getQuotaSnapshotWindowsByScope(
+  quota: QuotaStatusSnapshot | null | undefined,
+  scope: string,
+): QuotaWindowSnapshot[] {
+  const windows = quota?.windows
+  if (!Array.isArray(windows)) return []
+
+  const normalizedScope = scope.trim().toLowerCase()
+  return windows.filter(window => String(window?.scope || '').trim().toLowerCase() === normalizedScope)
+}
+
+function getQuotaWindowUsedPercent(window: QuotaWindowSnapshot | null | undefined): number | null {
+  if (!window) return null
+  if (typeof window.used_ratio === 'number') {
+    return clampPercent(window.used_ratio * 100)
+  }
+  if (typeof window.remaining_ratio === 'number') {
+    return clampPercent((1 - window.remaining_ratio) * 100)
+  }
+  if (typeof window.limit_value === 'number' && window.limit_value > 0) {
+    if (typeof window.remaining_value === 'number') {
+      return clampPercent((1 - (window.remaining_value / window.limit_value)) * 100)
+    }
+    if (typeof window.used_value === 'number') {
+      return clampPercent((window.used_value / window.limit_value) * 100)
+    }
+  }
+  return null
+}
+
+function getQuotaWindowRemainingPercent(window: QuotaWindowSnapshot | null | undefined): number | null {
+  if (!window) return null
+  if (typeof window.remaining_ratio === 'number') {
+    return clampPercent(window.remaining_ratio * 100)
+  }
+  const usedPercent = getQuotaWindowUsedPercent(window)
+  return usedPercent == null ? null : clampPercent(100 - usedPercent)
+}
+
+function formatQuotaValue(value: number | null | undefined): string {
+  const normalized = Number(value)
+  if (!Number.isFinite(normalized)) return '0'
+  const rounded = Math.round(normalized)
+  if (Math.abs(normalized - rounded) < 1e-6) {
+    return String(rounded)
+  }
+  return normalized.toFixed(1)
+}
+
+function getQuotaWindowValueText(window: QuotaWindowSnapshot | null | undefined): string | undefined {
+  if (!window || typeof window.limit_value !== 'number' || window.limit_value <= 0) return undefined
+  if (typeof window.remaining_value === 'number') {
+    return `${formatQuotaValue(window.remaining_value)}/${formatQuotaValue(window.limit_value)}`
+  }
+  if (typeof window.used_value === 'number') {
+    return `${formatQuotaValue(Math.max(window.limit_value - window.used_value, 0))}/${formatQuotaValue(window.limit_value)}`
+  }
+  return undefined
+}
+
+function resolvePoolKeyPlanType(key: PoolKeyDetail): string | null {
+  const direct = key.oauth_plan_type?.trim()
+  if (direct) return direct
+  const quota = getQuotaSnapshot(key)
+  const quotaPlan = quota?.plan_type?.trim()
+  if (quotaPlan) return quotaPlan
+  const quotaPoolTier = quota?.pool_tier?.trim()
+  return quotaPoolTier || null
+}
+
+const GROK_QUOTA_MODE_LABELS: Record<string, string> = {
+  quota_auto: 'Auto',
+  auto: 'Auto',
+  quota_fast: 'Fast',
+  fast: 'Fast',
+  quota_expert: 'Expert',
+  expert: 'Expert',
+  quota_heavy: 'Heavy',
+  heavy: 'Heavy',
+  quota_grok_4_3: 'Grok 4.3',
+  'grok-420-computer-use-sa': 'Grok 4.3',
+}
+
+function getGrokQuotaWindowLabel(window: QuotaWindowSnapshot): string {
+  const code = String(window.code || '').trim().replace(/^model:/i, '')
+  const label = String(window.label || window.model || code).trim()
+  const normalized = (label || code).toLowerCase()
+  return GROK_QUOTA_MODE_LABELS[normalized] || GROK_QUOTA_MODE_LABELS[code.toLowerCase()] || label || code || '模式'
+}
+
+function getGeminiCliQuotaWindowLabel(window: QuotaWindowSnapshot): string {
+  const code = String(window.code || '').trim().replace(/^model:/i, '')
+  const label = String(window.label || window.model || code).trim()
+  return label || code || '模型'
+}
+
+function buildQuotaProgressItemsFromSnapshot(key: PoolKeyDetail): QuotaProgressItem[] {
+  const quota = getQuotaSnapshot(key)
+  if (!quota) return []
+
+  const providerType = getQuotaSnapshotProviderType(key)
+
+  if (providerType === 'codex') {
+    const quotaResetAtSeconds = getQuotaSnapshotResetAtSeconds(quota)
+    const quotaResetSeconds = getQuotaSnapshotResetSeconds(quota)
+    return (quota.windows ?? [])
+      .map((window): QuotaProgressItem | null => {
+        const presentation = getCodexQuotaWindowPresentation(window)
+        const remainingPercent = getQuotaWindowRemainingPercent(window)
+        if (!presentation || remainingPercent == null) return null
+        return {
+          label: presentation.label,
+          sortOrder: presentation.sortOrder,
+          remainingPercent,
+          resetAtSeconds: normalizeUnixSeconds(window.reset_at ?? quotaResetAtSeconds ?? null),
+          resetSeconds: normalizeRemainingSeconds(window.reset_seconds ?? quotaResetSeconds ?? null),
+          updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+          allowDynamicReset: true,
+        }
+      })
+      .filter((item): item is QuotaProgressItem => item != null)
+  }
+
+  if (providerType === 'kiro') {
+    const quotaResetAtSeconds = getQuotaSnapshotResetAtSeconds(quota)
+    const quotaResetSeconds = getQuotaSnapshotResetSeconds(quota)
+    const window = getQuotaSnapshotWindow(quota, 'usage')
+      ?? getQuotaSnapshotWindowsByScope(quota, 'account')[0]
+      ?? null
+    const remainingPercent = getQuotaWindowRemainingPercent(window)
+    if (remainingPercent == null) return []
+
+    const detail = typeof window?.used_value === 'number' && typeof window?.limit_value === 'number'
+      ? `${formatQuotaValue(window.used_value)}/${formatQuotaValue(window.limit_value)}`
+      : undefined
+
+    return [{
+      label: '剩余',
+      remainingPercent,
+      detail,
+      resetAtSeconds: normalizeUnixSeconds(window?.reset_at ?? quotaResetAtSeconds ?? null),
+      resetSeconds: normalizeRemainingSeconds(window?.reset_seconds ?? quotaResetSeconds ?? null),
+      updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+    }]
+  }
+
+  if (providerType === 'grok') {
+    const quotaResetAtSeconds = getQuotaSnapshotResetAtSeconds(quota)
+    const quotaResetSeconds = getQuotaSnapshotResetSeconds(quota)
+    const modelWindows = getQuotaSnapshotWindowsByScope(quota, 'model')
+    if (modelWindows.length > 0) {
+      return modelWindows
+        .map((window): QuotaProgressItem | null => {
+          const remainingPercent = getQuotaWindowRemainingPercent(window)
+          if (remainingPercent == null) return null
+          return {
+            label: getGrokQuotaWindowLabel(window),
+            remainingPercent,
+            detail: getQuotaWindowValueText(window),
+            resetAtSeconds: normalizeUnixSeconds(window?.reset_at ?? quotaResetAtSeconds ?? null),
+            resetSeconds: normalizeRemainingSeconds(window?.reset_seconds ?? quotaResetSeconds ?? null),
+            updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+          }
+        })
+        .filter((item): item is QuotaProgressItem => item != null)
+    }
+
+    const window = getQuotaSnapshotWindow(quota, 'usage')
+      ?? getQuotaSnapshotWindowsByScope(quota, 'account')[0]
+      ?? null
+    const remainingPercent = getQuotaWindowRemainingPercent(window)
+    if (remainingPercent == null) return []
+
+    return [{
+      label: '剩余',
+      remainingPercent,
+      detail: getQuotaWindowValueText(window),
+      resetAtSeconds: normalizeUnixSeconds(window?.reset_at ?? quotaResetAtSeconds ?? null),
+      resetSeconds: normalizeRemainingSeconds(window?.reset_seconds ?? quotaResetSeconds ?? null),
+      updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+    }]
+  }
+
+  if (providerType === 'windsurf') {
+    const items: QuotaProgressItem[] = []
+    for (const [label, code] of [
+      ['日', 'daily'],
+      ['周', 'weekly'],
+      ['Prompt', 'prompt'],
+      ['Flex', 'flex'],
+    ] as const) {
+      const window = getQuotaSnapshotWindow(quota, code)
+      const remainingPercent = getQuotaWindowRemainingPercent(window)
+      if (remainingPercent == null) continue
+      const detail = typeof window?.used_value === 'number' && typeof window?.limit_value === 'number'
+        ? `${formatQuotaValue(window.used_value)}/${formatQuotaValue(window.limit_value)}`
+        : typeof window?.remaining_value === 'number' && typeof window?.limit_value === 'number'
+          ? `剩余 ${formatQuotaValue(window.remaining_value)}/${formatQuotaValue(window.limit_value)}`
+          : undefined
+      items.push({
+        label,
+        remainingPercent,
+        detail,
+        resetAtSeconds: normalizeUnixSeconds(window?.reset_at ?? null),
+        resetSeconds: normalizeRemainingSeconds(window?.reset_seconds ?? null),
+        updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+      })
+    }
+
+    const rateLimitWindow = getQuotaSnapshotWindow(quota, 'rate_limit')
+    if (rateLimitWindow) {
+      items.push({
+        label: '速率',
+        remainingPercent: rateLimitWindow.is_exhausted ? 0 : 100,
+        resetAtSeconds: normalizeUnixSeconds(rateLimitWindow.reset_at ?? null),
+        resetSeconds: normalizeRemainingSeconds(rateLimitWindow.reset_seconds ?? null),
+        updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+      })
+    }
+
+    if (typeof quota.allowed_models_count === 'number' && Number.isFinite(quota.allowed_models_count)) {
+      items.push({
+        label: '模型',
+        remainingPercent: 100,
+        detail: `${quota.allowed_models_count} 个`,
+        resetAtSeconds: null,
+        resetSeconds: null,
+        updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+      })
+    }
+
+    return items
+  }
+
+  if (providerType === 'antigravity') {
+    const windows = getQuotaSnapshotWindowsByScope(quota, 'quota_group')
+    if (windows.length === 0) return []
+    return windows
+      .map((window, index): QuotaProgressItem | null => {
+        const remainingPercent = getQuotaWindowRemainingPercent(window)
+        if (remainingPercent == null) return null
+        const label = resolveAntigravityQuotaGroupLabel(window, t)
+        if (!label) return null
+        return {
+          label,
+          sortOrder: index,
+          remainingPercent,
+          resetAtSeconds: normalizeUnixSeconds(window.reset_at ?? quota.reset_at ?? null),
+          resetSeconds: normalizeRemainingSeconds(window.reset_seconds ?? quota.reset_seconds ?? null),
+          updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+          allowDynamicReset: true,
+        }
+      })
+      .filter((item): item is QuotaProgressItem => item != null)
+  }
+
+  if (providerType === 'gemini_cli') {
+    const windows = getQuotaSnapshotWindowsByScope(quota, 'model')
+    if (windows.length === 0) return []
+
+    const quotaResetAtSeconds = getQuotaSnapshotResetAtSeconds(quota)
+    const quotaResetSeconds = getQuotaSnapshotResetSeconds(quota)
+    return windows
+      .map((window): QuotaProgressItem | null => {
+        const remainingPercent = getQuotaWindowRemainingPercent(window)
+          ?? (window?.is_exhausted === true ? 0 : null)
+        if (remainingPercent == null) return null
+        return {
+          label: getGeminiCliQuotaWindowLabel(window),
+          remainingPercent,
+          detail: getQuotaWindowValueText(window),
+          resetAtSeconds: normalizeUnixSeconds(window?.reset_at ?? quotaResetAtSeconds ?? null),
+          resetSeconds: normalizeRemainingSeconds(window?.reset_seconds ?? quotaResetSeconds ?? null),
+          updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+          allowDynamicReset: true,
+        }
+      })
+      .filter((item): item is QuotaProgressItem => item != null)
+  }
+
+  if (providerType === 'chatgpt_web') {
+    const window = getQuotaSnapshotWindow(quota, 'image_gen')
+      ?? getQuotaSnapshotWindowsByScope(quota, 'account')[0]
+      ?? null
+    const remainingPercent = getQuotaWindowRemainingPercent(window)
+    if (remainingPercent == null) return []
+
+    const remainingValue = typeof window?.remaining_value === 'number' ? window.remaining_value : null
+    const limitValue = typeof window?.limit_value === 'number' ? window.limit_value : null
+    const usedValue = typeof window?.used_value === 'number' ? window.used_value : null
+    const detail = remainingValue != null && limitValue != null
+      ? `${formatQuotaValue(remainingValue)}/${formatQuotaValue(limitValue)}`
+      : usedValue != null && limitValue != null
+        ? `${formatQuotaValue(Math.max(limitValue - usedValue, 0))}/${formatQuotaValue(limitValue)}`
+        : remainingValue != null
+          ? `剩余 ${formatQuotaValue(remainingValue)}`
+          : undefined
+
+    return [{
+      label: '生图',
+      remainingPercent,
+      detail,
+      resetAtSeconds: normalizeUnixSeconds(window?.reset_at ?? null),
+      resetSeconds: normalizeRemainingSeconds(window?.reset_seconds ?? null),
+      updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(quota),
+    }]
+  }
+
+  return []
+}
+
+function resolveCodexQuotaCountdown(
+  key: PoolKeyDetail,
+  label: string
+): Pick<QuotaProgressItem, 'resetAtSeconds' | 'resetSeconds' | 'updatedAtSeconds'> | null {
+  const codexWindowCodeByLabel: Record<string, string> = {
+    '5H': '5h',
+    '周': 'weekly',
+    Spark5H: 'spark_5h',
+    Spark周: 'spark_weekly',
+  }
+  const windowCode = codexWindowCodeByLabel[label]
+  if (!windowCode) return null
+
+  const codexSnapshot = getCodexQuotaSnapshot(key)
+  const snapshotWindow = getQuotaSnapshotWindow(codexSnapshot, windowCode)
+  if (!snapshotWindow) return null
+
+  const resetAtSeconds = normalizeUnixSeconds(snapshotWindow.reset_at ?? null)
+  const resetSeconds = normalizeRemainingSeconds(snapshotWindow.reset_seconds ?? null)
+  const updatedAtSeconds = getQuotaSnapshotUpdatedAtSeconds(codexSnapshot)
+
+  if (resetAtSeconds == null && resetSeconds == null) return null
+  return { resetAtSeconds, resetSeconds, updatedAtSeconds }
 }
 
 function parseQuotaResetRemainingSeconds(detail: string | undefined): number | null {
@@ -2484,7 +3994,19 @@ function parseQuotaResetRemainingSeconds(detail: string | undefined): number | n
   return total
 }
 
-function parseQuotaProgressItems(quotaText: string | null | undefined): QuotaProgressItem[] {
+function parseQuotaProgressItems(key: PoolKeyDetail): QuotaProgressItem[] {
+  const snapshotItems = buildQuotaProgressItemsFromSnapshot(key)
+  if (snapshotItems.length > 0) {
+    return snapshotItems.sort((a, b) => {
+      const orderDiff = (a.sortOrder ?? getQuotaLabelOrder(a.label)) - (b.sortOrder ?? getQuotaLabelOrder(b.label))
+      if (orderDiff !== 0) return orderDiff
+      return a.label.localeCompare(b.label, 'zh-Hans-CN')
+    })
+  }
+
+  if (getQuotaSnapshot(key)) return []
+
+  const quotaText = getLegacyAccountQuotaText(key)
   if (!quotaText) return []
 
   const segments = quotaText
@@ -2501,16 +4023,27 @@ function parseQuotaProgressItems(quotaText: string | null | undefined): QuotaPro
     const remainingPercent = clampPercent(Number(rawPercent))
     const label = normalizeQuotaLabel(rawLabel)
     const detail = rawTail.trim().replace(/^[()]+|[()]+$/g, '').trim()
-    const resetRemainingSeconds = parseQuotaResetRemainingSeconds(detail || undefined)
-    const resetAtSeconds = resetRemainingSeconds == null
-      ? null
-      : Math.floor(Date.now() / 1000) + resetRemainingSeconds
+    const codexCountdown = resolveCodexQuotaCountdown(key, label)
+    let resetAtSeconds = codexCountdown?.resetAtSeconds ?? null
+    let resetSeconds = codexCountdown?.resetSeconds ?? null
+    let updatedAtSeconds = codexCountdown?.updatedAtSeconds ?? null
+
+    if (resetAtSeconds == null && resetSeconds == null) {
+      const resetRemainingSeconds = parseQuotaResetRemainingSeconds(detail || undefined)
+      resetAtSeconds = resetRemainingSeconds == null
+        ? null
+        : Math.floor(Date.now() / 1000) + resetRemainingSeconds
+      resetSeconds = null
+      updatedAtSeconds = null
+    }
 
     items.push({
       label,
       remainingPercent,
       detail: detail || undefined,
       resetAtSeconds,
+      resetSeconds,
+      updatedAtSeconds,
     })
   }
 
@@ -2540,27 +4073,35 @@ function getQuotaTextClass(quotaText: string): string {
   return 'text-[11px] text-foreground/90 leading-4'
 }
 
-function formatStatInteger(value: number | null | undefined): string {
-  const n = Number(value ?? 0)
-  if (!Number.isFinite(n) || n <= 0) return '0'
-  return Math.round(n).toLocaleString('en-US')
+function formatPoolScore(value: number | null | undefined): string {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return n.toFixed(3)
 }
 
-function formatTokenCount(value: number | null | undefined): string {
-  const n = Number(value ?? 0)
-  if (!Number.isFinite(n) || n <= 0) return '0'
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(Math.round(n))
+function formatPoolScoreReason(value: PoolKeyScore['score_reason'] | null | undefined): string {
+  if (!value) return '暂无计算结果'
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
 }
 
-function formatStatUsd(value: number | string | null | undefined): string {
-  const n = Number(value ?? 0)
-  if (!Number.isFinite(n) || n <= 0) return '$0.00'
-  if (n < 0.01) return `$${n.toFixed(4)}`
-  if (n < 1) return `$${n.toFixed(3)}`
-  if (n < 1000) return `$${n.toFixed(2)}`
-  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+function getPoolScoreHardStateLabel(value: PoolKeyScore['hard_state'] | null | undefined): string {
+  if (!value) return '-'
+  return poolScoreHardStateOptions.find(item => item.value === value)?.label || value
+}
+
+function getPoolScoreProbeStatusLabel(value: PoolKeyScore['probe_status'] | null | undefined): string {
+  if (!value) return '-'
+  return poolScoreProbeStatusOptions.find(item => item.value === value)?.label || value
+}
+
+function formatUnixSeconds(seconds: number | null | undefined): string {
+  const raw = Number(seconds ?? 0)
+  if (!Number.isFinite(raw) || raw <= 0) return '-'
+  return formatRelativeTime(new Date(raw * 1000).toISOString())
 }
 
 function formatRelativeTime(isoStr: string): string {
@@ -2573,18 +4114,27 @@ function formatRelativeTime(isoStr: string): string {
   return `${M}-${D} ${h}:${m}`
 }
 
+function formatPoolKeyImportedAt(key: PoolKeyDetail): string {
+  const value = key.imported_at || key.created_at
+  return value ? formatRelativeTime(value) : '-'
+}
+
 // --- Init ---
 onMounted(() => {
   startCountdownTimer()
-  void loadSchedulingPresetMetas()
-  void loadOverview()
+  void loadSchedulingPresetMetas({ cacheTtlMs: POOL_SCHEDULING_PRESETS_CACHE_TTL_MS })
+  void loadOverview({ cacheTtlMs: POOL_OVERVIEW_CACHE_TTL_MS })
+  scheduleProviderDetailDrawerPrefetch()
 })
 
 onBeforeUnmount(() => {
+  cancelProviderDetailDrawerPrefetch()
+  stopDemandMetricsPolling()
   if (keysSearchDebounceTimer !== null) {
     clearTimeout(keysSearchDebounceTimer)
     keysSearchDebounceTimer = null
   }
+  keysSearchPending.value = false
   overviewRequestId += 1
   selectProviderRequestId += 1
   providerDataRequestId += 1

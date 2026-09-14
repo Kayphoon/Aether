@@ -1,0 +1,458 @@
+use super::*;
+
+impl<'a> AdminAppState<'a> {
+    pub(crate) async fn read_provider_catalog_keys_by_ids(
+        &self,
+        key_ids: &[String],
+    ) -> Result<
+        Vec<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>,
+        GatewayError,
+    > {
+        self.app.read_provider_catalog_keys_by_ids(key_ids).await
+    }
+
+    pub(crate) async fn read_provider_catalog_providers_by_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<
+        Vec<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogProvider>,
+        GatewayError,
+    > {
+        self.app
+            .read_provider_catalog_providers_by_ids(provider_ids)
+            .await
+    }
+
+    pub(crate) async fn read_provider_catalog_endpoints_by_ids(
+        &self,
+        endpoint_ids: &[String],
+    ) -> Result<
+        Vec<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogEndpoint>,
+        GatewayError,
+    > {
+        self.app
+            .read_provider_catalog_endpoints_by_ids(endpoint_ids)
+            .await
+    }
+
+    pub(crate) async fn list_provider_catalog_providers(
+        &self,
+        active_only: bool,
+    ) -> Result<
+        Vec<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogProvider>,
+        GatewayError,
+    > {
+        self.app.list_provider_catalog_providers(active_only).await
+    }
+
+    pub(crate) async fn list_provider_catalog_endpoints_by_provider_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<
+        Vec<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogEndpoint>,
+        GatewayError,
+    > {
+        self.app
+            .list_provider_catalog_endpoints_by_provider_ids(provider_ids)
+            .await
+    }
+
+    pub(crate) async fn list_provider_catalog_keys_by_provider_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<
+        Vec<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>,
+        GatewayError,
+    > {
+        self.app
+            .list_provider_catalog_keys_by_provider_ids(provider_ids)
+            .await
+    }
+
+    pub(crate) async fn list_provider_catalog_key_summaries_by_provider_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<
+        Vec<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>,
+        GatewayError,
+    > {
+        self.app
+            .list_provider_catalog_key_summaries_by_provider_ids(provider_ids)
+            .await
+    }
+
+    pub(crate) async fn list_provider_catalog_keys_by_ids(
+        &self,
+        key_ids: &[String],
+    ) -> Result<
+        Vec<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>,
+        GatewayError,
+    > {
+        self.app.list_provider_catalog_keys_by_ids(key_ids).await
+    }
+
+    pub(crate) async fn list_provider_catalog_key_page(
+        &self,
+        query: &aether_data_contracts::repository::provider_catalog::ProviderCatalogKeyListQuery,
+    ) -> Result<
+        aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKeyPage,
+        GatewayError,
+    > {
+        self.app.list_provider_catalog_key_page(query).await
+    }
+
+    pub(crate) async fn list_provider_catalog_key_stats_by_provider_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<
+        Vec<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKeyStats>,
+        GatewayError,
+    > {
+        self.app
+            .list_provider_catalog_key_stats_by_provider_ids(provider_ids)
+            .await
+    }
+
+    pub(crate) async fn read_provider_quota_snapshots(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<
+        Vec<aether_data_contracts::repository::quota::StoredProviderQuotaSnapshot>,
+        GatewayError,
+    > {
+        self.app.read_provider_quota_snapshots(provider_ids).await
+    }
+
+    pub(crate) async fn update_provider_catalog_key_health_state(
+        &self,
+        key_id: &str,
+        is_active: bool,
+        health_by_format: Option<&serde_json::Value>,
+        circuit_breaker_by_format: Option<&serde_json::Value>,
+    ) -> Result<bool, GatewayError> {
+        self.app
+            .update_provider_catalog_key_health_state(
+                key_id,
+                is_active,
+                health_by_format,
+                circuit_breaker_by_format,
+            )
+            .await
+    }
+
+    pub(crate) async fn reset_provider_catalog_key_error_count(
+        &self,
+        key_id: &str,
+    ) -> Result<bool, GatewayError> {
+        self.app
+            .reset_provider_catalog_key_error_count(key_id)
+            .await
+    }
+
+    pub(crate) async fn create_provider_catalog_endpoint(
+        &self,
+        endpoint: &aether_data_contracts::repository::provider_catalog::StoredProviderCatalogEndpoint,
+    ) -> Result<
+        Option<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogEndpoint>,
+        GatewayError,
+    > {
+        self.app.create_provider_catalog_endpoint(endpoint).await
+    }
+
+    pub(crate) async fn update_provider_catalog_endpoint(
+        &self,
+        endpoint: &aether_data_contracts::repository::provider_catalog::StoredProviderCatalogEndpoint,
+    ) -> Result<
+        Option<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogEndpoint>,
+        GatewayError,
+    > {
+        self.app.update_provider_catalog_endpoint(endpoint).await
+    }
+
+    pub(crate) async fn delete_provider_catalog_endpoint(
+        &self,
+        endpoint_id: &str,
+    ) -> Result<bool, GatewayError> {
+        self.app.delete_provider_catalog_endpoint(endpoint_id).await
+    }
+
+    pub(crate) async fn update_provider_catalog_key(
+        &self,
+        key: &aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey,
+    ) -> Result<
+        Option<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>,
+        GatewayError,
+    > {
+        self.app.update_provider_catalog_key(key).await
+    }
+
+    pub(crate) async fn compare_and_update_provider_catalog_key_admin_state(
+        &self,
+        update: &aether_data_contracts::repository::provider_catalog::ProviderCatalogKeyAdminCasUpdate,
+    ) -> Result<bool, GatewayError> {
+        self.app
+            .compare_and_update_provider_catalog_key_admin_state(update)
+            .await
+    }
+
+    pub(crate) async fn compare_and_update_provider_catalog_key_adaptive_state(
+        &self,
+        update: &aether_data_contracts::repository::provider_catalog::ProviderCatalogKeyAdaptiveStateUpdate,
+    ) -> Result<bool, GatewayError> {
+        self.app
+            .compare_and_update_provider_catalog_key_adaptive_state(update)
+            .await
+    }
+
+    pub(crate) async fn set_provider_catalog_key_learned_rpm_limit(
+        &self,
+        key_id: &str,
+        learned_rpm_limit: Option<u32>,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<
+        Option<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>,
+        GatewayError,
+    > {
+        use aether_data_contracts::repository::provider_catalog::{
+            ProviderCatalogKeyAdaptiveState, ProviderCatalogKeyAdaptiveStateUpdate,
+        };
+
+        for _ in 0..4 {
+            let Some(current) = self
+                .read_provider_catalog_keys_by_ids(&[key_id.to_string()])
+                .await?
+                .into_iter()
+                .next()
+            else {
+                return Ok(None);
+            };
+            let expected = ProviderCatalogKeyAdaptiveState::from(&current);
+            if expected.learned_rpm_limit == learned_rpm_limit {
+                return Ok(Some(current));
+            }
+            let mut next = expected.clone();
+            next.learned_rpm_limit = learned_rpm_limit;
+            if self
+                .compare_and_update_provider_catalog_key_adaptive_state(
+                    &ProviderCatalogKeyAdaptiveStateUpdate {
+                        key_id: key_id.to_string(),
+                        expected_encrypted_auth_config: None,
+                        expected,
+                        next,
+                        status_snapshot_patch: serde_json::json!({
+                            "learning_confidence": 0.0,
+                            "enforcement_active": false
+                        }),
+                        updated_at_unix_secs,
+                    },
+                )
+                .await?
+            {
+                return Ok(self
+                    .read_provider_catalog_keys_by_ids(&[key_id.to_string()])
+                    .await?
+                    .into_iter()
+                    .next());
+            }
+        }
+
+        Err(GatewayError::Internal(format!(
+            "provider key {key_id} adaptive state changed repeatedly while updating"
+        )))
+    }
+
+    pub(crate) async fn reset_provider_catalog_key_recovery_state(
+        &self,
+        key_id: &str,
+    ) -> Result<
+        Option<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>,
+        GatewayError,
+    > {
+        self.reset_provider_catalog_key_recovery_state_inner(key_id, None)
+            .await
+    }
+
+    pub(crate) async fn reset_provider_catalog_key_recovery_state_fenced(
+        &self,
+        key_id: &str,
+        expected_encrypted_auth_config: &str,
+    ) -> Result<
+        Option<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>,
+        GatewayError,
+    > {
+        self.reset_provider_catalog_key_recovery_state_inner(
+            key_id,
+            Some(expected_encrypted_auth_config),
+        )
+        .await
+    }
+
+    async fn reset_provider_catalog_key_recovery_state_inner(
+        &self,
+        key_id: &str,
+        expected_auth_config: Option<&str>,
+    ) -> Result<
+        Option<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>,
+        GatewayError,
+    > {
+        use aether_data_contracts::repository::provider_catalog::ProviderCatalogKeyHealthStateUpdate;
+
+        let empty = serde_json::json!({});
+        let mut health_reset = false;
+        for _ in 0..4 {
+            let Some(current) = self
+                .read_provider_catalog_keys_by_ids(&[key_id.to_string()])
+                .await?
+                .into_iter()
+                .next()
+            else {
+                return Ok(None);
+            };
+            if expected_auth_config
+                .is_some_and(|expected| current.encrypted_auth_config.as_deref() != Some(expected))
+            {
+                return Ok(None);
+            }
+            if current.health_by_format.as_ref() == Some(&empty)
+                && current.circuit_breaker_by_format.as_ref() == Some(&empty)
+            {
+                health_reset = true;
+                break;
+            }
+            if self
+                .app
+                .compare_and_update_provider_catalog_key_health_state(
+                    &ProviderCatalogKeyHealthStateUpdate {
+                        key_id: key_id.to_string(),
+                        expected_encrypted_auth_config: expected_auth_config.map(ToOwned::to_owned),
+                        expected_health_by_format: current.health_by_format,
+                        expected_circuit_breaker_by_format: current.circuit_breaker_by_format,
+                        health_by_format: Some(empty.clone()),
+                        circuit_breaker_by_format: Some(empty.clone()),
+                    },
+                )
+                .await?
+            {
+                health_reset = true;
+                break;
+            }
+        }
+        if !health_reset {
+            return Err(GatewayError::Internal(format!(
+                "provider key {key_id} health state changed repeatedly while resetting OAuth recovery state"
+            )));
+        }
+        if expected_auth_config.is_none()
+            && !self.reset_provider_catalog_key_error_count(key_id).await?
+        {
+            return Ok(None);
+        }
+
+        let current = self
+            .read_provider_catalog_keys_by_ids(&[key_id.to_string()])
+            .await?
+            .into_iter()
+            .next();
+        if current.as_ref().is_some_and(|key| {
+            expected_auth_config
+                .is_some_and(|expected| key.encrypted_auth_config.as_deref() != Some(expected))
+        }) {
+            return Ok(None);
+        }
+        Ok(current)
+    }
+
+    pub(crate) async fn update_provider_catalog_key_status_snapshot(
+        &self,
+        update: &aether_data_contracts::repository::provider_catalog::ProviderCatalogKeyStatusSnapshotUpdate,
+    ) -> Result<bool, GatewayError> {
+        self.app
+            .update_provider_catalog_key_status_snapshot(update)
+            .await
+    }
+
+    pub(crate) async fn update_provider_catalog_keys(
+        &self,
+        keys: &[aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey],
+    ) -> Result<
+        Option<Vec<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>>,
+        GatewayError,
+    > {
+        self.app.update_provider_catalog_keys(keys).await
+    }
+
+    pub(crate) async fn create_provider_catalog_key(
+        &self,
+        key: &aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey,
+    ) -> Result<
+        Option<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey>,
+        GatewayError,
+    > {
+        self.app.create_provider_catalog_key(key).await
+    }
+
+    pub(crate) async fn delete_provider_catalog_key(
+        &self,
+        key_id: &str,
+    ) -> Result<bool, GatewayError> {
+        self.app.delete_provider_catalog_key(key_id).await
+    }
+
+    pub(crate) async fn compare_and_delete_provider_catalog_key_oauth_credential(
+        &self,
+        delete: &aether_data_contracts::repository::provider_catalog::ProviderCatalogKeyOAuthCredentialCasDelete,
+    ) -> Result<bool, GatewayError> {
+        self.app
+            .compare_and_delete_provider_catalog_key_oauth_credential(delete)
+            .await
+    }
+
+    pub(crate) async fn create_provider_catalog_provider(
+        &self,
+        provider: &aether_data_contracts::repository::provider_catalog::StoredProviderCatalogProvider,
+        shift_existing_priorities_from: Option<i32>,
+    ) -> Result<
+        Option<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogProvider>,
+        GatewayError,
+    > {
+        self.app
+            .create_provider_catalog_provider(provider, shift_existing_priorities_from)
+            .await
+    }
+
+    pub(crate) async fn update_provider_catalog_provider(
+        &self,
+        provider: &aether_data_contracts::repository::provider_catalog::StoredProviderCatalogProvider,
+    ) -> Result<
+        Option<aether_data_contracts::repository::provider_catalog::StoredProviderCatalogProvider>,
+        GatewayError,
+    > {
+        self.app.update_provider_catalog_provider(provider).await
+    }
+
+    pub(crate) async fn compare_and_swap_provider_catalog_provider_config(
+        &self,
+        update: &aether_data_contracts::repository::provider_catalog::ProviderCatalogProviderConfigCasUpdate,
+    ) -> Result<bool, GatewayError> {
+        self.app
+            .compare_and_swap_provider_catalog_provider_config(update)
+            .await
+    }
+
+    pub(crate) async fn cleanup_deleted_provider_catalog_refs(
+        &self,
+        provider_id: &str,
+        provider_deleted: bool,
+        endpoint_ids: &[String],
+        key_ids: &[String],
+    ) -> Result<(), GatewayError> {
+        self.app
+            .cleanup_deleted_provider_catalog_refs(
+                provider_id,
+                provider_deleted,
+                endpoint_ids,
+                key_ids,
+            )
+            .await
+    }
+}

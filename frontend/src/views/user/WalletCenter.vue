@@ -8,30 +8,65 @@
     </div>
 
     <template v-else>
-      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card class="p-5 space-y-2">
           <div class="text-xs uppercase tracking-wider text-muted-foreground">
-            可用余额
+            总可用额度
           </div>
           <div class="text-3xl font-bold tabular-nums">
-            {{ formatCurrency(walletBalance?.balance) }}
+            {{ walletBalance?.unlimited ? '无限制' : formatCurrency(totalAvailableBalance) }}
           </div>
           <div class="text-xs text-muted-foreground">
-            充值余额: {{ formatCurrency(walletBalance?.wallet?.recharge_balance) }} · 赠款余额: {{ formatCurrency(walletBalance?.wallet?.gift_balance) }}
+            套餐额度: {{ formatCurrency(packageBalance) }} · 钱包余额: {{ formatCurrency(walletOnlyBalance) }}
+          </div>
+        </Card>
+
+        <Card class="p-5 space-y-3">
+          <div class="text-xs uppercase tracking-wider text-muted-foreground">
+            套餐今日额度
+          </div>
+          <div class="text-2xl font-bold tabular-nums">
+            <template v-if="hasActiveDailyQuota">
+              {{ formatCurrency(packageBalance) }}
+            </template>
+            <template v-else>
+              未开通
+            </template>
+          </div>
+          <div
+            v-if="hasActiveDailyQuota"
+            class="space-y-1.5"
+          >
+            <div class="h-1.5 overflow-hidden rounded-full bg-muted">
+              <div
+                class="h-full rounded-full bg-primary transition-all"
+                :style="{ width: `${dailyQuotaRemainingPercent}%` }"
+              />
+            </div>
+            <div class="text-xs text-muted-foreground">
+              已用 {{ formatCurrency(dailyQuotaUsed) }} / 每日 {{ formatCurrency(dailyQuotaTotal) }}
+            </div>
+            <div class="text-xs text-muted-foreground">
+              {{ dailyQuota?.allow_wallet_overage ? '套餐不足时继续扣钱包余额' : '套餐额度不足时会拒绝请求' }}
+            </div>
+          </div>
+          <div
+            v-else
+            class="text-xs text-muted-foreground"
+          >
+            开通每日额度套餐后会优先消耗这里的额度。
           </div>
         </Card>
 
         <Card class="p-5 space-y-2">
           <div class="text-xs uppercase tracking-wider text-muted-foreground">
-            累计充值 / 消费
+            钱包余额
           </div>
-          <div class="text-lg font-semibold tabular-nums">
-            {{ formatCurrency(walletBalance?.wallet?.total_recharged) }}
-            <span class="text-muted-foreground font-normal mx-1">/</span>
-            {{ formatCurrency(walletBalance?.wallet?.total_consumed) }}
+          <div class="text-2xl font-semibold tabular-nums">
+            {{ formatCurrency(walletOnlyBalance) }}
           </div>
           <div class="text-xs text-muted-foreground">
-            累计退款: {{ formatCurrency(walletBalance?.wallet?.total_refunded) }} · 可退款余额: {{ formatCurrency(walletBalance?.wallet?.refundable_balance) }}
+            充值余额: {{ formatCurrency(walletBalance?.wallet?.recharge_balance) }} · 赠款余额: {{ formatCurrency(walletBalance?.wallet?.gift_balance) }}
           </div>
         </Card>
 
@@ -44,6 +79,15 @@
               {{ walletStatusLabel(walletBalance?.wallet?.status) }}
             </Badge>
           </div>
+          <div class="text-xs text-muted-foreground">
+            累计充值 / 消费:
+            {{ formatCurrency(walletBalance?.wallet?.total_recharged) }}
+            <span class="text-muted-foreground font-normal mx-1">/</span>
+            {{ formatCurrency(walletBalance?.wallet?.total_consumed) }}
+          </div>
+          <div class="text-xs text-muted-foreground">
+            累计退款: {{ formatCurrency(walletBalance?.wallet?.total_refunded) }} · 可退款余额: {{ formatCurrency(walletBalance?.wallet?.refundable_balance) }}
+          </div>
           <div
             v-if="walletBalance?.unlimited"
             class="text-xs text-amber-600 dark:text-amber-400"
@@ -55,6 +99,52 @@
           </div>
         </Card>
       </div>
+
+      <Card class="p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-base font-semibold">
+              兑换码充值
+            </h3>
+            <p class="text-xs text-muted-foreground mt-1">
+              输入卡密后会直接充值到钱包的充值余额
+            </p>
+          </div>
+          <RefreshButton
+            :loading="loadingOrders || loadingTransactions"
+            @click="refreshWallet"
+          />
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-3">
+          <Input
+            v-model="redeemForm.code"
+            placeholder="输入兑换码，例如 ABCD-EFGH-IJKL-MNOP"
+            autocomplete="off"
+          />
+          <Button
+            :disabled="submittingRedeem"
+            @click="submitRedeem"
+          >
+            {{ submittingRedeem ? '兑换中...' : '立即兑换' }}
+          </Button>
+        </div>
+
+        <div
+          v-if="latestRedeem"
+          class="rounded-xl border border-border/60 bg-muted/20 p-3 text-xs text-muted-foreground space-y-1.5"
+        >
+          <div>
+            已兑换批次: <span class="font-medium text-foreground">{{ latestRedeem.batch_name }}</span>
+          </div>
+          <div>
+            充值金额: <span class="font-medium text-foreground">{{ formatCurrency(latestRedeem.amount_usd) }}</span>
+          </div>
+          <div>
+            关联订单: <span class="font-mono text-foreground">{{ latestRedeem.order.order_no }}</span>
+          </div>
+        </div>
+      </Card>
 
       <!-- TODO(wallet): 充值/退款用户主动操作入口暂未启用，待支付链路联调完成后再开放 -->
       <div
@@ -86,25 +176,57 @@
 
             <div class="space-y-1.5">
               <Label>支付方式</Label>
-              <Select v-model="rechargeForm.payment_method">
+              <Select v-model="rechargeForm.payment_option_key">
                 <SelectTrigger>
-                  <SelectValue placeholder="选择支付方式" />
+                  <SelectValue
+                    :placeholder="rechargeOptionsWithKey.length ? '选择支付方式' : '暂无可用支付方式'"
+                  />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="alipay">
-                    支付宝
-                  </SelectItem>
-                  <SelectItem value="wechat">
-                    微信支付
+                  <SelectItem
+                    v-for="option in rechargeOptionsWithKey"
+                    :key="option.key"
+                    :value="option.key"
+                  >
+                    {{ option.display_name }}
+                    <span
+                      v-if="option.pay_currency && option.usd_exchange_rate"
+                      class="text-xs text-muted-foreground"
+                    >
+                      · {{ option.pay_currency }}
+                    </span>
+                    <span
+                      v-if="Number(option.fee_rate || 0) > 0"
+                      class="text-xs text-muted-foreground"
+                    >
+                      · 手续费 {{ Number(option.fee_rate || 0).toFixed(2) }}%
+                    </span>
                   </SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
 
+          <div
+            v-if="selectedRechargeOption?.usd_exchange_rate"
+            class="rounded-xl border border-border/60 bg-muted/20 p-3 text-xs text-muted-foreground"
+          >
+            预计支付:
+            <span class="font-medium text-foreground">
+              {{ estimatedRechargePayAmount }}
+              {{ rechargePayCurrency }}
+            </span>
+            · 1 USD = {{ Number(selectedRechargeOption.usd_exchange_rate).toFixed(4) }}
+            {{ rechargePayCurrency }}
+            <template v-if="estimatedRechargeFeeAmount > 0">
+              · 手续费 {{ estimatedRechargeFeeAmount.toFixed(2) }} {{ rechargePayCurrency }}
+              ({{ estimatedRechargeFeeRate.toFixed(2) }}%)
+            </template>
+          </div>
+
           <Button
             class="w-full"
-            :disabled="submittingRecharge"
+            :disabled="submittingRecharge || rechargeOptionsWithKey.length === 0"
             @click="submitRecharge"
           >
             {{ submittingRecharge ? '创建订单中...' : '创建充值订单' }}
@@ -127,14 +249,23 @@
               </Badge>
             </div>
             <a
-              v-if="latestRecharge.payment_instructions?.payment_url"
+              v-if="latestRechargePaymentUrl"
               class="inline-flex text-xs text-primary hover:underline"
-              :href="String(latestRecharge.payment_instructions.payment_url)"
+              :href="latestRechargePaymentUrl"
               target="_blank"
               rel="noopener noreferrer"
+              @click.prevent="submitPaymentInstructions(latestRecharge.payment_instructions)"
             >
               打开支付链接
             </a>
+            <button
+              v-if="latestRechargeStripeInstructions"
+              type="button"
+              class="inline-flex text-xs text-primary hover:underline"
+              @click="submitPaymentInstructions(latestRecharge?.payment_instructions)"
+            >
+              打开 Stripe 支付
+            </button>
             <div
               v-if="latestRecharge.payment_instructions?.qr_code"
               class="text-xs text-muted-foreground break-all"
@@ -150,9 +281,16 @@
               申请退款
             </h3>
             <RefreshButton
-              :loading="loadingRefunds"
-              @click="loadRefunds"
+              :loading="loadingRefunds || loadingRefundEligibility"
+              @click="refreshRefundPanel"
             />
+          </div>
+
+          <div
+            v-if="!loadingRefundEligibility && refundableOrders.length === 0"
+            class="rounded-xl border border-border/60 bg-muted/20 p-3 text-xs text-muted-foreground"
+          >
+            当前没有开启用户自助退款的可退充值订单。
           </div>
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -186,15 +324,12 @@
           </div>
 
           <div class="space-y-1.5">
-            <Label>关联充值订单（可选）</Label>
+            <Label>关联充值订单</Label>
             <Select v-model="refundForm.payment_order_id">
               <SelectTrigger>
-                <SelectValue placeholder="不指定订单，直接从钱包余额退款" />
+                <SelectValue placeholder="选择允许用户退款的订单" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none__">
-                  不指定
-                </SelectItem>
                 <SelectItem
                   v-for="order in refundableOrders"
                   :key="order.id"
@@ -216,13 +351,13 @@
           </div>
 
           <div class="rounded-xl border border-border/60 bg-muted/20 p-3 text-xs text-muted-foreground">
-            仅充值余额可退款，赠款余额不可退款。
+            仅开启“允许用户退款”的支付方式可由用户自助提交退款申请。
           </div>
 
           <Button
             class="w-full"
             variant="outline"
-            :disabled="submittingRefund"
+            :disabled="submittingRefund || refundableOrders.length === 0"
             @click="submitRefund"
           >
             {{ submittingRefund ? '提交中...' : '提交退款申请' }}
@@ -534,10 +669,20 @@
         </div>
       </Card>
     </template>
+
+    <StripePaymentDialog
+      v-model:open="stripeDialogOpen"
+      :instructions="stripePaymentInstructions"
+      title="钱包 Stripe 支付"
+      description="完成支付后，钱包余额会由 Stripe Webhook 自动入账。"
+      confirm-text="支付充值"
+      @success="handleStripePaymentSuccess"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
+import { getI18nLocale } from '@/i18n'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import {
   Badge,
@@ -564,7 +709,7 @@ import {
   TabsTrigger,
   Textarea,
 } from '@/components/ui'
-import { EmptyState, LoadingState } from '@/components/common'
+import { EmptyState, LoadingState, StripePaymentDialog } from '@/components/common'
 import {
   walletApi,
   type DailyUsageRecord,
@@ -572,10 +717,18 @@ import {
   type PaymentOrder,
   type RefundRequest,
   type WalletBalanceResponse,
+  type WalletRedeemResponse,
+  type WalletRechargeOption,
 } from '@/api/wallet'
 import { useToast } from '@/composables/useToast'
 import { parseApiError } from '@/utils/errorParser'
 import { log } from '@/utils/logger'
+import { safePaymentTargetUrl } from '@/utils/paymentUrl'
+import {
+  getPaymentInstructionString,
+  getStripePaymentInstructions,
+  type PaymentInstructionMap,
+} from '@/utils/paymentInstructions'
 import {
   dailyUsageCategoryLabel,
   formatTokenCount,
@@ -592,20 +745,25 @@ import {
   walletTransactionReasonLabel,
 } from '@/utils/walletDisplay'
 
-const { success, error: showError } = useToast()
+const { success, info, error: showError } = useToast()
 
-// TODO(wallet): 充值和退款前台入口尚未正式启用；联调完成后改为 true 即可恢复显示。
-const ENABLE_WALLET_ACTION_FORMS = false
+const ENABLE_WALLET_ACTION_FORMS = true
 
 const loadingInitial = ref(true)
 const loadingTransactions = ref(false)
 const loadingOrders = ref(false)
 const loadingRefunds = ref(false)
+const loadingRefundEligibility = ref(false)
+const submittingRedeem = ref(false)
 const submittingRecharge = ref(false)
 const submittingRefund = ref(false)
 
 const walletBalance = ref<WalletBalanceResponse | null>(null)
 const latestRecharge = ref<{ order: PaymentOrder; payment_instructions: Record<string, unknown> } | null>(null)
+const latestRedeem = ref<WalletRedeemResponse | null>(null)
+const rechargeOptions = ref<WalletRechargeOption[]>([])
+const stripeDialogOpen = ref(false)
+const stripePaymentInstructions = ref<PaymentInstructionMap | null>(null)
 
 const flowItems = ref<FlowItem[]>([])
 const todayUsage = ref<DailyUsageRecord | null>(null)
@@ -617,6 +775,7 @@ const rechargeOrders = ref<PaymentOrder[]>([])
 const orderTotal = ref(0)
 const orderPage = ref(1)
 const orderPageSize = ref(20)
+const refundEligiblePaymentMethods = ref<Set<string>>(new Set())
 
 const refunds = ref<RefundRequest[]>([])
 const refundTotal = ref(0)
@@ -624,23 +783,140 @@ const refundPage = ref(1)
 const refundPageSize = ref(20)
 
 const activeTab = ref('transactions')
+const loadedTabs = new Set<string>()
+const tabLoadPromises = new Map<string, Promise<void>>()
+let refundEligibilityLoaded = false
 let todayCostPollTimer: ReturnType<typeof setInterval> | null = null
+let orderPollTimer: ReturnType<typeof setTimeout> | null = null
+let orderLoadVersion = 0
+let unmounted = false
+const pendingOrders = new Map<string, PaymentOrder>()
 
 const rechargeForm = reactive({
   amount_usd: 10,
-  payment_method: 'alipay',
+  payment_option_key: '',
+  idempotency_key: '',
 })
+let rechargeIdempotencyFingerprint = ''
 
 const refundForm = reactive({
   amount_usd: 0,
-  payment_order_id: '__none__',
+  payment_order_id: '',
   refund_mode: 'offline_payout',
   reason: '',
 })
 
+const redeemForm = reactive({
+  code: '',
+})
+
 const refundableOrders = computed(() =>
-  rechargeOrders.value.filter(o => (o.refundable_amount_usd || 0) > 0)
+  rechargeOrders.value.filter(order =>
+    (order.refundable_amount_usd || 0) > 0
+    && refundEligiblePaymentMethods.value.has(refundPaymentMethod(order))
+  )
 )
+
+const rechargeOptionsWithKey = computed(() =>
+  rechargeOptions.value.map((option, index) => ({
+    ...option,
+    key: [
+      option.payment_provider || option.provider || option.payment_method,
+      option.payment_method,
+      option.payment_channel || '',
+      index,
+    ].join(':'),
+  }))
+)
+
+const selectedRechargeOption = computed(() => {
+  if (rechargeOptionsWithKey.value.length === 0) return null
+  return rechargeOptionsWithKey.value.find(option => option.key === rechargeForm.payment_option_key)
+    || rechargeOptionsWithKey.value[0]
+})
+
+function roundPayAmount(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+const rechargePaymentBreakdown = computed(() => {
+  const rate = Number(selectedRechargeOption.value?.usd_exchange_rate || 0)
+  const amount = Number(rechargeForm.amount_usd || 0)
+  if (!Number.isFinite(rate) || rate <= 0 || !Number.isFinite(amount) || amount <= 0) return null
+  const rawFeeRate = Number(selectedRechargeOption.value?.fee_rate || 0)
+  const feeRate = Number.isFinite(rawFeeRate) && rawFeeRate > 0 ? rawFeeRate : 0
+  const basePayAmount = roundPayAmount(amount * rate)
+  const feeAmount = roundPayAmount(basePayAmount * feeRate / 100)
+  return {
+    basePayAmount,
+    feeAmount,
+    feeRate,
+    totalPayAmount: roundPayAmount(basePayAmount + feeAmount),
+  }
+})
+
+const rechargePayCurrency = computed(() => selectedRechargeOption.value?.pay_currency || 'CNY')
+
+const estimatedRechargePayAmount = computed(() => {
+  if (!rechargePaymentBreakdown.value) return '-'
+  return rechargePaymentBreakdown.value.totalPayAmount.toFixed(2)
+})
+const estimatedRechargeFeeAmount = computed(() =>
+  rechargePaymentBreakdown.value?.feeAmount || 0
+)
+const estimatedRechargeFeeRate = computed(() =>
+  rechargePaymentBreakdown.value?.feeRate || 0
+)
+const latestRechargePaymentUrl = computed(() => {
+  const paymentUrl = getPaymentInstructionString(
+    latestRecharge.value?.payment_instructions,
+    'payment_url',
+  )
+  return paymentUrl ? safePaymentTargetUrl(paymentUrl) : null
+})
+const latestRechargeStripeInstructions = computed(() =>
+  getStripePaymentInstructions(latestRecharge.value?.payment_instructions)
+)
+
+const dailyQuota = computed(() => walletBalance.value?.daily_quota ?? null)
+const hasActiveDailyQuota = computed(() => Boolean(dailyQuota.value?.has_active))
+const walletOnlyBalance = computed(() => {
+  const explicitBalance = walletBalance.value?.wallet_balance
+  if (typeof explicitBalance === 'number' && Number.isFinite(explicitBalance)) {
+    return explicitBalance
+  }
+  return Number(walletBalance.value?.balance ?? 0)
+})
+const packageBalance = computed(() => {
+  const quotaRemaining = dailyQuota.value?.remaining_usd
+  if (hasActiveDailyQuota.value && typeof quotaRemaining === 'number' && Number.isFinite(quotaRemaining)) {
+    return Math.max(0, quotaRemaining)
+  }
+  const explicitBalance = walletBalance.value?.package_balance
+  if (typeof explicitBalance === 'number' && Number.isFinite(explicitBalance)) {
+    return Math.max(0, explicitBalance)
+  }
+  return 0
+})
+const totalAvailableBalance = computed(() => {
+  const explicitBalance = walletBalance.value?.total_available_balance
+  if (typeof explicitBalance === 'number' && Number.isFinite(explicitBalance)) {
+    return explicitBalance
+  }
+  return walletOnlyBalance.value + packageBalance.value
+})
+const dailyQuotaTotal = computed(() => {
+  const value = dailyQuota.value?.total_usd
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0
+})
+const dailyQuotaUsed = computed(() => {
+  const value = dailyQuota.value?.used_usd
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0
+})
+const dailyQuotaRemainingPercent = computed(() => {
+  if (!hasActiveDailyQuota.value || dailyQuotaTotal.value <= 0) return 0
+  return Math.min(100, Math.max(0, (packageBalance.value / dailyQuotaTotal.value) * 100))
+})
 
 onMounted(async () => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -648,10 +924,10 @@ onMounted(async () => {
     await Promise.all([
       loadBalance(),
       loadTransactions(),
-      loadTodayCost(),
-      loadOrders(),
-      loadRefunds(),
+      loadRechargeOptions(),
     ])
+    if (unmounted) return
+    await loadOrders()
     syncTodayCostPolling()
   } finally {
     loadingInitial.value = false
@@ -659,16 +935,44 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  unmounted = true
+  orderLoadVersion += 1
   stopTodayCostPolling()
+  stopOrderPolling()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
-watch(activeTab, () => {
+watch(activeTab, (tab) => {
   syncTodayCostPolling()
+  void loadActiveTab(tab)
 })
+
+watch(refundableOrders, () => {
+  syncRefundOrderSelection()
+})
+
+async function refreshWallet() {
+  await loadOrders()
+  await Promise.all([loadBalance(), loadTransactions()])
+}
 
 async function loadBalance() {
   walletBalance.value = await walletApi.getBalance()
+}
+
+async function loadRechargeOptions() {
+  try {
+    const response = await walletApi.listRechargeOptions()
+    rechargeOptions.value = response.items
+    if (!rechargeForm.payment_option_key && rechargeOptionsWithKey.value.length > 0) {
+      const preferred = rechargeOptionsWithKey.value.find(option => option.payment_provider === 'epay')
+        || rechargeOptionsWithKey.value[0]
+      rechargeForm.payment_option_key = preferred.key
+    }
+  } catch (error) {
+    log.error('加载充值方式失败:', error)
+    showError(parseApiError(error, '加载充值方式失败'))
+  }
 }
 
 async function loadTransactions() {
@@ -679,6 +983,7 @@ async function loadTransactions() {
     flowItems.value = resp.items
     txTotal.value = resp.total
     todayUsage.value = resp.today_entry
+    loadedTabs.add('transactions')
   } catch (error) {
     log.error('加载钱包流水失败:', error)
     showError(parseApiError(error, '加载钱包流水失败'))
@@ -696,7 +1001,7 @@ async function loadTodayCost() {
 }
 
 function syncTodayCostPolling() {
-  if (activeTab.value === 'transactions' && !document.hidden) {
+  if (!unmounted && activeTab.value === 'transactions' && !document.hidden) {
     startTodayCostPolling()
   } else {
     stopTodayCostPolling()
@@ -718,20 +1023,115 @@ function stopTodayCostPolling() {
 
 function handleVisibilityChange() {
   syncTodayCostPolling()
+  if (document.hidden) {
+    stopOrderPolling()
+  } else if (!loadingInitial.value) {
+    void reloadOrders(true)
+  }
 }
 
-async function loadOrders() {
-  loadingOrders.value = true
+function isAwaitingCredit(order: PaymentOrder): boolean {
+  return order.status === 'paid'
+    || (order.status === 'pending'
+      && (!order.expires_at || new Date(order.expires_at).getTime() > Date.now()))
+}
+
+function stopOrderPolling() {
+  if (orderPollTimer === null) return
+  clearTimeout(orderPollTimer)
+  orderPollTimer = null
+}
+
+function scheduleOrderPolling() {
+  stopOrderPolling()
+  if (unmounted || document.hidden || ![...pendingOrders.values()].some(isAwaitingCredit)) return
+  orderPollTimer = setTimeout(() => {
+    orderPollTimer = null
+    void reloadOrders(true)
+  }, 5_000)
+}
+
+function loadOrders() {
+  return reloadOrders(false)
+}
+
+async function reloadOrders(silent: boolean) {
+  if (unmounted) return
+  stopOrderPolling()
+  const version = ++orderLoadVersion
+  loadingOrders.value = !silent
   try {
     const offset = (orderPage.value - 1) * orderPageSize.value
     const resp = await walletApi.listRechargeOrders({ limit: orderPageSize.value, offset })
+    if (unmounted || version !== orderLoadVersion) return
+    const orders = [...resp.items]
+    const visibleIds = new Set(orders.map(order => order.id))
+    const missingOrders = [...pendingOrders.values()].filter(order =>
+      isAwaitingCredit(order) && !visibleIds.has(order.id)
+    )
+    const details = await Promise.allSettled(missingOrders.map(order => walletApi.getRechargeOrder(order.id)))
+    if (unmounted || version !== orderLoadVersion) return
+    for (const detail of details) {
+      if (detail.status === 'fulfilled') orders.push(detail.value.order)
+      else log.error('加载待到账订单失败:', detail.reason)
+    }
+    const newlyCredited = orders.filter(order =>
+      order.status === 'credited' && pendingOrders.has(order.id)
+    )
+    for (const order of orders) {
+      if (isAwaitingCredit(order)) pendingOrders.set(order.id, order)
+      else if (order.status !== 'credited') pendingOrders.delete(order.id)
+      if (latestRecharge.value?.order.id === order.id) latestRecharge.value.order = order
+    }
+
+    // Order lists include the wallet snapshot, but omit the daily package quota.
+    const { items: _items, total: _total, limit: _limit, offset: _offset, ...balance } = resp
+    const currentPackageBalance = packageBalance.value
+    const currentWalletBalance = Number(balance.wallet?.balance ?? balance.balance ?? 0)
+    walletBalance.value = {
+      ...walletBalance.value,
+      ...balance,
+      wallet_balance: Math.max(0, currentWalletBalance),
+      total_available_balance: balance.unlimited ? null : Math.max(0, currentWalletBalance + currentPackageBalance),
+    }
     rechargeOrders.value = resp.items
     orderTotal.value = resp.total
+    loadedTabs.add('orders')
+    syncRefundOrderSelection()
+    if (newlyCredited.length > 0) {
+      // Read after the credited status so a pre-credit list snapshot cannot win.
+      await Promise.all([loadBalance(), loadTransactions()])
+      for (const order of newlyCredited) pendingOrders.delete(order.id)
+      if (!unmounted && version === orderLoadVersion) success('充值已到账，余额已更新')
+    }
   } catch (error) {
+    if (unmounted || version !== orderLoadVersion) return
     log.error('加载充值订单失败:', error)
-    showError(parseApiError(error, '加载充值订单失败'))
+    if (!silent) showError(parseApiError(error, '加载充值订单失败'))
   } finally {
-    loadingOrders.value = false
+    if (!unmounted && version === orderLoadVersion) {
+      loadingOrders.value = false
+      scheduleOrderPolling()
+    }
+  }
+}
+
+async function loadRefundEligibility() {
+  loadingRefundEligibility.value = true
+  try {
+    const resp = await walletApi.listRefundEligibleProviders()
+    refundEligiblePaymentMethods.value = new Set(
+      (resp.payment_methods || [])
+        .map(item => item.trim().toLowerCase())
+        .filter(Boolean)
+    )
+    refundEligibilityLoaded = true
+    syncRefundOrderSelection()
+  } catch (error) {
+    refundEligiblePaymentMethods.value = new Set()
+    log.error('加载退款资格失败:', error)
+  } finally {
+    loadingRefundEligibility.value = false
   }
 }
 
@@ -742,6 +1142,7 @@ async function loadRefunds() {
     const resp = await walletApi.listRefunds({ limit: refundPageSize.value, offset })
     refunds.value = resp.items
     refundTotal.value = resp.total
+    loadedTabs.add('refunds')
   } catch (error) {
     log.error('加载退款记录失败:', error)
     showError(parseApiError(error, '加载退款记录失败'))
@@ -750,21 +1151,112 @@ async function loadRefunds() {
   }
 }
 
+function loadActiveTab(tab: string): Promise<void> {
+  const tabIsLoaded = tab === 'refunds'
+    ? loadedTabs.has('refunds') && loadedTabs.has('orders') && refundEligibilityLoaded
+    : loadedTabs.has(tab)
+  if (tabIsLoaded) return Promise.resolve()
+  const existing = tabLoadPromises.get(tab)
+  if (existing) return existing
+
+  const request = (async () => {
+    if (tab === 'orders') {
+      await loadOrders()
+    } else if (tab === 'refunds') {
+      const requests: Promise<void>[] = []
+      if (!loadedTabs.has('refunds')) requests.push(loadRefunds())
+      if (!refundEligibilityLoaded) requests.push(loadRefundEligibility())
+      if (!loadedTabs.has('orders')) requests.push(loadOrders())
+      await Promise.all(requests)
+    }
+  })().finally(() => {
+    if (tabLoadPromises.get(tab) === request) tabLoadPromises.delete(tab)
+  })
+  tabLoadPromises.set(tab, request)
+  return request
+}
+
+async function refreshRefundPanel() {
+  await Promise.all([loadRefunds(), loadRefundEligibility(), loadOrders()])
+}
+
+async function submitRedeem() {
+  if (!redeemForm.code.trim()) {
+    showError('请输入兑换码')
+    return
+  }
+
+  submittingRedeem.value = true
+  try {
+    latestRedeem.value = await walletApi.redeemCode({
+      code: redeemForm.code.trim(),
+    })
+    redeemForm.code = ''
+    success('兑换成功')
+    await Promise.all([loadBalance(), loadOrders(), loadTransactions(), loadTodayCost()])
+    activeTab.value = 'orders'
+  } catch (error) {
+    log.error('兑换码充值失败:', error)
+    showError(parseApiError(error, '兑换码充值失败'))
+  } finally {
+    submittingRedeem.value = false
+  }
+}
+
 async function submitRecharge() {
   if (!rechargeForm.amount_usd || rechargeForm.amount_usd <= 0) {
     showError('请输入有效的充值金额')
     return
   }
+  const option = selectedRechargeOption.value
+  if (!option) {
+    showError('请选择支付方式')
+    return
+  }
+  if (option.min_recharge_usd && rechargeForm.amount_usd < option.min_recharge_usd) {
+    showError(`充值金额不能低于 ${formatCurrency(option.min_recharge_usd)}`)
+    return
+  }
 
   submittingRecharge.value = true
   try {
+    // Keep a failed request retryable only while its business parameters stay
+    // identical. Changing the amount or channel must get a fresh key.
+    const requestFingerprint = JSON.stringify([
+      Number(rechargeForm.amount_usd),
+      option.payment_method || '',
+      option.payment_provider || '',
+      option.payment_channel || '',
+    ])
+    if (
+      rechargeForm.idempotency_key
+      && rechargeIdempotencyFingerprint
+      && rechargeIdempotencyFingerprint !== requestFingerprint
+    ) {
+      rechargeForm.idempotency_key = ''
+    }
+    if (!rechargeForm.idempotency_key) {
+      rechargeForm.idempotency_key = typeof globalThis.crypto?.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    }
+    rechargeIdempotencyFingerprint = requestFingerprint
     latestRecharge.value = await walletApi.createRechargeOrder({
       amount_usd: rechargeForm.amount_usd,
-      payment_method: rechargeForm.payment_method,
+      payment_method: option.payment_method,
+      payment_provider: option.payment_provider,
+      payment_channel: option.payment_channel,
+      idempotency_key: rechargeForm.idempotency_key,
     })
+    if (isAwaitingCredit(latestRecharge.value.order)) {
+      pendingOrders.set(latestRecharge.value.order.id, latestRecharge.value.order)
+    }
     success('充值订单创建成功')
-    await Promise.all([loadOrders(), loadBalance()])
+    await loadOrders()
     activeTab.value = 'orders'
+    submitPaymentInstructions(latestRecharge.value.payment_instructions)
+    rechargeForm.idempotency_key = ''
+    rechargeIdempotencyFingerprint = ''
   } catch (error) {
     log.error('创建充值订单失败:', error)
     showError(parseApiError(error, '创建充值订单失败'))
@@ -773,9 +1265,79 @@ async function submitRecharge() {
   }
 }
 
+function submitPaymentInstructions(instructions: Record<string, unknown> | null | undefined) {
+  if (!instructions) return
+  const stripeInstructions = getStripePaymentInstructions(instructions)
+  if (stripeInstructions) {
+    stripePaymentInstructions.value = instructions
+    stripeDialogOpen.value = true
+    return
+  }
+  const paymentUrl = getPaymentInstructionString(instructions, 'payment_url')
+  if (!paymentUrl) return
+  const safePaymentUrl = safePaymentTargetUrl(paymentUrl)
+  if (!safePaymentUrl) {
+    showError('支付网关返回了不安全的支付地址')
+    return
+  }
+  const paymentParams = instructions.payment_params
+  if (paymentParams && typeof paymentParams === 'object' && !Array.isArray(paymentParams)) {
+    submitPaymentForm(safePaymentUrl, paymentParams as Record<string, unknown>)
+    return
+  }
+  const opened = window.open(safePaymentUrl, '_blank', 'noopener,noreferrer')
+  if (!opened) {
+    window.location.href = safePaymentUrl
+  }
+}
+
+function submitPaymentForm(url: string, params: Record<string, unknown>) {
+  const safeUrl = safePaymentTargetUrl(url)
+  if (!safeUrl) {
+    showError('支付网关返回了不安全的支付地址')
+    return
+  }
+  const form = document.createElement('form')
+  form.action = safeUrl
+  form.method = 'POST'
+  if (!isSafariBrowser()) {
+    form.target = '_blank'
+  }
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined) return
+    const input = document.createElement('input')
+    input.type = 'hidden'
+    input.name = key
+    input.value = String(value)
+    form.appendChild(input)
+  })
+  document.body.appendChild(form)
+  form.submit()
+  document.body.removeChild(form)
+}
+
+function isSafariBrowser(): boolean {
+  return navigator.userAgent.includes('Safari') && !navigator.userAgent.includes('Chrome')
+}
+
+async function handleStripePaymentSuccess() {
+  info('支付已提交，正在等待充值到账')
+  await loadOrders()
+  activeTab.value = 'orders'
+}
+
 async function submitRefund() {
   if (!refundForm.amount_usd || refundForm.amount_usd <= 0) {
     showError('请输入有效的退款金额')
+    return
+  }
+  const selectedOrder = refundableOrders.value.find(order => order.id === refundForm.payment_order_id)
+  if (!selectedOrder) {
+    showError('请选择允许用户退款的充值订单')
+    return
+  }
+  if (refundForm.amount_usd > (selectedOrder.refundable_amount_usd || 0)) {
+    showError(`退款金额超过该订单可退金额（当前可退 ${formatCurrency(selectedOrder.refundable_amount_usd || 0)}）`)
     return
   }
   const refundableBalance =
@@ -789,19 +1351,14 @@ async function submitRefund() {
   try {
     await walletApi.createRefund({
       amount_usd: refundForm.amount_usd,
-      payment_order_id:
-        refundForm.payment_order_id && refundForm.payment_order_id !== '__none__'
-          ? refundForm.payment_order_id
-          : undefined,
-      refund_mode: refundForm.refund_mode || undefined,
+      payment_order_id: selectedOrder.id,
       reason: refundForm.reason || undefined,
       idempotency_key: `web_refund_${buildRefundIdempotencyKey()}`,
     })
     success('退款申请已提交')
     refundForm.amount_usd = 0
-    refundForm.payment_order_id = '__none__'
     refundForm.reason = ''
-    await Promise.all([loadRefunds(), loadBalance(), loadOrders(), loadTransactions(), loadTodayCost()])
+    await Promise.all([loadRefunds(), loadBalance(), loadOrders(), loadRefundEligibility(), loadTransactions(), loadTodayCost()])
     activeTab.value = 'refunds'
   } catch (error) {
     log.error('提交退款申请失败:', error)
@@ -809,6 +1366,15 @@ async function submitRefund() {
   } finally {
     submittingRefund.value = false
   }
+}
+
+function refundPaymentMethod(order: PaymentOrder): string {
+  return String(order.payment_provider || order.payment_method || '').trim().toLowerCase()
+}
+
+function syncRefundOrderSelection() {
+  if (refundableOrders.value.some(order => order.id === refundForm.payment_order_id)) return
+  refundForm.payment_order_id = refundableOrders.value[0]?.id || ''
 }
 
 function buildRefundIdempotencyKey(): string {
@@ -853,7 +1419,7 @@ function handleRefundPageSizeChange(size: number) {
 
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return '-'
-  return new Date(value).toLocaleString('zh-CN', {
+  return new Date(value).toLocaleString(getI18nLocale(), {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

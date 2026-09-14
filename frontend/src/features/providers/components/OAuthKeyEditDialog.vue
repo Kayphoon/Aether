@@ -75,6 +75,24 @@
         </div>
         <div>
           <Label
+            for="concurrent_limit"
+            class="text-xs"
+          >并发请求上限</Label>
+          <Input
+            id="concurrent_limit"
+            :model-value="form.concurrent_limit ?? ''"
+            type="number"
+            min="0"
+            placeholder="不限制"
+            class="h-8"
+            @update:model-value="(v) => form.concurrent_limit = parseNullableNumberInput(v, { min: 0 })"
+          />
+          <p class="text-xs text-muted-foreground mt-0.5">
+            留空或 0 表示不限制
+          </p>
+        </div>
+        <div>
+          <Label
             for="cache_ttl_minutes"
             class="text-xs"
           >缓存 TTL</Label>
@@ -124,7 +142,7 @@
               v-if="showAutoFetchWarning"
               class="text-xs text-amber-600 dark:text-amber-400"
             >
-              已配置的模型权限将在下次获取时被覆盖
+              {{ autoFetchWarningMessage }}
             </p>
           </div>
           <Switch v-model="form.auto_fetch_models" />
@@ -199,7 +217,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: []
-  saved: []
+  saved: [key: EndpointAPIKey]
 }>()
 
 const { success, error: showError } = useToast()
@@ -220,6 +238,15 @@ const showAutoFetchWarning = computed(() => {
   return true
 })
 
+const autoFetchWarningMessage = computed(() => {
+  if (!showAutoFetchWarning.value || !props.editingKey?.allowed_models) return ''
+  const models = Array.isArray(props.editingKey.allowed_models)
+    ? props.editingKey.allowed_models
+    : []
+  if (models.length === 0) return ''
+  return `当前 Key 模型权限存在以下模型：${models.map(model => `“${model}”`).join('、')}，开启自动获取后将被覆盖`
+})
+
 // 表单是否可以保存
 const canSave = computed(() => {
   // 必须填写名称
@@ -234,6 +261,7 @@ const form = ref({
   name: '',
   internal_priority: 10,
   rpm_limit: undefined as number | null | undefined,
+  concurrent_limit: undefined as number | null | undefined,
   cache_ttl_minutes: 5,
   max_probe_interval_minutes: 32,
   note: '',
@@ -269,6 +297,7 @@ function resetForm() {
     name: '',
     internal_priority: 10,
     rpm_limit: undefined,
+    concurrent_limit: undefined,
     cache_ttl_minutes: 5,
     max_probe_interval_minutes: 32,
     note: '',
@@ -286,6 +315,7 @@ function loadKeyData() {
     name: props.editingKey.name,
     internal_priority: props.editingKey.internal_priority ?? 10,
     rpm_limit: props.editingKey.rpm_limit ?? undefined,
+    concurrent_limit: props.editingKey.concurrent_limit ?? undefined,
     cache_ttl_minutes: props.editingKey.cache_ttl_minutes ?? 5,
     max_probe_interval_minutes: props.editingKey.max_probe_interval_minutes ?? 32,
     note: props.editingKey.note || '',
@@ -345,21 +375,24 @@ async function handleSave() {
 
   saving.value = true
   try {
+    const shouldClearAllowedModels = !!props.editingKey.auto_fetch_models && !form.value.auto_fetch_models
     const updateData: EndpointAPIKeyUpdate = {
       name: form.value.name,
       internal_priority: form.value.internal_priority,
       rpm_limit: form.value.rpm_limit,
+      concurrent_limit: form.value.concurrent_limit,
       cache_ttl_minutes: form.value.cache_ttl_minutes,
       max_probe_interval_minutes: form.value.max_probe_interval_minutes,
       note: form.value.note,
+      allowed_models: shouldClearAllowedModels ? null : undefined,
       auto_fetch_models: form.value.auto_fetch_models,
       model_include_patterns: parsePatternText(form.value.model_include_patterns_text),
       model_exclude_patterns: parsePatternText(form.value.model_exclude_patterns_text)
     }
 
-    await updateProviderKey(props.editingKey.id, updateData)
+    const updatedKey = await updateProviderKey(props.editingKey.id, updateData)
     success('账号已更新', '成功')
-    emit('saved')
+    emit('saved', updatedKey)
     emit('close')
   } catch (err: unknown) {
     const errorMessage = parseApiError(err, '保存失败')

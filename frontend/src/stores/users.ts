@@ -3,29 +3,88 @@ import { ref } from 'vue'
 import {
   usersApi,
   type User,
+  type GetAllUsersOptions,
   type CreateUserRequest,
   type UpdateUserRequest,
   type ApiKey,
   type UpsertUserApiKeyRequest,
   type UserSession,
+  type UserBatchSelection,
+  type ResolveUserBatchSelectionResponse,
+  type UserBatchActionRequest,
+  type UserBatchActionResponse,
+  type UserRole,
+  type AdminUserSortBy,
+  type AdminUserSortOrder,
+  type UserGroup,
+  type UserGroupMember,
+  type UpsertUserGroupRequest,
+  type ListUserGroupsResponse,
+  type AdminUserPlanEntitlementsResponse,
+  type GrantUserPlanRequest,
+  type GrantUserPlanResponse,
 } from '@/api/users'
 import { parseApiError } from '@/utils/errorParser'
 
 export const useUsersStore = defineStore('users', () => {
   const users = ref<User[]>([])
+  const total = ref(0)
+  const skip = ref(0)
+  const limit = ref(0)
+  const hasMore = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  let fetchUsersRequestId = 0
 
-  async function fetchUsers() {
+  async function fetchUsers(options: {
+    cacheTtlMs?: number
+    search?: string
+    role?: UserRole
+    is_active?: boolean
+    group_id?: string
+    sort_by?: AdminUserSortBy
+    sort_order?: AdminUserSortOrder
+    skip?: number
+    limit?: number
+  } = {}) {
+    const requestId = ++fetchUsersRequestId
     loading.value = true
     error.value = null
 
     try {
-      users.value = await usersApi.getAllUsers()
+      const response = await usersApi.getAllUsersPage(options)
+      if (requestId !== fetchUsersRequestId) return
+      users.value = response.items
+      total.value = response.total
+      skip.value = response.skip
+      limit.value = response.limit
+      hasMore.value = response.has_more
     } catch (err: unknown) {
+      if (requestId !== fetchUsersRequestId) return
       error.value = parseApiError(err, '获取用户列表失败')
     } finally {
-      loading.value = false
+      if (requestId === fetchUsersRequestId) {
+        loading.value = false
+      }
+    }
+  }
+
+  async function listAllUsers(options: Omit<GetAllUsersOptions, 'skip' | 'limit'> = {}): Promise<User[]> {
+    const pageSize = 1000
+    const allUsers: User[] = []
+    let skip = 0
+
+    for (;;) {
+      const response = await usersApi.getAllUsersPage({
+        ...options,
+        skip,
+        limit: pageSize,
+      })
+      allUsers.push(...response.items)
+      if (!response.has_more || response.items.length === 0) {
+        return allUsers
+      }
+      skip += response.items.length
     }
   }
 
@@ -80,6 +139,99 @@ export const useUsersStore = defineStore('users', () => {
       throw err
     } finally {
       loading.value = false
+    }
+  }
+
+  async function resolveBatchSelection(
+    selection: UserBatchSelection
+  ): Promise<ResolveUserBatchSelectionResponse> {
+    try {
+      return await usersApi.resolveBatchSelection(selection)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '解析用户选择失败')
+      throw err
+    }
+  }
+
+  async function batchAction(request: UserBatchActionRequest): Promise<UserBatchActionResponse> {
+    loading.value = true
+    error.value = null
+    try {
+      return await usersApi.batchAction(request)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '批量操作用户失败')
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function listUserGroups(): Promise<ListUserGroupsResponse> {
+    try {
+      return await usersApi.listUserGroups()
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '获取用户分组失败')
+      throw err
+    }
+  }
+
+  async function createUserGroup(payload: UpsertUserGroupRequest): Promise<UserGroup> {
+    try {
+      return await usersApi.createUserGroup(payload)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '创建用户分组失败')
+      throw err
+    }
+  }
+
+  async function updateUserGroup(
+    groupId: string,
+    payload: UpsertUserGroupRequest,
+  ): Promise<UserGroup> {
+    try {
+      return await usersApi.updateUserGroup(groupId, payload)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '更新用户分组失败')
+      throw err
+    }
+  }
+
+  async function deleteUserGroup(groupId: string): Promise<void> {
+    try {
+      await usersApi.deleteUserGroup(groupId)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '删除用户分组失败')
+      throw err
+    }
+  }
+
+  async function listUserGroupMembers(groupId: string): Promise<UserGroupMember[]> {
+    try {
+      return await usersApi.listUserGroupMembers(groupId)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '获取分组成员失败')
+      throw err
+    }
+  }
+
+  async function replaceUserGroupMembers(
+    groupId: string,
+    userIds: string[],
+  ): Promise<UserGroupMember[]> {
+    try {
+      return await usersApi.replaceUserGroupMembers(groupId, userIds)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '更新分组成员失败')
+      throw err
+    }
+  }
+
+  async function setDefaultUserGroup(groupId: string | null): Promise<{ default_group_id?: string | null }> {
+    try {
+      return await usersApi.setDefaultUserGroup(groupId)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '设置默认用户组失败')
+      throw err
     }
   }
 
@@ -141,6 +293,29 @@ export const useUsersStore = defineStore('users', () => {
     }
   }
 
+  async function listUserPlanEntitlements(
+    userId: string,
+  ): Promise<AdminUserPlanEntitlementsResponse> {
+    try {
+      return await usersApi.listUserPlanEntitlements(userId)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '获取用户套餐失败')
+      throw err
+    }
+  }
+
+  async function grantUserPlan(
+    userId: string,
+    payload: GrantUserPlanRequest,
+  ): Promise<GrantUserPlanResponse> {
+    try {
+      return await usersApi.grantUserPlan(userId, payload)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '发放用户套餐失败')
+      throw err
+    }
+  }
+
   async function revokeUserSession(userId: string, sessionId: string): Promise<{ message: string }> {
     try {
       return await usersApi.revokeUserSession(userId, sessionId)
@@ -163,18 +338,34 @@ export const useUsersStore = defineStore('users', () => {
 
   return {
     users,
+    total,
+    skip,
+    limit,
+    hasMore,
     loading,
     error,
     fetchUsers,
+    listAllUsers,
     createUser,
     updateUser,
     deleteUser,
+    resolveBatchSelection,
+    batchAction,
+    listUserGroups,
+    createUserGroup,
+    updateUserGroup,
+    deleteUserGroup,
+    listUserGroupMembers,
+    replaceUserGroupMembers,
+    setDefaultUserGroup,
     getUserApiKeys,
     createApiKey,
     updateApiKey,
     deleteApiKey,
     getFullApiKey,
     getUserSessions,
+    listUserPlanEntitlements,
+    grantUserPlan,
     revokeUserSession,
     revokeAllUserSessions,
   }

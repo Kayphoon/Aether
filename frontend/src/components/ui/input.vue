@@ -6,6 +6,7 @@
     <input
       ref="inputRef"
       :class="inputClass"
+      :style="maskStyle"
       :value="modelValue"
       :type="effectiveType"
       :autocomplete="autocompleteAttr"
@@ -41,6 +42,7 @@
     v-else
     ref="inputRef"
     :class="inputClass"
+    :style="maskStyle"
     :value="modelValue"
     :type="effectiveType"
     :autocomplete="autocompleteAttr"
@@ -57,6 +59,7 @@
 </template>
 
 <script setup lang="ts">
+import type { ClassValue } from 'clsx'
 import { computed, useAttrs, ref } from 'vue'
 import { Eye, EyeOff } from 'lucide-vue-next'
 import { cn } from '@/lib/utils'
@@ -68,8 +71,8 @@ const emit = defineEmits<{
 }>()
 
 interface Props {
-  modelValue?: string | number
-  class?: string
+  modelValue?: string | number | null
+  class?: ClassValue
   autocomplete?: string
   /**
    * 输入框尺寸
@@ -79,7 +82,7 @@ interface Props {
   size?: 'default' | 'sm'
   /**
    * 遮蔽显示内容（用于 API Key 等敏感信息）
-   * 隐藏态使用真正的 password 输入框，显示态切换为 text
+   * 始终使用 text 输入框，隐藏态通过样式进行遮蔽
    * 同时会显示一个小眼睛按钮用于切换显示/隐藏
    */
   masked?: boolean
@@ -116,9 +119,18 @@ const shouldDisableAutofill = computed(() => {
 const effectiveType = computed(() => {
   const attrType = (attrs.type as string | undefined) ?? 'text'
   if (props.masked) {
-    return isVisible.value ? 'text' : 'password'
+    return 'text'
   }
   return attrType
+})
+
+const maskStyle = computed(() => {
+  if (!props.masked || isVisible.value) {
+    return undefined
+  }
+  return {
+    WebkitTextSecurity: 'disc'
+  }
 })
 
 // 过滤掉 type 和 class 属性，因为我们会单独处理

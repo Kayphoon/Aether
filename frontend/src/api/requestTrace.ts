@@ -1,5 +1,62 @@
 import apiClient from './client'
 
+export interface CandidateRankingMetadata {
+  mode?: string
+  priority_mode?: string
+  index?: number
+  priority_slot?: number
+  promoted_by?: string
+  demoted_by?: string
+}
+
+export interface ImageProgress {
+  phase?: 'upstream_connecting' | 'upstream_streaming' | 'upstream_completed' | 'failed' | string
+  upstream_ttfb_ms?: number | null
+  upstream_sse_frame_count?: number | null
+  last_upstream_event?: string | null
+  last_upstream_frame_at_unix_ms?: number | null
+  partial_image_count?: number | null
+  last_client_visible_event?: string | null
+  downstream_heartbeat_count?: number | null
+  last_downstream_heartbeat_at_unix_ms?: number | null
+  downstream_heartbeat_interval_ms?: number | null
+}
+
+export interface CandidateResponseBoundary {
+  source?: string
+  status_code?: number | null
+  headers?: Record<string, unknown> | null
+  body?: unknown
+  body_ref?: string | null
+  body_state?: string | null
+}
+
+export interface CandidateProxyTiming {
+  body_read_ms?: number | null
+  decompress_ms?: number | null
+  wire_size?: number | null
+  body_size?: number | null
+  ttfb_ms?: number | null
+  upstream_ms?: number | null
+  response_wait_ms?: number | null
+  connection_acquire_ms?: number | null
+  upstream_processing_ms?: number | null
+  connect_ms?: number | null
+  tls_ms?: number | null
+  dns_ms?: number | null
+  total_ms?: number | null
+  connection_reused?: boolean | null
+}
+
+export interface CandidateProxy {
+  node_name?: string | null
+  node_id?: string | null
+  url?: string | null
+  source?: string | null
+  ttfb_ms?: number | null
+  timing?: CandidateProxyTiming | null
+}
+
 export interface CandidateRecord {
   id: string
   request_id: string
@@ -8,13 +65,22 @@ export interface CandidateRecord {
   provider_id?: string
   provider_name?: string
   provider_website?: string  // Provider 官网
+  provider_priority?: number
+  provider_keep_priority_on_conversion?: boolean
+  provider_enable_format_conversion?: boolean
   endpoint_id?: string
   endpoint_name?: string  // 端点显示名称（api_format）
+  endpoint_api_family?: string
+  endpoint_kind?: string
+  endpoint_format_acceptance_config?: Record<string, unknown> | null
   key_id?: string
   key_name?: string  // 密钥名称
   key_account_label?: string  // 更适合展示的测试账号标签（优先 OAuth 邮箱）
   key_preview?: string  // 密钥脱敏预览（如 sk-***abc），OAuth 类型不返回
   key_auth_type?: string  // 密钥认证类型（api_key, service_account, oauth 等）
+  key_api_formats?: unknown
+  key_internal_priority?: number
+  key_global_priority_by_format?: Record<string, number> | null
   key_oauth_plan_type?: string  // OAuth 账号套餐类型（free/plus/team/enterprise）
   key_capabilities?: Record<string, boolean> | null  // Key 支持的能力
   required_capabilities?: Record<string, boolean> | null  // 请求实际需要的能力标签
@@ -27,14 +93,40 @@ export interface CandidateRecord {
   error_message?: string
   latency_ms?: number
   concurrent_requests?: number
-  extra_data?: Record<string, unknown>
+  ranking?: CandidateRankingMetadata | null
+  image_progress?: ImageProgress | null
+  extra_data?: Record<string, unknown> & {
+    first_byte_time_ms?: number | null
+    needs_conversion?: boolean
+    provider_api_format?: string | null
+    proxy?: CandidateProxy | null
+    pool_selection?: {
+      reason: string
+      cost_soft_threshold?: number | boolean | null
+      cost_window_usage?: number | null
+      cost_limit?: number | null
+    } | null
+    pool_skip?: {
+      type: string
+      cooldown_reason?: string | null
+      cooldown_ttl?: number | null
+      cost_window_usage?: number | null
+    } | null
+    upstream_response?: CandidateResponseBoundary
+    image_progress?: ImageProgress | null
+  }
   created_at: string
   started_at?: string
   finished_at?: string
 }
 
 export interface RequestTrace {
+  gateway_version?: string | null
+  diagnostic_request?: { usage_id: string, body_state?: string | null } | null
   request_id: string
+  request_path?: string
+  request_query_string?: string
+  request_path_and_query?: string
   total_candidates: number
   final_status: 'success' | 'failed' | 'streaming' | 'pending' | 'cancelled'
   total_latency_ms: number
@@ -64,7 +156,7 @@ export const requestTraceApi = {
     const response = await apiClient.get<RequestTrace>(`/api/admin/monitoring/trace/${requestId}`, {
       params: { attempted_only: attemptedOnly },
     })
-    return response.data
+    return { ...response.data, gateway_version: response.headers?.['x-aether-build-version'] ?? response.data.gateway_version ?? null }
   },
 
   /**

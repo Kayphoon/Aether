@@ -1,27 +1,15 @@
 import type { EndpointHealthDetail } from '@/api/endpoints'
+import { compareApiFormats, formatApiFormat } from '@/api/endpoints/types/api-format'
+import { defaultLocale, translateLegacyText, type Locale } from '@/i18n/messages'
 
 // 端点状态枚举
 export type EndpointStatus = 'disabled' | 'no_keys' | 'keys_disabled' | 'available'
-
-const ENDPOINT_SORT_ORDER = [
-  'claude:chat',
-  'claude:cli',
-  'openai:chat',
-  'openai:cli',
-  'openai:compact',
-  'gemini:chat',
-  'gemini:cli',
-  'openai:video',
-  'gemini:video',
-]
 
 /**
  * 端点排序
  */
 export function sortEndpoints<T extends { api_format: string }>(endpoints: T[]): T[] {
-  return [...endpoints].sort((a, b) => {
-    return ENDPOINT_SORT_ORDER.indexOf(a.api_format) - ENDPOINT_SORT_ORDER.indexOf(b.api_format)
-  })
+  return [...endpoints].sort((a, b) => compareApiFormats(a.api_format, b.api_format))
 }
 
 /**
@@ -44,11 +32,29 @@ export function isEndpointAvailable(endpoint: EndpointHealthDetail): boolean {
   return getEndpointStatus(endpoint) === 'available'
 }
 
+function getEndpointHealthScore(endpoint: EndpointHealthDetail): number | null {
+  const score = endpoint.health_score
+  if (!isEndpointAvailable(endpoint) || typeof score !== 'number' || !Number.isFinite(score)) {
+    return null
+  }
+  return Math.min(1, Math.max(0, score))
+}
+
+export function getEndpointHealthLabel(endpoint: EndpointHealthDetail): string {
+  const score = getEndpointHealthScore(endpoint)
+  return score === null ? '-' : `${(score * 100).toFixed(0)}%`
+}
+
+export function getEndpointHealthBarWidth(endpoint: EndpointHealthDetail): string {
+  const score = getEndpointHealthScore(endpoint)
+  return score === null ? '100%' : `${Math.max(score * 100, 5)}%`
+}
+
 /**
  * 根据健康分数获取颜色
  */
 export function getHealthScoreColor(score: number | undefined | null): string {
-  if (score === undefined || score === null) {
+  if (score === undefined || score === null || !Number.isFinite(score)) {
     return 'bg-muted-foreground/40'
   }
   if (score >= 0.8) return 'bg-green-500'
@@ -60,32 +66,30 @@ export function getHealthScoreColor(score: number | undefined | null): string {
  * 端点不可用时进度条颜色
  */
 export function getEndpointDotColor(endpoint: EndpointHealthDetail): string {
-  if (!isEndpointAvailable(endpoint)) {
-    return 'bg-muted-foreground/40'
-  }
-  return getHealthScoreColor(endpoint.health_score)
+  return getHealthScoreColor(getEndpointHealthScore(endpoint))
 }
 
 /**
  * 端点提示文本
  */
-export function getEndpointTooltip(endpoint: EndpointHealthDetail): string {
-  const format = endpoint.api_format
+export function getEndpointTooltip(endpoint: EndpointHealthDetail, locale: Locale = defaultLocale): string {
+  const format = formatApiFormat(endpoint.api_format)
   const status = getEndpointStatus(endpoint)
+  const t = (value: string) => translateLegacyText(value, locale)
 
   switch (status) {
     case 'disabled':
-      return `${format}: 端点禁用`
+      return `${format}: ${t('端点禁用')}`
     case 'no_keys':
-      return `${format}: 未配置密钥`
+      return `${format}: ${t('未配置密钥')}`
     case 'keys_disabled':
-      return `${format}: 无可用密钥`
+      return `${format}: ${t('无可用密钥')}`
     case 'available': {
-      const score = endpoint.health_score
-      if (score === undefined || score === null) {
-        return `${format}: 暂无健康数据`
+      const score = getEndpointHealthScore(endpoint)
+      if (score === null) {
+        return `${format}: ${t('暂无健康数据')}`
       }
-      return `${format}: 健康度 ${(score * 100).toFixed(0)}%`
+      return `${format}: ${t('健康度')} ${(score * 100).toFixed(0)}%`
     }
   }
 }

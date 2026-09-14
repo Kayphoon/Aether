@@ -1,58 +1,35 @@
 <template>
-  <div class="flex flex-wrap items-center gap-2">
+  <div class="flex max-w-full flex-wrap items-center gap-2">
     <Select
       v-model="selectedPreset"
     >
-      <SelectTrigger class="h-8 w-32 text-xs border-border/60">
-        <SelectValue placeholder="选择时间段" />
+      <SelectTrigger
+        class="h-8 w-40 text-xs border-border/60"
+        :class="[presetTriggerClass]"
+      >
+        <SelectValue :placeholder="legacyT('选择时间段')" />
       </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="today">
-          今天
-        </SelectItem>
-        <SelectItem value="yesterday">
-          昨天
-        </SelectItem>
-        <SelectItem value="last7days">
-          最近7天
-        </SelectItem>
-        <SelectItem value="last30days">
-          最近30天
-        </SelectItem>
-        <SelectItem value="last90days">
-          最近90天
-        </SelectItem>
-        <SelectItem value="this_week">
-          本周
-        </SelectItem>
-        <SelectItem value="last_week">
-          上周
-        </SelectItem>
-        <SelectItem value="this_month">
-          本月
-        </SelectItem>
-        <SelectItem value="last_month">
-          上月
-        </SelectItem>
-        <SelectItem value="this_year">
-          今年
-        </SelectItem>
-        <SelectItem value="custom">
-          自定义
+      <SelectContent :searchable="false">
+        <SelectItem
+          v-for="preset in activePresetOptions"
+          :key="preset"
+          :value="preset"
+        >
+          {{ presetLabels[preset] }}
         </SelectItem>
       </SelectContent>
     </Select>
 
     <div
       v-if="selectedPreset === 'custom'"
-      class="flex items-center gap-2"
+      class="flex max-w-full flex-wrap items-center gap-2"
     >
       <Input
         v-model="startDate"
         type="date"
         class="h-8 w-36 text-xs border-border/60"
       />
-      <span class="text-xs text-muted-foreground">至</span>
+      <span class="text-xs text-muted-foreground">{{ legacyT('至') }}</span>
       <Input
         v-model="endDate"
         type="date"
@@ -65,23 +42,23 @@
       v-model="selectedGranularity"
     >
       <SelectTrigger class="h-8 w-24 text-xs border-border/60">
-        <SelectValue placeholder="粒度" />
+        <SelectValue :placeholder="legacyT('粒度')" />
       </SelectTrigger>
       <SelectContent>
         <SelectItem
           v-if="allowHourly && canUseHourly"
           value="hour"
         >
-          小时
+          {{ legacyT('小时') }}
         </SelectItem>
         <SelectItem value="day">
-          天
+          {{ legacyT('天') }}
         </SelectItem>
         <SelectItem value="week">
-          周
+          {{ legacyT('周') }}
         </SelectItem>
         <SelectItem value="month">
-          月
+          {{ legacyT('月') }}
         </SelectItem>
       </SelectContent>
     </Select>
@@ -99,18 +76,57 @@ import {
   Input
 } from '@/components/ui'
 import type { DateRangeParams } from '@/features/usage/types'
+import { useI18n } from '@/i18n'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: DateRangeParams
   showGranularity?: boolean
   allowHourly?: boolean
-}>()
-
+  presetOptions?: SelectablePreset[]
+  presetTriggerClass?: string
+}>(), {
+  presetOptions: () => ['today', 'yesterday', 'last7days', 'last30days', 'last90days', 'custom'],
+  presetTriggerClass: undefined,
+})
 const emit = defineEmits<{
   'update:modelValue': [value: DateRangeParams]
 }>()
+const { legacyT } = useI18n()
+const selectablePresets = ['today', 'yesterday', 'last7days', 'last30days', 'last90days', 'custom'] as const
+type SelectablePreset = typeof selectablePresets[number]
 
-const selectedPreset = ref(props.modelValue.preset || 'last7days')
+const presetLabels = computed<Record<SelectablePreset, string>>(() => ({
+  today: legacyT('今天'),
+  yesterday: legacyT('昨天'),
+  last7days: legacyT('最近7天'),
+  last30days: legacyT('最近30天'),
+  last90days: legacyT('最近90天'),
+  custom: legacyT('自定义')
+}))
+
+const activePresetOptions = computed<SelectablePreset[]>(() => {
+  const unique = new Set(props.presetOptions)
+  const filtered = selectablePresets.filter((preset) => unique.has(preset))
+  return filtered.length > 0 ? filtered : [...selectablePresets]
+})
+
+function defaultPreset(): SelectablePreset {
+  const options = activePresetOptions.value
+  if (options.includes('last7days')) return 'last7days'
+  return options[0] ?? 'last7days'
+}
+
+function normalizePreset(value: DateRangeParams): SelectablePreset {
+  if (value.preset && activePresetOptions.value.includes(value.preset as SelectablePreset)) {
+    return value.preset as SelectablePreset
+  }
+  if (!value.preset && (value.start_date || value.end_date) && activePresetOptions.value.includes('custom')) {
+    return 'custom'
+  }
+  return defaultPreset()
+}
+
+const selectedPreset = ref<SelectablePreset>(normalizePreset(props.modelValue))
 const startDate = ref(props.modelValue.start_date || '')
 const endDate = ref(props.modelValue.end_date || '')
 const selectedGranularity = ref(props.modelValue.granularity || 'day')
@@ -162,13 +178,19 @@ function getValueKey(value: DateRangeParams): string {
 }
 
 watch(() => props.modelValue, (value) => {
-  if (value.preset) selectedPreset.value = value.preset
+  selectedPreset.value = normalizePreset(value)
   if (value.start_date !== undefined) startDate.value = value.start_date || ''
   if (value.end_date !== undefined) endDate.value = value.end_date || ''
   if (value.granularity) selectedGranularity.value = value.granularity
   // 同步更新 lastEmittedValue，避免外部设置值后触发重复 emit
   lastEmittedValue = getValueKey(value)
 }, { deep: true })
+
+watch(activePresetOptions, () => {
+  if (!activePresetOptions.value.includes(selectedPreset.value)) {
+    selectedPreset.value = normalizePreset(props.modelValue)
+  }
+})
 
 watch([selectedPreset, startDate, endDate, selectedGranularity], () => {
   if (!allowHourly.value || !canUseHourly.value) {

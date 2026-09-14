@@ -15,6 +15,9 @@
           数据预览
         </p>
         <ul class="space-y-1 text-muted-foreground">
+          <li v-if="importUsersPreview.user_groups?.length">
+            用户组: {{ importUsersPreview.user_groups.length }} 个
+          </li>
           <li>用户: {{ importUsersPreview.users?.length || 0 }} 个</li>
           <li>
             API Keys: {{ importUsersPreview.users?.reduce((sum: number, u: { api_keys?: unknown[] }) => sum + (u.api_keys?.length || 0), 0) }} 个
@@ -30,7 +33,7 @@
         <Select
           :model-value="usersMergeMode"
           :open="usersMergeModeSelectOpen"
-          @update:model-value="$emit('update:usersMergeMode', $event)"
+          @update:model-value="($event === 'skip' || $event === 'overwrite' || $event === 'error') && $emit('update:usersMergeMode', $event)"
           @update:open="$emit('update:usersMergeModeSelectOpen', $event)"
         >
           <SelectTrigger>
@@ -56,14 +59,30 @@
             已存在的用户将被导入的数据覆盖
           </template>
           <template v-else>
-            如果发现任何冲突，导入将中止并回滚
+            如果发现任何冲突，导入将在写入前预检并中止
           </template>
         </p>
       </div>
 
       <p class="text-xs text-muted-foreground">
-        注意：用户 API Keys 需要目标系统使用相同的 ENCRYPTION_KEY 环境变量才能正常工作。
+        注意：备份不会导出或恢复用户密码及 API Key 凭据。导入仅恢复账户、Key 元数据、用量与钱包数据；导入后的用户和独立余额 API Keys 默认禁用，需重置用户密码并重新签发 Keys 后再使用。
       </p>
+
+      <div
+        v-if="importUsersProgress"
+        class="space-y-2 rounded-md border border-border p-3"
+      >
+        <div class="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+          <span>{{ importUsersProgress.message }}</span>
+          <span>{{ importUsersProgress.percent }}%</span>
+        </div>
+        <div class="h-1.5 overflow-hidden rounded-full bg-muted">
+          <div
+            class="h-full bg-primary transition-all"
+            :style="{ width: `${importUsersProgress.percent}%` }"
+          />
+        </div>
+      </div>
     </div>
 
     <template #footer>
@@ -93,6 +112,16 @@
       class="space-y-4"
     >
       <div class="grid grid-cols-2 gap-4 text-sm">
+        <div v-if="importUsersResult.stats.user_groups">
+          <p class="font-medium">
+            用户组
+          </p>
+          <p class="text-muted-foreground">
+            创建: {{ importUsersResult.stats.user_groups.created }},
+            更新: {{ importUsersResult.stats.user_groups.updated }},
+            跳过: {{ importUsersResult.stats.user_groups.skipped }}
+          </p>
+        </div>
         <div>
           <p class="font-medium">
             用户
@@ -162,6 +191,7 @@ import SelectContent from '@/components/ui/select-content.vue'
 import SelectItem from '@/components/ui/select-item.vue'
 import { Dialog } from '@/components/ui'
 import type { UsersExportData, UsersImportResponse } from '@/api/admin'
+import type { ImportProgressState } from './composables/useConfigExportImport'
 
 defineProps<{
   importUsersDialogOpen: boolean
@@ -171,6 +201,7 @@ defineProps<{
   usersMergeMode: 'skip' | 'overwrite' | 'error'
   usersMergeModeSelectOpen: boolean
   importUsersLoading: boolean
+  importUsersProgress: ImportProgressState | null
 }>()
 
 defineEmits<{

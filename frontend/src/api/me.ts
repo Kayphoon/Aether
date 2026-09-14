@@ -1,9 +1,13 @@
 import apiClient from './client'
+import type { ImageProgress } from './requestTrace'
 import type { ActivityHeatmap } from '@/types/activity'
 import type { TieredPricingConfig } from './endpoints/types'
 import { cachedRequest, buildCacheKey } from '@/utils/cache'
 import type { BillingSummary } from './auth'
 import type { UserSession } from '@/types/session'
+import type { FeatureSettingsMap } from '@/utils/featureSettings'
+
+const ACTIVITY_HEATMAP_CACHE_TTL_MS = 30 * 60 * 1000
 
 export type { UserSession }
 
@@ -17,16 +21,17 @@ export interface Profile {
   created_at: string
   updated_at?: string
   last_login_at?: string
-  auth_source?: 'local' | 'ldap' | 'oauth'
-  has_password?: boolean
+  auth_source: 'local' | 'ldap' | 'oauth'
+  has_password: boolean
   preferences?: UserPreferences
+  feature_settings?: FeatureSettingsMap | null
 }
 
 export interface UserPreferences {
   avatar_url?: string
   bio?: string
   default_provider_id?: string // UUID
-  default_provider?: Record<string, unknown>
+  default_provider?: Record<string, unknown> | string | null // 仅管理员可见
   theme: string
   language: string
   timezone?: string
@@ -48,18 +53,45 @@ export interface ProviderConfig {
 // 使用记录接口
 export interface UsageRecordDetail {
   id: string
-  provider: string
+  provider?: string // 仅管理员可见
   model: string
+  request_type?: string | null
+  requested_reasoning_effort?: string | null
+  reasoning_effort?: string | null
+  service_tier?: string | null
+  actual_service_tier?: string | null
   input_tokens: number
+  effective_input_tokens?: number
   output_tokens: number
   total_tokens: number
   cost: number  // 官方费率
   actual_cost?: number  // 倍率消耗（仅管理员可见）
   rate_multiplier?: number  // 成本倍率（仅管理员可见）
-  response_time_ms?: number
+  response_time_ms?: number | null
+  first_byte_time_ms?: number | null
+  end_to_end_time_ms?: number | null
+  end_to_end_first_byte_time_ms?: number | null
+  updated_at?: string | null
+  response_time_updated_at?: string | null
   is_stream: boolean
+  is_websocket?: boolean
+  websocket_transport?: string | null
+  usage_available?: boolean
+  usage_pricing_available?: boolean
+  input_audio_tokens?: number | null
+  output_audio_tokens?: number | null
+  upstream_is_stream?: boolean
+  client_requested_stream?: boolean
+  client_is_stream?: boolean
+  client_family?: string | null
+  client_ip?: string | null
+  user_agent?: string | null
+  request_path?: string | null
+  request_path_and_query?: string | null
   created_at: string
   cache_creation_input_tokens?: number
+  cache_creation_ephemeral_5m_input_tokens?: number
+  cache_creation_ephemeral_1h_input_tokens?: number
   cache_read_input_tokens?: number
   status_code: number
   error_message?: string
@@ -68,6 +100,7 @@ export interface UsageRecordDetail {
   cache_creation_price_per_1m?: number
   cache_read_price_per_1m?: number
   price_per_request?: number  // 按次计费价格
+  has_fallback?: boolean
   api_key?: {
     id: string
     name: string
@@ -80,9 +113,12 @@ export interface ModelSummary {
   model: string
   requests: number
   input_tokens: number
+  effective_input_tokens?: number
   output_tokens: number
   total_tokens: number
   cache_read_tokens?: number
+  cache_creation_tokens?: number
+  total_input_context?: number
   cache_hit_rate?: number
   total_cost_usd: number
   actual_total_cost_usd?: number  // 倍率消耗（仅管理员可见）
@@ -92,8 +128,12 @@ export interface ModelSummary {
 export interface ProviderSummary {
   provider: string
   requests: number
+  effective_input_tokens?: number
   total_tokens: number
+  output_tokens?: number
   cache_read_tokens?: number
+  cache_creation_tokens?: number
+  total_input_context?: number
   cache_hit_rate?: number
   total_cost_usd: number
   success_rate: number | null
@@ -104,8 +144,12 @@ export interface ProviderSummary {
 export interface ApiFormatSummary {
   api_format: string
   request_count: number
+  effective_input_tokens?: number
   total_tokens: number
+  output_tokens?: number
   cache_read_tokens: number
+  cache_creation_tokens?: number
+  total_input_context?: number
   cache_hit_rate: number
   total_cost_usd: number
   avg_response_time_ms: number
@@ -141,13 +185,37 @@ export interface ApiKey {
   key_display: string
   is_active: boolean
   is_locked: boolean  // 管理员锁定标志
-  last_used_at?: string
-  created_at: string
+  last_used_at?: string | null
+  created_at?: string | null
   total_requests?: number
   total_cost_usd?: number
   rate_limit?: number | null
+  concurrent_limit?: number | null
+  ip_rules?: string[] | null
   allowed_providers?: ProviderConfig[]
   force_capabilities?: Record<string, boolean> | null  // 强制能力配置
+  feature_settings?: FeatureSettingsMap | null
+}
+
+export type InstallTargetCli = 'claude_code' | 'codex_cli' | 'gemini_cli'
+export type InstallTargetSystem = 'macos' | 'linux' | 'windows' | 'auto'
+export type InstallSessionTargetSystem = Exclude<InstallTargetSystem, 'auto'>
+
+export interface ApiKeyInstallSession {
+  install_code: string
+  expires_at_unix_secs: number
+  expires_in_seconds: number
+  target_cli: InstallTargetCli
+  target_cli_label: string
+  target_system: InstallTargetSystem
+  target_system_label: string
+  unix_command: string
+  powershell_command: string
+}
+
+export interface UserClientConfig {
+  base_url: string
+  site_name?: string
 }
 
 // 不再需要 ProviderBinding 接口
@@ -167,15 +235,17 @@ export const meApi = {
   // 更新个人信息
   async updateProfile(data: {
     email?: string
+    email_verification_token?: string
     username?: string
+    feature_settings?: FeatureSettingsMap | null
   }): Promise<{ message: string }> {
-    const response = await apiClient.put('/api/users/me', data)
+    const response = await apiClient.put<{ message: string }>('/api/users/me', data)
     return response.data
   },
 
   // 修改密码
   async changePassword(data: ChangePasswordRequest): Promise<{ message: string }> {
-    const response = await apiClient.patch('/api/users/me/password', data)
+    const response = await apiClient.patch<{ message: string }>('/api/users/me/password', data)
     return response.data
   },
 
@@ -192,12 +262,12 @@ export const meApi = {
   },
 
   async revokeSession(sessionId: string): Promise<{ message: string }> {
-    const response = await apiClient.delete(`/api/users/me/sessions/${sessionId}`)
+    const response = await apiClient.delete<{ message: string }>(`/api/users/me/sessions/${sessionId}`)
     return response.data
   },
 
   async revokeOtherSessions(): Promise<{ message: string; revoked_count: number }> {
-    const response = await apiClient.delete('/api/users/me/sessions/others')
+    const response = await apiClient.delete<{ message: string; revoked_count: number }>('/api/users/me/sessions/others')
     return response.data
   },
 
@@ -207,7 +277,7 @@ export const meApi = {
     return response.data
   },
 
-  async createApiKey(data: { name: string; rate_limit?: number }): Promise<ApiKey> {
+  async createApiKey(data: { name: string; rate_limit?: number | null; concurrent_limit?: number | null; ip_rules?: string[] | null; feature_settings?: FeatureSettingsMap | null }): Promise<ApiKey> {
     const response = await apiClient.post<ApiKey>('/api/users/me/api-keys', data)
     return response.data
   },
@@ -228,22 +298,40 @@ export const meApi = {
     return response.data
   },
 
-  async deleteApiKey(keyId: string): Promise<{ message: string }> {
-    const response = await apiClient.delete(`/api/users/me/api-keys/${keyId}`)
+  async getClientConfig(): Promise<UserClientConfig> {
+    const response = await apiClient.get<UserClientConfig>('/api/users/me/client-config')
     return response.data
   },
 
-  async toggleApiKey(keyId: string): Promise<ApiKey> {
-    const response = await apiClient.patch<ApiKey>(`/api/users/me/api-keys/${keyId}`)
+  async deleteApiKey(keyId: string): Promise<{ message: string }> {
+    const response = await apiClient.delete<{ message: string }>(`/api/users/me/api-keys/${keyId}`)
+    return response.data
+  },
+
+  async toggleApiKey(keyId: string, isActive: boolean): Promise<ApiKey> {
+    const response = await apiClient.patch<ApiKey>(`/api/users/me/api-keys/${keyId}`, {
+      is_active: isActive,
+    })
     return response.data
   },
 
   async updateApiKey(
     keyId: string,
-    data: { name?: string; rate_limit?: number | null }
+    data: { name?: string; rate_limit?: number | null; concurrent_limit?: number | null; ip_rules?: string[] | null; feature_settings?: FeatureSettingsMap | null | undefined }
   ): Promise<ApiKey & { message: string }> {
     const response = await apiClient.put<ApiKey & { message: string }>(
       `/api/users/me/api-keys/${keyId}`,
+      data
+    )
+    return response.data
+  },
+
+  async createApiKeyInstallSession(
+    keyId: string,
+    data: { target_cli: InstallTargetCli; target_system: InstallSessionTargetSystem }
+  ): Promise<ApiKeyInstallSession> {
+    const response = await apiClient.post<ApiKeyInstallSession>(
+      `/api/users/me/api-keys/${keyId}/install-sessions`,
       data
     )
     return response.data
@@ -257,6 +345,8 @@ export const meApi = {
     timezone?: string
     tz_offset_minutes?: number
     search?: string  // 通用搜索：密钥名、模型名
+    api_format?: string
+    status?: string
     limit?: number
     offset?: number
   }): Promise<UsageResponse> {
@@ -270,27 +360,98 @@ export const meApi = {
       id: string
       status: 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled'
       input_tokens: number
+      effective_input_tokens?: number | null
       output_tokens: number
       cache_creation_input_tokens?: number | null
+      cache_creation_ephemeral_5m_input_tokens?: number | null
+      cache_creation_ephemeral_1h_input_tokens?: number | null
       cache_read_input_tokens?: number | null
       cost: number
       actual_cost?: number | null
       rate_multiplier?: number | null
       response_time_ms: number | null
       first_byte_time_ms: number | null
+      end_to_end_time_ms?: number | null
+      end_to_end_first_byte_time_ms?: number | null
+      updated_at?: string | null
+      response_time_updated_at?: string | null
+      status_code?: number | null
+      error_message?: string | null
       api_format?: string | null
       endpoint_api_format?: string | null
+      is_stream?: boolean | null
+      is_websocket?: boolean | null
+      websocket_transport?: string | null
+      usage_available?: boolean | null
+      usage_pricing_available?: boolean | null
+      input_audio_tokens?: number | null
+      output_audio_tokens?: number | null
+      upstream_is_stream?: boolean | null
+      client_requested_stream?: boolean | null
+      client_is_stream?: boolean | null
       has_format_conversion?: boolean | null
+      has_fallback?: boolean | null
+      target_model?: string | null
+      request_type?: string | null
+      requested_reasoning_effort?: string | null
+      reasoning_effort?: string | null
+      service_tier?: string | null
+      actual_service_tier?: string | null
+      image_progress?: ImageProgress | null
     }>
   }> {
     const params = ids ? { ids } : {}
-    const response = await apiClient.get('/api/users/me/usage/active', { params })
+    const response = await apiClient.get<{
+    requests: Array<{
+      id: string
+      status: 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled'
+      input_tokens: number
+      effective_input_tokens?: number | null
+      output_tokens: number
+      cache_creation_input_tokens?: number | null
+      cache_creation_ephemeral_5m_input_tokens?: number | null
+      cache_creation_ephemeral_1h_input_tokens?: number | null
+      cache_read_input_tokens?: number | null
+      cost: number
+      actual_cost?: number | null
+      rate_multiplier?: number | null
+      response_time_ms: number | null
+      first_byte_time_ms: number | null
+      end_to_end_time_ms?: number | null
+      end_to_end_first_byte_time_ms?: number | null
+      updated_at?: string | null
+      response_time_updated_at?: string | null
+      status_code?: number | null
+      error_message?: string | null
+      api_format?: string | null
+      endpoint_api_format?: string | null
+      is_stream?: boolean | null
+      is_websocket?: boolean | null
+      websocket_transport?: string | null
+      usage_available?: boolean | null
+      usage_pricing_available?: boolean | null
+      input_audio_tokens?: number | null
+      output_audio_tokens?: number | null
+      upstream_is_stream?: boolean | null
+      client_requested_stream?: boolean | null
+      client_is_stream?: boolean | null
+      has_format_conversion?: boolean | null
+      has_fallback?: boolean | null
+      target_model?: string | null
+      request_type?: string | null
+      requested_reasoning_effort?: string | null
+      reasoning_effort?: string | null
+      service_tier?: string | null
+      actual_service_tier?: string | null
+      image_progress?: ImageProgress | null
+    }>
+  }>('/api/users/me/usage/active', { params })
     return response.data
   },
 
   // 获取可用的提供商
   async getAvailableProviders(): Promise<Array<Record<string, unknown>>> {
-    const response = await apiClient.get('/api/users/me/providers')
+    const response = await apiClient.get<Array<Record<string, unknown>>>('/api/users/me/providers')
     return response.data
   },
 
@@ -308,29 +469,44 @@ export const meApi = {
       default_price_per_request: number | null
       default_tiered_pricing: TieredPricingConfig | null
       supported_capabilities: string[] | null
+      supports_embedding?: boolean | null
       config: Record<string, unknown> | null
       usage_count: number
     }>
     total: number
   }> {
-    const response = await apiClient.get('/api/users/me/available-models', { params })
+    const response = await apiClient.get<{
+    models: Array<{
+      id: string
+      name: string
+      display_name: string | null
+      is_active: boolean
+      default_price_per_request: number | null
+      default_tiered_pricing: TieredPricingConfig | null
+      supported_capabilities: string[] | null
+      supports_embedding?: boolean | null
+      config: Record<string, unknown> | null
+      usage_count: number
+    }>
+    total: number
+  }>('/api/users/me/available-models', { params })
     return response.data
   },
 
   // 获取端点状态（不包含敏感信息）
   async getEndpointStatus(): Promise<Array<Record<string, unknown>>> {
-    const response = await apiClient.get('/api/users/me/endpoint-status')
+    const response = await apiClient.get<Array<Record<string, unknown>>>('/api/users/me/endpoint-status')
     return response.data
   },
 
   // 偏好设置
   async getPreferences(): Promise<UserPreferences> {
-    const response = await apiClient.get('/api/users/me/preferences')
+    const response = await apiClient.get<UserPreferences>('/api/users/me/preferences')
     return response.data
   },
 
   async updatePreferences(data: Partial<UserPreferences>): Promise<{ message: string }> {
-    const response = await apiClient.put('/api/users/me/preferences', data)
+    const response = await apiClient.put<{ message: string }>('/api/users/me/preferences', data)
     return response.data
   },
 
@@ -340,7 +516,7 @@ export const meApi = {
   async updateApiKeyProviders(keyId: string, data: {
     allowed_providers?: ProviderConfig[]
   }): Promise<{ message: string }> {
-    const response = await apiClient.put(`/api/users/me/api-keys/${keyId}/providers`, data)
+    const response = await apiClient.put<{ message: string }>(`/api/users/me/api-keys/${keyId}/providers`, data)
     return response.data
   },
 
@@ -348,7 +524,7 @@ export const meApi = {
   async updateApiKeyCapabilities(keyId: string, data: {
     force_capabilities?: Record<string, boolean> | null
   }): Promise<{ message: string; force_capabilities?: Record<string, boolean> | null }> {
-    const response = await apiClient.put(`/api/users/me/api-keys/${keyId}/capabilities`, data)
+    const response = await apiClient.put<{ message: string; force_capabilities?: Record<string, boolean> | null }>(`/api/users/me/api-keys/${keyId}/capabilities`, data)
     return response.data
   },
 
@@ -356,7 +532,9 @@ export const meApi = {
   async getModelCapabilitySettings(): Promise<{
     model_capability_settings: Record<string, Record<string, boolean>>
   }> {
-    const response = await apiClient.get('/api/users/me/model-capabilities')
+    const response = await apiClient.get<{
+    model_capability_settings: Record<string, Record<string, boolean>>
+  }>('/api/users/me/model-capabilities')
     return response.data
   },
 
@@ -366,7 +544,10 @@ export const meApi = {
     message: string
     model_capability_settings: Record<string, Record<string, boolean>> | null
   }> {
-    const response = await apiClient.put('/api/users/me/model-capabilities', data)
+    const response = await apiClient.put<{
+    message: string
+    model_capability_settings: Record<string, Record<string, boolean>> | null
+  }>('/api/users/me/model-capabilities', data)
     return response.data
   },
 
@@ -384,7 +565,12 @@ export const meApi = {
     return cachedRequest(
       cacheKey,
       async () => {
-        const response = await apiClient.get('/api/users/me/usage/interval-timeline', { params })
+        const response = await apiClient.get<{
+          analysis_period_hours: number
+          total_points: number
+          points: Array<{ x: string; y: number; model?: string }>
+          models?: string[]
+        }>('/api/users/me/usage/interval-timeline', { params })
         return response.data
       },
       30000
@@ -393,7 +579,7 @@ export const meApi = {
 
   /**
    * 获取活跃度热力图数据（用户）
-   * 后端已缓存5分钟
+   * 历史热力图变化很慢，前端做长缓存，避免短时间重复请求。
    */
   async getActivityHeatmap(): Promise<ActivityHeatmap> {
     return cachedRequest(
@@ -402,7 +588,7 @@ export const meApi = {
         const response = await apiClient.get<ActivityHeatmap>('/api/users/me/usage/heatmap')
         return response.data
       },
-      60000
+      ACTIVITY_HEATMAP_CACHE_TTL_MS
     )
   }
 }

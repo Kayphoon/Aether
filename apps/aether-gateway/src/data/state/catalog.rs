@@ -1,0 +1,1091 @@
+use super::{
+    ApiKeyLastUsedDelta, DataLayerError, GatewayDataState, GeminiFileMappingListQuery,
+    GeminiFileMappingStats, ProviderCatalogKeyAdaptiveStateUpdate,
+    ProviderCatalogKeyAdminCasUpdate, ProviderCatalogKeyCredentialsCasUpdate,
+    ProviderCatalogKeyHealthStateUpdate, ProviderCatalogKeyListQuery,
+    ProviderCatalogKeyOAuthCredentialCasDelete, ProviderCatalogKeyOAuthRuntimeStateCasUpdate,
+    ProviderCatalogKeyRuntimeMetadataUpdate, ProviderCatalogKeyStatusSnapshotUpdate,
+    ProviderCatalogProviderConfigCasUpdate, ProviderCatalogProxyCasUpdate, PublicHealthStatusCount,
+    PublicHealthTimelineBucket, StoredGeminiFileMapping, StoredGeminiFileMappingListPage,
+    StoredProviderCatalogEndpoint, StoredProviderCatalogKey,
+    StoredProviderCatalogKeyMaintenanceSummary, StoredProviderCatalogKeyPage,
+    StoredProviderCatalogKeyStats, StoredProviderCatalogProvider, StoredRequestCandidate,
+    UpsertGeminiFileMappingRecord, UpsertRequestCandidateRecord,
+};
+
+fn sanitize_request_candidate_rows(
+    mut candidates: Vec<StoredRequestCandidate>,
+) -> Vec<StoredRequestCandidate> {
+    for candidate in &mut candidates {
+        candidate.sanitize_for_persistence();
+    }
+    candidates
+}
+
+fn sanitize_request_candidate_row(mut candidate: StoredRequestCandidate) -> StoredRequestCandidate {
+    candidate.sanitize_for_persistence();
+    candidate
+}
+
+impl GatewayDataState {
+    pub(crate) async fn list_request_candidates_by_request_id(
+        &self,
+        request_id: &str,
+    ) -> Result<Vec<StoredRequestCandidate>, DataLayerError> {
+        match &self.request_candidate_reader {
+            Some(repository) => repository
+                .list_by_request_id(request_id)
+                .await
+                .map(sanitize_request_candidate_rows),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_attempted_request_candidates_by_request_id(
+        &self,
+        request_id: &str,
+    ) -> Result<Vec<StoredRequestCandidate>, DataLayerError> {
+        match &self.request_candidate_reader {
+            Some(repository) => repository
+                .list_attempted_by_request_id(request_id)
+                .await
+                .map(sanitize_request_candidate_rows),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_request_candidates_by_provider_id(
+        &self,
+        provider_id: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredRequestCandidate>, DataLayerError> {
+        match &self.request_candidate_reader {
+            Some(repository) => repository
+                .list_by_provider_id(provider_id, limit)
+                .await
+                .map(sanitize_request_candidate_rows),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_recent_request_candidates(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<StoredRequestCandidate>, DataLayerError> {
+        match &self.request_candidate_reader {
+            Some(repository) => repository
+                .list_recent(limit)
+                .await
+                .map(sanitize_request_candidate_rows),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_recent_runtime_request_candidates(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<StoredRequestCandidate>, DataLayerError> {
+        match &self.request_candidate_reader {
+            Some(repository) => repository
+                .list_recent_runtime(limit)
+                .await
+                .map(sanitize_request_candidate_rows),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_finalized_request_candidates_by_endpoint_ids_since(
+        &self,
+        endpoint_ids: &[String],
+        since_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredRequestCandidate>, DataLayerError> {
+        match &self.request_candidate_reader {
+            Some(repository) => repository
+                .list_finalized_by_endpoint_ids_since(endpoint_ids, since_unix_secs, limit)
+                .await
+                .map(sanitize_request_candidate_rows),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn count_finalized_request_candidate_statuses_by_endpoint_ids_since(
+        &self,
+        endpoint_ids: &[String],
+        since_unix_secs: u64,
+    ) -> Result<Vec<PublicHealthStatusCount>, DataLayerError> {
+        match &self.request_candidate_reader {
+            Some(repository) => {
+                repository
+                    .count_finalized_statuses_by_endpoint_ids_since(endpoint_ids, since_unix_secs)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn aggregate_finalized_request_candidate_timeline_by_endpoint_ids_since(
+        &self,
+        endpoint_ids: &[String],
+        since_unix_secs: u64,
+        until_unix_secs: u64,
+        segments: u32,
+    ) -> Result<Vec<PublicHealthTimelineBucket>, DataLayerError> {
+        match &self.request_candidate_reader {
+            Some(repository) => {
+                repository
+                    .aggregate_finalized_timeline_by_endpoint_ids_since(
+                        endpoint_ids,
+                        since_unix_secs,
+                        until_unix_secs,
+                        segments,
+                    )
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn upsert_request_candidate(
+        &self,
+        mut candidate: UpsertRequestCandidateRecord,
+    ) -> Result<Option<StoredRequestCandidate>, DataLayerError> {
+        candidate.sanitize_for_persistence();
+        crate::request_diagnostics::observe_db_operation(
+            "request_candidate_upsert",
+            self.database_pool_summary(),
+            async {
+                match &self.request_candidate_writer {
+                    Some(repository) => repository
+                        .upsert(candidate)
+                        .await
+                        .map(sanitize_request_candidate_row)
+                        .map(Some),
+                    None => Ok(None),
+                }
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn delete_request_candidates_created_before(
+        &self,
+        created_before_unix_secs: u64,
+        limit: usize,
+    ) -> Result<usize, DataLayerError> {
+        match &self.request_candidate_writer {
+            Some(repository) => {
+                repository
+                    .delete_created_before(created_before_unix_secs, limit)
+                    .await
+            }
+            None => Ok(0),
+        }
+    }
+
+    pub(crate) async fn touch_auth_api_key_last_used(
+        &self,
+        api_key_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        if let Some(repository) = &self.usage_writer {
+            let enqueued = repository
+                .enqueue_api_key_last_used_delta(ApiKeyLastUsedDelta {
+                    api_key_id: api_key_id.to_string(),
+                    last_used_at_unix_secs: chrono::Utc::now().timestamp().max(0) as u64,
+                })
+                .await?;
+            if enqueued {
+                return Ok(true);
+            }
+        }
+
+        match &self.auth_api_key_writer {
+            Some(repository) => repository.touch_last_used_at(api_key_id).await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn upsert_gemini_file_mapping(
+        &self,
+        record: UpsertGeminiFileMappingRecord,
+    ) -> Result<Option<StoredGeminiFileMapping>, DataLayerError> {
+        match &self.gemini_file_mapping_writer {
+            Some(repository) => repository.upsert(record).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn upsert_gemini_file_mapping_if_owner_matches(
+        &self,
+        record: UpsertGeminiFileMappingRecord,
+    ) -> Result<Option<StoredGeminiFileMapping>, DataLayerError> {
+        match &self.gemini_file_mapping_writer {
+            Some(repository) => repository.upsert_if_owner_matches(record).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn list_gemini_file_mappings(
+        &self,
+        query: &GeminiFileMappingListQuery,
+    ) -> Result<StoredGeminiFileMappingListPage, DataLayerError> {
+        match &self.gemini_file_mapping_reader {
+            Some(repository) => repository.list_mappings(query).await,
+            None => Ok(StoredGeminiFileMappingListPage {
+                items: Vec::new(),
+                total: 0,
+            }),
+        }
+    }
+
+    pub(crate) async fn find_gemini_file_mapping_by_file_name(
+        &self,
+        file_name: &str,
+    ) -> Result<Option<StoredGeminiFileMapping>, DataLayerError> {
+        match &self.gemini_file_mapping_reader {
+            Some(repository) => repository.find_by_file_name(file_name).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn find_active_gemini_file_mapping_for_user(
+        &self,
+        file_name: &str,
+        user_id: &str,
+        now_unix_secs: u64,
+    ) -> Result<Option<StoredGeminiFileMapping>, DataLayerError> {
+        match &self.gemini_file_mapping_reader {
+            Some(repository) => {
+                repository
+                    .find_active_by_file_name_for_user(file_name, user_id, now_unix_secs)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn find_active_gemini_file_mapping_for_owner(
+        &self,
+        file_name: &str,
+        key_id: &str,
+        user_id: &str,
+        now_unix_secs: u64,
+    ) -> Result<Option<StoredGeminiFileMapping>, DataLayerError> {
+        match &self.gemini_file_mapping_reader {
+            Some(repository) => {
+                repository
+                    .find_active_by_file_name_for_owner(file_name, key_id, user_id, now_unix_secs)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn summarize_gemini_file_mappings(
+        &self,
+        now_unix_secs: u64,
+    ) -> Result<GeminiFileMappingStats, DataLayerError> {
+        match &self.gemini_file_mapping_reader {
+            Some(repository) => repository.summarize_mappings(now_unix_secs).await,
+            None => Ok(GeminiFileMappingStats {
+                total_mappings: 0,
+                active_mappings: 0,
+                expired_mappings: 0,
+                by_mime_type: Vec::new(),
+            }),
+        }
+    }
+
+    pub(crate) async fn delete_gemini_file_mapping_by_file_name(
+        &self,
+        file_name: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.gemini_file_mapping_writer {
+            Some(repository) => repository.delete_by_file_name(file_name).await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn delete_gemini_file_mapping_by_file_name_for_user(
+        &self,
+        file_name: &str,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.gemini_file_mapping_writer {
+            Some(repository) => {
+                repository
+                    .delete_by_file_name_for_user(file_name, user_id)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn delete_gemini_file_mapping_by_file_name_for_owner(
+        &self,
+        file_name: &str,
+        key_id: &str,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.gemini_file_mapping_writer {
+            Some(repository) => {
+                repository
+                    .delete_by_file_name_for_owner(file_name, key_id, user_id)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn delete_gemini_file_mapping_by_id(
+        &self,
+        mapping_id: &str,
+    ) -> Result<Option<StoredGeminiFileMapping>, DataLayerError> {
+        match &self.gemini_file_mapping_writer {
+            Some(repository) => repository.delete_by_id(mapping_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn delete_expired_gemini_file_mappings(
+        &self,
+        now_unix_secs: u64,
+    ) -> Result<usize, DataLayerError> {
+        match &self.gemini_file_mapping_writer {
+            Some(repository) => repository.delete_expired_before(now_unix_secs).await,
+            None => Ok(0),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_providers_by_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<Vec<StoredProviderCatalogProvider>, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => repository.list_providers_by_ids(provider_ids).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_providers(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<StoredProviderCatalogProvider>, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => repository.list_providers(active_only).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_endpoints_by_ids(
+        &self,
+        endpoint_ids: &[String],
+    ) -> Result<Vec<StoredProviderCatalogEndpoint>, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => repository.list_endpoints_by_ids(endpoint_ids).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_endpoints_by_provider_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<Vec<StoredProviderCatalogEndpoint>, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => {
+                repository
+                    .list_endpoints_by_provider_ids(provider_ids)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_keys_by_ids(
+        &self,
+        key_ids: &[String],
+    ) -> Result<Vec<StoredProviderCatalogKey>, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => repository.list_keys_by_ids(key_ids).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_keys_by_ids_strong(
+        &self,
+        key_ids: &[String],
+    ) -> Result<Vec<StoredProviderCatalogKey>, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => repository.list_keys_by_ids_strong(key_ids).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_keys_by_provider_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<Vec<StoredProviderCatalogKey>, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => repository.list_keys_by_provider_ids(provider_ids).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_key_summaries_by_provider_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<Vec<StoredProviderCatalogKey>, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => {
+                repository
+                    .list_key_summaries_by_provider_ids(provider_ids)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_key_maintenance_summaries_by_provider_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<Vec<StoredProviderCatalogKeyMaintenanceSummary>, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => {
+                repository
+                    .list_key_maintenance_summaries_by_provider_ids(provider_ids)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_key_page(
+        &self,
+        query: &ProviderCatalogKeyListQuery,
+    ) -> Result<StoredProviderCatalogKeyPage, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => repository.list_keys_page(query).await,
+            None => Ok(StoredProviderCatalogKeyPage {
+                items: Vec::new(),
+                total: 0,
+            }),
+        }
+    }
+
+    pub(crate) async fn list_provider_catalog_key_stats_by_provider_ids(
+        &self,
+        provider_ids: &[String],
+    ) -> Result<Vec<StoredProviderCatalogKeyStats>, DataLayerError> {
+        match &self.provider_catalog_reader {
+            Some(repository) => {
+                repository
+                    .list_key_stats_by_provider_ids(provider_ids)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn update_provider_catalog_key_oauth_runtime_state(
+        &self,
+        key_id: &str,
+        oauth_invalid_at_unix_secs: Option<u64>,
+        oauth_invalid_reason: Option<&str>,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => {
+                repository
+                    .update_key_oauth_runtime_state(
+                        key_id,
+                        oauth_invalid_at_unix_secs,
+                        oauth_invalid_reason,
+                        updated_at_unix_secs,
+                    )
+                    .await
+            }
+            None => Ok(false),
+        }?;
+        if updated {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn compare_and_update_provider_catalog_key_oauth_runtime_state(
+        &self,
+        update: &ProviderCatalogKeyOAuthRuntimeStateCasUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => {
+                repository
+                    .compare_and_update_key_oauth_runtime_state(update)
+                    .await
+            }
+            None => Ok(false),
+        }?;
+        // A false result is a credential CAS conflict. Clear cached snapshots
+        // either way so the next read observes the authoritative row.
+        self.clear_provider_catalog_cache();
+        Ok(updated)
+    }
+
+    pub(crate) async fn create_provider_catalog_key(
+        &self,
+        key: &StoredProviderCatalogKey,
+    ) -> Result<Option<StoredProviderCatalogKey>, DataLayerError> {
+        let created = match &self.provider_catalog_writer {
+            Some(repository) => repository.create_key(key).await.map(Some),
+            None => Ok(None),
+        }?;
+        if created.is_some() {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(created)
+    }
+
+    pub(crate) async fn create_provider_catalog_provider(
+        &self,
+        provider: &StoredProviderCatalogProvider,
+        shift_existing_priorities_from: Option<i32>,
+    ) -> Result<Option<StoredProviderCatalogProvider>, DataLayerError> {
+        let created = match &self.provider_catalog_writer {
+            Some(repository) => repository
+                .create_provider(provider, shift_existing_priorities_from)
+                .await
+                .map(Some),
+            None => Ok(None),
+        }?;
+        if created.is_some() {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(created)
+    }
+
+    pub(crate) async fn update_provider_catalog_provider(
+        &self,
+        provider: &StoredProviderCatalogProvider,
+    ) -> Result<Option<StoredProviderCatalogProvider>, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.update_provider(provider).await.map(Some),
+            None => Ok(None),
+        }?;
+        if updated.is_some() {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn compare_and_swap_provider_catalog_provider_config(
+        &self,
+        update: &ProviderCatalogProviderConfigCasUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.compare_and_swap_provider_config(update).await,
+            None => Ok(false),
+        }?;
+        self.clear_provider_catalog_cache();
+        Ok(updated)
+    }
+
+    pub(crate) async fn compare_and_swap_provider_catalog_provider_proxy(
+        &self,
+        update: &ProviderCatalogProxyCasUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.compare_and_swap_provider_proxy(update).await,
+            None => Ok(false),
+        }?;
+        self.clear_provider_catalog_cache();
+        Ok(updated)
+    }
+
+    pub(crate) async fn delete_provider_catalog_provider(
+        &self,
+        provider_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let deleted = match &self.provider_catalog_writer {
+            Some(repository) => repository.delete_provider(provider_id).await,
+            None => Ok(false),
+        }?;
+        if deleted {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(deleted)
+    }
+
+    pub(crate) async fn cleanup_deleted_provider_catalog_refs(
+        &self,
+        provider_id: &str,
+        provider_deleted: bool,
+        endpoint_ids: &[String],
+        key_ids: &[String],
+    ) -> Result<(), DataLayerError> {
+        let cleaned = match &self.provider_catalog_writer {
+            Some(repository) => {
+                repository
+                    .cleanup_deleted_provider_refs(
+                        provider_id,
+                        provider_deleted,
+                        endpoint_ids,
+                        key_ids,
+                    )
+                    .await
+            }
+            None => Ok(()),
+        };
+        if provider_deleted || !endpoint_ids.is_empty() || !key_ids.is_empty() {
+            self.clear_provider_catalog_cache();
+        }
+        cleaned
+    }
+
+    pub(crate) async fn create_provider_catalog_endpoint(
+        &self,
+        endpoint: &StoredProviderCatalogEndpoint,
+    ) -> Result<Option<StoredProviderCatalogEndpoint>, DataLayerError> {
+        let created = match &self.provider_catalog_writer {
+            Some(repository) => repository.create_endpoint(endpoint).await.map(Some),
+            None => Ok(None),
+        }?;
+        if created.is_some() {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(created)
+    }
+
+    pub(crate) async fn update_provider_catalog_endpoint(
+        &self,
+        endpoint: &StoredProviderCatalogEndpoint,
+    ) -> Result<Option<StoredProviderCatalogEndpoint>, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.update_endpoint(endpoint).await.map(Some),
+            None => Ok(None),
+        }?;
+        if updated.is_some() {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn compare_and_swap_provider_catalog_endpoint_proxy(
+        &self,
+        update: &ProviderCatalogProxyCasUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.compare_and_swap_endpoint_proxy(update).await,
+            None => Ok(false),
+        }?;
+        self.clear_provider_catalog_cache();
+        Ok(updated)
+    }
+
+    pub(crate) async fn delete_provider_catalog_endpoint(
+        &self,
+        endpoint_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let deleted = match &self.provider_catalog_writer {
+            Some(repository) => repository.delete_endpoint(endpoint_id).await,
+            None => Ok(false),
+        }?;
+        if deleted {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(deleted)
+    }
+
+    pub(crate) async fn update_provider_catalog_key(
+        &self,
+        key: &StoredProviderCatalogKey,
+    ) -> Result<Option<StoredProviderCatalogKey>, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.update_key(key).await.map(Some),
+            None => Ok(None),
+        }?;
+        if updated.is_some() {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn compare_and_swap_provider_catalog_key_proxy(
+        &self,
+        update: &ProviderCatalogProxyCasUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.compare_and_swap_key_proxy(update).await,
+            None => Ok(false),
+        }?;
+        self.clear_provider_catalog_cache();
+        Ok(updated)
+    }
+
+    pub(crate) async fn compare_and_swap_provider_catalog_key_credentials(
+        &self,
+        update: &ProviderCatalogKeyCredentialsCasUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.compare_and_swap_key_credentials(update).await,
+            None => Ok(false),
+        }?;
+        // Clear on both outcomes: a CAS miss proves the cached credential
+        // generation was stale and the retry must observe the winning record.
+        self.clear_provider_catalog_cache();
+        Ok(updated)
+    }
+
+    pub(crate) async fn compare_and_update_provider_catalog_key_admin_state(
+        &self,
+        update: &ProviderCatalogKeyAdminCasUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.compare_and_update_key_admin_state(update).await,
+            None => Ok(false),
+        }?;
+        // Clear on both success and conflict so a retry cannot reuse the stale
+        // credential snapshot that lost the CAS.
+        self.clear_provider_catalog_cache();
+        Ok(updated)
+    }
+
+    pub(crate) async fn update_provider_catalog_keys(
+        &self,
+        keys: &[StoredProviderCatalogKey],
+    ) -> Result<Option<Vec<StoredProviderCatalogKey>>, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.update_keys(keys).await.map(Some),
+            None => Ok(None),
+        }?;
+        if updated.as_ref().is_some_and(|keys| !keys.is_empty()) {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn update_provider_catalog_key_upstream_metadata(
+        &self,
+        key_id: &str,
+        upstream_metadata: Option<&serde_json::Value>,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => {
+                repository
+                    .update_key_upstream_metadata(key_id, upstream_metadata, updated_at_unix_secs)
+                    .await
+            }
+            None => Ok(false),
+        }?;
+        if updated {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn upsert_provider_catalog_key_upstream_metadata_namespace(
+        &self,
+        key_id: &str,
+        namespace: &str,
+        value: &serde_json::Value,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => {
+                repository
+                    .upsert_key_upstream_metadata_namespace(
+                        key_id,
+                        namespace,
+                        value,
+                        updated_at_unix_secs,
+                    )
+                    .await
+            }
+            None => Ok(false),
+        }?;
+        if updated {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn update_provider_catalog_key_model_fetch_state(
+        &self,
+        key_id: &str,
+        allowed_models: Option<&serde_json::Value>,
+        last_models_fetch_at_unix_secs: Option<u64>,
+        last_models_fetch_error: Option<&str>,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => {
+                repository
+                    .update_key_model_fetch_state(
+                        key_id,
+                        allowed_models,
+                        last_models_fetch_at_unix_secs,
+                        last_models_fetch_error,
+                        updated_at_unix_secs,
+                    )
+                    .await
+            }
+            None => Ok(false),
+        }?;
+        if updated {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn update_provider_catalog_key_model_fetch_success(
+        &self,
+        key_id: &str,
+        allowed_models: Option<&serde_json::Value>,
+        last_models_fetch_at_unix_secs: u64,
+        upstream_metadata_updates: &[aether_data_contracts::repository::provider_catalog::ProviderCatalogUpstreamMetadataNamespaceUpdate],
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => {
+                repository
+                    .update_key_model_fetch_success(
+                        key_id,
+                        allowed_models,
+                        last_models_fetch_at_unix_secs,
+                        upstream_metadata_updates,
+                        updated_at_unix_secs,
+                    )
+                    .await
+            }
+            None => Ok(false),
+        }?;
+        if updated {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn delete_provider_catalog_key(
+        &self,
+        key_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let deleted = match &self.provider_catalog_writer {
+            Some(repository) => repository.delete_key(key_id).await,
+            None => Ok(false),
+        }?;
+        if deleted {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(deleted)
+    }
+
+    pub(crate) async fn compare_and_delete_provider_catalog_key_oauth_credential(
+        &self,
+        delete: &ProviderCatalogKeyOAuthCredentialCasDelete,
+    ) -> Result<bool, DataLayerError> {
+        let deleted = match &self.provider_catalog_writer {
+            Some(repository) => {
+                repository
+                    .compare_and_delete_key_oauth_credential(delete)
+                    .await
+            }
+            None => Ok(false),
+        }?;
+        self.clear_provider_catalog_cache();
+        Ok(deleted)
+    }
+
+    pub(crate) async fn clear_provider_catalog_key_oauth_invalid_marker(
+        &self,
+        key_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.clear_key_oauth_invalid_marker(key_id).await,
+            None => Ok(false),
+        }?;
+        if updated {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn update_provider_catalog_key_health_state(
+        &self,
+        key_id: &str,
+        is_active: bool,
+        health_by_format: Option<&serde_json::Value>,
+        circuit_breaker_by_format: Option<&serde_json::Value>,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => {
+                repository
+                    .update_key_health_state(
+                        key_id,
+                        is_active,
+                        health_by_format,
+                        circuit_breaker_by_format,
+                    )
+                    .await
+            }
+            None => Ok(false),
+        }?;
+        if updated {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn reset_provider_catalog_key_error_count(
+        &self,
+        key_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let updated = match &self.provider_catalog_writer {
+            Some(repository) => repository.reset_key_error_count(key_id).await,
+            None => Ok(false),
+        }?;
+        if updated {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn compare_and_update_provider_catalog_key_adaptive_state(
+        &self,
+        update: &ProviderCatalogKeyAdaptiveStateUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = &self.provider_catalog_writer else {
+            return Ok(false);
+        };
+        let updated = repository
+            .compare_and_update_key_adaptive_state(update)
+            .await?;
+        // A false CAS result normally means another instance won the write. Drop the
+        // five-second read cache before the caller reloads and retries.
+        self.clear_provider_catalog_cache();
+        Ok(updated)
+    }
+
+    pub(crate) async fn update_provider_catalog_key_runtime_metadata(
+        &self,
+        update: &ProviderCatalogKeyRuntimeMetadataUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = &self.provider_catalog_writer else {
+            return Ok(false);
+        };
+        let updated = repository.update_key_runtime_metadata(update).await?;
+        // A false result is a namespace CAS conflict.  Drop the read cache so
+        // the caller's retry observes the writer that won the race.
+        self.clear_provider_catalog_cache();
+        Ok(updated)
+    }
+
+    pub(crate) async fn update_provider_catalog_key_status_snapshot(
+        &self,
+        update: &ProviderCatalogKeyStatusSnapshotUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = &self.provider_catalog_writer else {
+            return Ok(false);
+        };
+        let updated = repository.update_key_status_snapshot(update).await?;
+        if updated {
+            self.clear_provider_catalog_cache();
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn compare_and_update_provider_catalog_key_health_state(
+        &self,
+        update: &ProviderCatalogKeyHealthStateUpdate,
+    ) -> Result<bool, DataLayerError> {
+        let Some(repository) = &self.provider_catalog_writer else {
+            return Ok(false);
+        };
+        let updated = repository
+            .compare_and_update_key_health_state(update)
+            .await?;
+        self.clear_provider_catalog_cache();
+        Ok(updated)
+    }
+}
+
+#[cfg(test)]
+mod request_candidate_security_tests {
+    use serde_json::json;
+
+    use super::{
+        sanitize_request_candidate_row, sanitize_request_candidate_rows, StoredRequestCandidate,
+    };
+    use aether_data_contracts::repository::candidates::RequestCandidateStatus;
+
+    fn untrusted_candidate() -> StoredRequestCandidate {
+        let mut candidate = StoredRequestCandidate::new(
+            "candidate-untrusted".to_string(),
+            "request-1".to_string(),
+            None,
+            None,
+            None,
+            None,
+            0,
+            0,
+            Some("provider-1".to_string()),
+            Some("endpoint-1".to_string()),
+            Some("key-1".to_string()),
+            RequestCandidateStatus::Failed,
+            None,
+            false,
+            Some(500),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1,
+            None,
+            Some(2),
+        )
+        .expect("candidate should build");
+        candidate.skip_reason = Some("Bearer candidate-secret".to_string());
+        candidate.error_type = Some("candidate-secret".to_string());
+        candidate.error_message = Some("Bearer candidate-secret".to_string());
+        candidate.extra_data = Some(json!({
+            "gateway_execution_runtime": true,
+            "request_body": {"token": "candidate-secret"}
+        }));
+        candidate.required_capabilities = Some(json!({
+            "vision": 1,
+            "tenant_secret": "candidate-secret"
+        }));
+        candidate
+    }
+
+    fn assert_candidate_is_sanitized(candidate: &StoredRequestCandidate) {
+        assert_eq!(candidate.skip_reason.as_deref(), Some("unclassified_skip"));
+        assert_eq!(candidate.error_type.as_deref(), Some("unclassified_error"));
+        assert_eq!(
+            candidate.error_message.as_deref(),
+            Some("Bearer candidate-secret")
+        );
+        assert_eq!(
+            candidate.extra_data,
+            Some(json!({"gateway_execution_runtime": true}))
+        );
+        assert_eq!(
+            candidate.required_capabilities,
+            Some(json!({"vision": true}))
+        );
+        let mut public_candidate = candidate.clone();
+        public_candidate.sanitize_sensitive_diagnostics();
+        assert!(!serde_json::to_string(&public_candidate)
+            .expect("candidate should serialize")
+            .contains("candidate-secret"));
+    }
+
+    #[test]
+    fn gateway_candidate_boundary_preserves_admin_errors_and_removes_request_payloads() {
+        let candidate = sanitize_request_candidate_row(untrusted_candidate());
+        assert_candidate_is_sanitized(&candidate);
+
+        let candidates = sanitize_request_candidate_rows(vec![untrusted_candidate()]);
+        assert_candidate_is_sanitized(&candidates[0]);
+    }
+}

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, onMounted, watch, onBeforeUnmount } from 'vue'
 import Card from '@/components/ui/card.vue'
 import Button from '@/components/ui/button.vue'
 import Badge from '@/components/ui/badge.vue'
@@ -33,6 +33,8 @@ import {
 } from '@/composables/useTTLAnalysis'
 import { log } from '@/utils/logger'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { formatClientFamily } from '@/features/usage/utils/clientFamily'
+import { observeNearViewportOnce } from '@/utils/nearViewport'
 
 // ==================== 缓存统计与亲和性列表 ====================
 
@@ -70,6 +72,12 @@ const { confirm: showConfirm } = useConfirm()
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let skipNextKeywordWatch = false
 let countdownTimer: ReturnType<typeof setInterval> | null = null
+let stopAnalysisObserver: (() => void) | null = null
+let initialDataPromise: Promise<void> | null = null
+let analysisLoadRequested = false
+let isUnmounted = false
+
+const analysisSectionRef = ref<HTMLElement | null>(null)
 
 // ==================== TTL 分析 (使用 composable) ====================
 
@@ -178,7 +186,14 @@ async function clearSingleAffinity(item: UserAffinity) {
 
   clearingRowAffinityKey.value = affinityKey
   try {
-    await cacheApi.clearSingleAffinity(affinityKey, endpointId, modelId, apiFormat)
+    await cacheApi.clearSingleAffinity(
+      affinityKey,
+      endpointId,
+      modelId,
+      apiFormat,
+      item.client_family,
+      item.session_hash
+    )
     showSuccess('清除成功')
     await fetchCacheStats()
     await fetchAffinityList(tableKeyword.value.trim() || undefined)
@@ -225,6 +240,58 @@ async function clearAllCache() {
 
 function getRemainingTime(expireAt?: number): string {
   return formatRemainingTime(expireAt, currentTime.value)
+}
+
+function truncateMiddle(value: string, head = 8, tail = 6): string {
+  const normalized = value.trim()
+  if (!normalized) return '---'
+  if (normalized.length <= head + tail + 3) return normalized
+  return `${normalized.slice(0, head)}...${normalized.slice(-tail)}`
+}
+
+function affinityUserLabel(item: UserAffinity): string {
+  return item.username || item.email || item.user_id || '未知'
+}
+
+function affinityUserTitle(item: UserAffinity): string | undefined {
+  return item.email || item.username || item.user_id || undefined
+}
+
+function affinityUserApiKeyLabel(item: UserAffinity): string {
+  return item.user_api_key_name || item.user_api_key_prefix || truncateMiddle(item.affinity_key)
+}
+
+function affinityModelLabel(item: UserAffinity): string {
+  return item.model_display_name || item.model_name || item.global_model_id || '---'
+}
+
+function affinityModelSubtitle(item: UserAffinity): string {
+  if (!item.model_display_name || !item.model_name || item.model_display_name === item.model_name) {
+    return ''
+  }
+  return item.model_name
+}
+
+function providerKeyLabel(item: UserAffinity): string {
+  if (item.key_name) return item.key_name
+  if (item.key_prefix === '[OAuth Token]') return 'OAuth 认证'
+  if (item.key_prefix === '[OAuth Header]') return 'OAuth Header'
+  return item.key_prefix || '---'
+}
+
+function providerKeyTitle(item: UserAffinity): string | undefined {
+  if (item.key_name && item.key_prefix) return `${item.key_name} · ${item.key_prefix}`
+  return item.key_name || item.key_prefix || undefined
+}
+
+function formatAffinityRequestCount(item: UserAffinity): string {
+  if (item.request_count_known === false) return '—'
+  return formatNumber(item.request_count || 0)
+}
+
+function formatAffinityRequestCountUnit(item: UserAffinity): string {
+  const count = formatAffinityRequestCount(item)
+  return count === '—' ? count : `${count}次`
 }
 
 function formatIntervalDescription(user: TTLAnalysisUser): string {
@@ -461,6 +528,34 @@ async function refreshData() {
   ])
 }
 
+function requestAnalysisLoad() {
+  if (analysisLoadRequested) return
+  analysisLoadRequested = true
+
+  const waitForInitialData = initialDataPromise ?? Promise.resolve()
+  void waitForInitialData.then(() => {
+    if (!isUnmounted) {
+      return refreshAnalysis()
+    }
+  })
+}
+
+function setupAnalysisObserver() {
+  const target = analysisSectionRef.value
+  if (!target) {
+    requestAnalysisLoad()
+    return
+  }
+
+  const scrollRoot = target.closest('.app-shell__content')
+  stopAnalysisObserver = observeNearViewportOnce({
+    target,
+    root: scrollRoot,
+    rootMargin: '600px 0px',
+    onNearViewport: requestAnalysisLoad,
+  })
+}
+
 // ==================== 生命周期 ====================
 
 watch(tableKeyword, (value) => {
@@ -480,18 +575,25 @@ watch(tableKeyword, (value) => {
 
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
-  fetchCacheStats()
-  fetchCacheConfig()
-  fetchAffinityList()
-  fetchModelMappingStats()
-  fetchRedisCacheCategories()
+  const initialLoad = refreshData()
+  initialDataPromise = initialLoad
+  void initialLoad.finally(() => {
+    if (initialDataPromise === initialLoad) {
+      initialDataPromise = null
+    }
+  })
   startCountdown()
-  refreshAnalysis()
+  void nextTick().then(() => {
+    if (!isUnmounted) setupAnalysisObserver()
+  })
 })
 
 onBeforeUnmount(() => {
+  isUnmounted = true
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  stopAnalysisObserver?.()
+  stopAnalysisObserver = null
   stopCountdown()
 })
 </script>
@@ -515,7 +617,7 @@ onBeforeUnmount(() => {
           活跃亲和性
         </div>
         <div class="text-2xl font-bold mt-1">
-          {{ stats?.affinity_stats?.active_affinities || 0 }}
+          {{ stats?.affinity_stats?.active_affinities || stats?.affinity_stats?.total_affinities || 0 }}
         </div>
         <div class="text-xs text-muted-foreground mt-1">
           TTL {{ config?.cache_ttl_seconds || 300 }}s
@@ -636,6 +738,9 @@ onBeforeUnmount(() => {
             <TableHead class="w-40">
               模型
             </TableHead>
+            <TableHead class="w-24">
+              客户端
+            </TableHead>
             <TableHead class="w-36">
               API 格式 / Key
             </TableHead>
@@ -653,7 +758,7 @@ onBeforeUnmount(() => {
         <TableBody v-if="!listLoading && affinityList.length">
           <TableRow
             v-for="item in paginatedAffinityList"
-            :key="`${item.affinity_key}-${item.endpoint_id}-${item.key_id}`"
+            :key="`${item.affinity_key}-${item.endpoint_id}-${item.key_id}-${item.global_model_id || item.model_name || 'unknown'}-${item.api_format || 'unknown'}-${item.client_family || 'unknown'}-${item.session_hash || 'legacy'}`"
           >
             <TableCell>
               <div class="flex items-center gap-1.5">
@@ -666,16 +771,16 @@ onBeforeUnmount(() => {
                 </Badge>
                 <span
                   class="text-sm font-medium truncate max-w-[120px]"
-                  :title="item.username ?? undefined"
-                >{{ item.username || '未知' }}</span>
+                  :title="affinityUserTitle(item)"
+                >{{ affinityUserLabel(item) }}</span>
               </div>
             </TableCell>
             <TableCell>
               <div class="flex items-center gap-1.5">
                 <span
                   class="text-sm truncate max-w-[80px]"
-                  :title="item.user_api_key_name || undefined"
-                >{{ item.user_api_key_name || '未命名' }}</span>
+                  :title="item.user_api_key_name || item.affinity_key"
+                >{{ affinityUserApiKeyLabel(item) }}</span>
                 <Badge
                   v-if="item.api_format && item.rate_multipliers?.[item.api_format] && item.rate_multipliers[item.api_format] !== 1.0"
                   variant="outline"
@@ -699,30 +804,45 @@ onBeforeUnmount(() => {
             <TableCell>
               <div
                 class="text-sm truncate max-w-[150px]"
-                :title="item.model_display_name || undefined"
+                :title="affinityModelLabel(item)"
               >
-                {{ item.model_display_name || '---' }}
+                {{ affinityModelLabel(item) }}
               </div>
               <div
+                v-if="affinityModelSubtitle(item)"
                 class="text-xs text-muted-foreground"
                 :title="item.model_name || undefined"
               >
-                {{ item.model_name || '---' }}
+                {{ affinityModelSubtitle(item) }}
               </div>
+            </TableCell>
+            <TableCell>
+              <Badge
+                variant="outline"
+                class="text-[10px] px-2 font-normal"
+              >
+                {{ formatClientFamily(item.client_family) }}
+              </Badge>
             </TableCell>
             <TableCell>
               <div class="text-sm">
                 {{ formatApiFormat(item.api_format) }}
               </div>
-              <div class="text-xs text-muted-foreground font-mono">
-                {{ item.key_prefix || '---' }}
+              <div
+                class="text-xs text-muted-foreground truncate max-w-[130px]"
+                :title="providerKeyTitle(item)"
+              >
+                {{ providerKeyLabel(item) }}
               </div>
             </TableCell>
             <TableCell class="text-center">
               <span class="text-xs">{{ getRemainingTime(item.expire_at) }}</span>
             </TableCell>
             <TableCell class="text-center">
-              <span class="text-sm">{{ item.request_count }}</span>
+              <span
+                class="text-sm"
+                :title="item.request_count_known === false ? '此缓存源没有精确次数统计' : undefined"
+              >{{ formatAffinityRequestCount(item) }}</span>
             </TableCell>
             <TableCell class="text-right">
               <Button
@@ -741,7 +861,7 @@ onBeforeUnmount(() => {
         <TableBody v-else>
           <TableRow>
             <TableCell
-              colspan="8"
+              colspan="9"
               class="text-center py-6 text-sm text-muted-foreground"
             >
               {{ listLoading ? '加载中...' : '暂无缓存记录' }}
@@ -757,7 +877,7 @@ onBeforeUnmount(() => {
       >
         <div
           v-for="item in paginatedAffinityList"
-          :key="`m-${item.affinity_key}-${item.endpoint_id}-${item.key_id}`"
+          :key="`m-${item.affinity_key}-${item.endpoint_id}-${item.key_id}-${item.global_model_id || item.model_name || 'unknown'}-${item.api_format || 'unknown'}-${item.client_family || 'unknown'}-${item.session_hash || 'legacy'}`"
           class="p-4 space-y-2"
         >
           <div class="flex items-start justify-between gap-3">
@@ -770,10 +890,10 @@ onBeforeUnmount(() => {
                 >
                   独立
                 </Badge>
-                <span class="text-sm font-medium truncate">{{ item.username || '未知' }}</span>
+                <span class="text-sm font-medium truncate">{{ affinityUserLabel(item) }}</span>
               </div>
               <div class="text-xs text-muted-foreground mt-0.5">
-                {{ item.user_api_key_name || '未命名' }} · {{ item.user_api_key_prefix || '---' }}
+                {{ affinityUserApiKeyLabel(item) }} · {{ item.user_api_key_prefix || truncateMiddle(item.affinity_key) }}
               </div>
             </div>
             <Button
@@ -789,11 +909,18 @@ onBeforeUnmount(() => {
           <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span>{{ item.provider_name || '未知' }}</span>
             <span>·</span>
-            <span class="truncate max-w-[100px]">{{ item.model_display_name || '---' }}</span>
+            <span class="truncate max-w-[100px]">{{ affinityModelLabel(item) }}</span>
+            <span>·</span>
+            <Badge
+              variant="outline"
+              class="text-[10px] px-1.5 font-normal"
+            >
+              {{ formatClientFamily(item.client_family) }}
+            </Badge>
           </div>
           <div class="flex items-center justify-between text-xs">
-            <span class="text-muted-foreground">{{ formatApiFormat(item.api_format) }}</span>
-            <span>{{ getRemainingTime(item.expire_at) }} · {{ item.request_count }}次</span>
+            <span class="text-muted-foreground">{{ formatApiFormat(item.api_format) }} · {{ providerKeyLabel(item) }}</span>
+            <span>{{ getRemainingTime(item.expire_at) }} · {{ formatAffinityRequestCountUnit(item) }}</span>
           </div>
         </div>
       </div>
@@ -1257,7 +1384,10 @@ onBeforeUnmount(() => {
 
     <!-- TTL 分析区域 -->
     <Card class="overflow-hidden">
-      <div class="px-4 sm:px-6 py-3 sm:py-3.5 border-b border-border/60">
+      <div
+        ref="analysisSectionRef"
+        class="px-4 sm:px-6 py-3 sm:py-3.5 border-b border-border/60"
+      >
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
           <div class="flex items-center gap-3 shrink-0">
             <BarChart3 class="h-5 w-5 text-muted-foreground hidden sm:block" />

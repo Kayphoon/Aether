@@ -1,6 +1,10 @@
 import type { BodyRuleCondition, BodyRuleConditionOp } from '@/api/endpoints'
+import {
+  endpointSecretMarkerPayload,
+  retainsEndpointSecret,
+} from './endpoint-secret-markers'
 
-export type ConditionSource = 'current' | 'original'
+export type ConditionSource = 'body' | 'original' | 'request_headers'
 export type ConditionGroupMode = 'all' | 'any'
 
 export interface EditableConditionLeaf {
@@ -8,6 +12,7 @@ export interface EditableConditionLeaf {
   path: string
   op: BodyRuleConditionOp
   value: string
+  retainValue: boolean
   source: ConditionSource
 }
 
@@ -46,7 +51,8 @@ export function createEmptyConditionLeaf(): EditableConditionLeaf {
     path: '',
     op: 'eq',
     value: '',
-    source: 'current',
+    retainValue: false,
+    source: 'body',
   }
 }
 
@@ -86,6 +92,7 @@ export function conditionToEditable(condition?: BodyRuleCondition | null): Edita
       condition.any.map(child => conditionToEditable(child) || createEmptyConditionLeaf()),
     )
   }
+  const source = (condition as { source?: unknown }).source
   return {
     kind: 'leaf',
     path: condition.path || '',
@@ -93,7 +100,12 @@ export function conditionToEditable(condition?: BodyRuleCondition | null): Edita
     value: condition.value !== undefined
       ? (typeof condition.value === 'string' ? condition.value : JSON.stringify(condition.value))
       : '',
-    source: condition.source === 'original' ? 'original' : 'current',
+    retainValue: retainsEndpointSecret(condition.value, condition.has_value),
+    source: source === 'request_headers' || source === 'headers'
+        ? 'request_headers'
+        : source === 'original'
+          ? 'original'
+        : 'body',
   }
 }
 
@@ -114,7 +126,11 @@ export function editableConditionToApi(node: EditableConditionNode | null): Body
   const base = {
     path,
     op: node.op,
-    ...(node.source === 'original' ? { source: 'original' as const } : {}),
+    ...(node.source === 'request_headers'
+      ? { source: 'request_headers' as const }
+      : node.source === 'original'
+        ? { source: 'original' as const }
+        : {}),
   }
 
   if (node.op === 'exists' || node.op === 'not_exists') {
@@ -122,14 +138,15 @@ export function editableConditionToApi(node: EditableConditionNode | null): Body
   }
 
   const raw = node.value.trim()
+  const marker = endpointSecretMarkerPayload('has_value', node.retainValue, raw)
   if (!raw) {
-    return { ...base, value: '' }
+    return { ...base, value: '', ...marker }
   }
 
   try {
-    return { ...base, value: JSON.parse(raw) }
+    return { ...base, value: JSON.parse(raw), ...marker }
   } catch {
-    return { ...base, value: raw }
+    return { ...base, value: raw, ...marker }
   }
 }
 
@@ -165,6 +182,7 @@ export function conditionEquals(
     return left.path === right.path
       && left.op === right.op
       && left.value === right.value
+      && left.retainValue === right.retainValue
       && left.source === right.source
   }
 
@@ -187,6 +205,7 @@ export function validateEditableCondition(node: EditableConditionNode | null): s
   if (!path) return '条件路径不能为空'
 
   if (!isConditionValueRequired(node.op)) return null
+  if (node.retainValue) return null
 
   const raw = node.value.trim()
   let parsed: unknown = raw
