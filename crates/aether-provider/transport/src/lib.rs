@@ -30,6 +30,7 @@ pub mod url;
 pub mod vertex;
 mod video;
 pub mod windsurf;
+pub mod xai;
 
 pub use aether_oauth as oauth;
 pub use agent_identity::{
@@ -153,6 +154,7 @@ pub use rules::{
 };
 pub use same_format_provider::{
     build_same_format_provider_headers, build_same_format_provider_request_body,
+    build_same_format_provider_request_body_for_operation,
     build_same_format_provider_request_body_with_compatibility_report,
     build_same_format_provider_request_body_with_compatibility_report_and_reasoning_replay_policy,
     build_same_format_provider_upstream_url, classify_same_format_provider_request_behavior,
@@ -194,4 +196,12 @@ pub use windsurf::{
     build_windsurf_cascade_upstream_url, is_windsurf_provider_transport,
     local_windsurf_request_transport_unsupported_reason_with_network, GET_CHAT_MESSAGE_PATH,
     WINDSURF_ENVELOPE_NAME,
+};
+pub use xai::{
+    extract_xai_user_id_from_auth_config, extract_xai_user_id_from_value,
+    insert_cli_identity_headers, insert_cli_identity_headers_if_needed, is_xai_provider_transport,
+    resolved_xai_request_base_url, resolved_xai_upstream_base_url, set_xai_client_version,
+    should_attach_cli_identity_headers, xai_auth_uses_api, xai_client_version,
+    xai_uses_official_api, XAI_API_BASE_URL, XAI_CHAT_PROXY_BASE_URL, XAI_DEFAULT_CLIENT_VERSION,
+    XAI_PROVIDER_TYPE,
 };

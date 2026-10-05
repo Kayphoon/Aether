@@ -120,6 +120,49 @@ fn build_transport_request_url_inner(
         return Some(url);
     }
 
+    if params.api_operation == Some(ApiOperation::OpenAiMemoriesSummarize) {
+        if normalized_provider_api_format != "openai:responses" {
+            return None;
+        }
+        if let Some(path) = transport
+            .endpoint
+            .custom_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        {
+            // 显式操作模板也适用于原生同步操作。
+            if path.contains("{operation}") {
+                let path = expand_custom_path_template(path, build_path_params(params, false))?;
+                return build_passthrough_path_url(
+                    &transport.endpoint.base_url,
+                    &path,
+                    params.request_query,
+                    GATEWAY_CREDENTIAL_QUERY_KEYS,
+                );
+            }
+            // 仅描述 Responses 的自定义路径无法承接该操作。
+            return None;
+        }
+        // 以 Responses 的同一提供商根路径派生原生端点。
+        let mut url = Url::parse(&build_openai_responses_url(
+            &transport.endpoint.base_url,
+            strip_gateway_credential_query_parameters(params.request_query).as_deref(),
+            false,
+        ))
+        .ok()?;
+        let root = url.path().strip_suffix("/responses")?;
+        let path = format!("{root}/memories/trace_summarize");
+        url.set_path(&path);
+        return Some(url.to_string());
+    }
+
+    let xai_base =
+        crate::xai::resolved_xai_upstream_base_url(transport, &normalized_provider_api_format);
+    let request_base_url = xai_base
+        .as_deref()
+        .unwrap_or(transport.endpoint.base_url.as_str());
+
     let custom_path_template = transport
         .endpoint
         .custom_path
@@ -164,7 +207,7 @@ fn build_transport_request_url_inner(
             path.to_string()
         };
         let mut url = build_passthrough_path_url(
-            &transport.endpoint.base_url,
+            request_base_url,
             normalized_path.as_str(),
             params.request_query,
             blocked_keys,
@@ -190,75 +233,68 @@ fn build_transport_request_url_inner(
 
     let url = match normalized_provider_api_format.as_str() {
         "openai:chat" => Some(build_openai_chat_url(
-            &transport.endpoint.base_url,
+            request_base_url,
             params.request_query,
         )),
         "openai:responses" => Some(build_openai_responses_url(
-            &transport.endpoint.base_url,
+            request_base_url,
             params.request_query,
             false,
         )),
         "openai:responses:compact" => Some(build_openai_responses_url(
-            &transport.endpoint.base_url,
+            request_base_url,
             params.request_query,
             true,
         )),
         "openai:search" => Some(build_openai_search_url(
-            &transport.endpoint.base_url,
+            request_base_url,
             params.request_query,
         )),
         "openai:realtime" => build_passthrough_path_url(
-            &transport.endpoint.base_url,
+            request_base_url,
             "/v1/realtime",
             params.request_query,
             GATEWAY_CREDENTIAL_QUERY_KEYS,
         )
         .and_then(|url| replace_realtime_model_query(url, params.mapped_model?)),
         "codex:live" => build_passthrough_path_url(
-            &transport.endpoint.base_url,
+            request_base_url,
             "/live",
             params.request_query,
             GATEWAY_CREDENTIAL_QUERY_KEYS,
         ),
         "openai:embedding" | "jina:embedding" => {
-            build_provider_embedding_v1_url(&transport.endpoint.base_url, params.request_query)
+            build_provider_embedding_v1_url(request_base_url, params.request_query)
         }
-        "aliyun:multimodal_embedding" => build_aliyun_multimodal_embedding_url(
-            &transport.endpoint.base_url,
-            params.request_query,
-        ),
+        "aliyun:multimodal_embedding" => {
+            build_aliyun_multimodal_embedding_url(request_base_url, params.request_query)
+        }
         "openai:rerank" | "jina:rerank" => {
-            build_provider_rerank_v1_url(&transport.endpoint.base_url, params.request_query)
+            build_provider_rerank_v1_url(request_base_url, params.request_query)
         }
         "claude:messages" => Some(if is_claude_count_tokens {
-            build_default_claude_count_tokens_url(
-                &transport.endpoint.base_url,
-                params.request_query,
-            )
+            build_default_claude_count_tokens_url(request_base_url, params.request_query)
         } else {
-            build_claude_messages_url(&transport.endpoint.base_url, params.request_query)
+            build_claude_messages_url(request_base_url, params.request_query)
         }),
         "gemini:generate_content" => build_gemini_content_url(
-            &transport.endpoint.base_url,
+            request_base_url,
             params.mapped_model?,
             params.upstream_is_stream,
             params.request_query,
         ),
         "gemini:embedding" => build_gemini_embedding_url(
-            &transport.endpoint.base_url,
+            request_base_url,
             params.mapped_model?,
             params.request_query,
             gemini_embedding_batch,
         ),
         "gemini:interactions" => {
-            build_gemini_interactions_url(&transport.endpoint.base_url, params.request_query)
+            build_gemini_interactions_url(request_base_url, params.request_query)
         }
-        "doubao:embedding" => build_passthrough_path_url(
-            &transport.endpoint.base_url,
-            "/embeddings",
-            params.request_query,
-            &[],
-        ),
+        "doubao:embedding" => {
+            build_passthrough_path_url(request_base_url, "/embeddings", params.request_query, &[])
+        }
         _ => None,
     }?;
 
@@ -559,6 +595,14 @@ pub fn transport_supports_api_operation(
     provider_api_format: &str,
     operation: Option<ApiOperation>,
 ) -> bool {
+    if operation == Some(ApiOperation::OpenAiMemoriesSummarize) {
+        return aether_ai_formats::normalize_api_format_alias(provider_api_format)
+            == "openai:responses"
+            && !crate::kiro::is_kiro_provider_transport(transport)
+            && !crate::grok::is_grok_provider_transport(transport)
+            && !is_antigravity_provider_transport(transport)
+            && !is_gemini_cli_provider_transport(transport);
+    }
     if operation != Some(ApiOperation::ClaudeCountTokens) {
         return true;
     }
@@ -1220,6 +1264,73 @@ mod tests {
         .expect("openai responses url");
 
         assert_eq!(url, "https://api.openai.example/v1/responses?tenant=demo");
+    }
+
+    #[test]
+    fn memories_url_respects_operation_templates_and_rejects_incompatible_paths() {
+        let params = TransportRequestUrlParams {
+            provider_api_format: "openai:responses",
+            mapped_model: Some("gpt-6.1-sol"),
+            upstream_is_stream: false,
+            request_query: Some("key=synthetic&tenant=demo"),
+            kiro_api_region: None,
+            api_operation: Some(ApiOperation::OpenAiMemoriesSummarize),
+        };
+        let transport = sample_transport(
+            "codex",
+            "openai:responses",
+            "https://example.com",
+            Some("/native/{operation}"),
+        );
+        assert_eq!(
+            build_transport_request_url(&transport, params).as_deref(),
+            Some("https://example.com/native/trace_summarize?tenant=demo")
+        );
+        let incompatible = sample_transport(
+            "codex",
+            "openai:responses",
+            "https://example.com",
+            Some("/native/responses"),
+        );
+        assert!(build_transport_request_url(&incompatible, params).is_none());
+        for provider in ["kiro", "grok", "antigravity", "gemini_cli"] {
+            let private =
+                sample_transport(provider, "openai:responses", "https://example.com", None);
+            assert!(
+                build_transport_request_url(&private, params).is_none(),
+                "{provider}"
+            );
+        }
+    }
+
+    #[test]
+    fn memories_url_uses_the_configured_provider_root_and_removes_gateway_auth() {
+        for (provider, base, expected) in [
+            (
+                "codex",
+                "https://chatgpt.com/backend-api/codex",
+                "https://chatgpt.com/backend-api/codex/memories/trace_summarize?tenant=demo",
+            ),
+            (
+                "custom",
+                "https://example.com/v1",
+                "https://example.com/v1/memories/trace_summarize?tenant=demo",
+            ),
+        ] {
+            let transport = sample_transport(provider, "openai:responses", base, None);
+            let result = build_transport_request_url(
+                &transport,
+                TransportRequestUrlParams {
+                    provider_api_format: "openai:responses",
+                    mapped_model: Some("gpt-6.1-sol"),
+                    upstream_is_stream: false,
+                    request_query: Some("key=synthetic-secret&tenant=demo"),
+                    kiro_api_region: None,
+                    api_operation: Some(ApiOperation::OpenAiMemoriesSummarize),
+                },
+            );
+            assert_eq!(result.as_deref(), Some(expected));
+        }
     }
 
     #[test]
@@ -2416,5 +2527,83 @@ mod tests {
             url,
             "https://api.example.com/v1/messages?model=claude%26admin%3Dtrue%23fragment"
         );
+    }
+
+    #[test]
+    fn xai_oauth_responses_use_cli_chat_proxy() {
+        let mut transport = sample_transport(
+            "xai",
+            "openai:responses",
+            "https://cli-chat-proxy.grok.com/v1",
+            None,
+        );
+        transport.key.auth_type = "oauth".to_string();
+        transport.key.decrypted_auth_config =
+            Some(r#"{"refresh_token":"rt","using_api":false}"#.to_string());
+
+        let url = build_transport_request_url(
+            &transport,
+            TransportRequestUrlParams {
+                provider_api_format: "openai:responses",
+                mapped_model: Some("grok-4"),
+                upstream_is_stream: true,
+                request_query: None,
+                kiro_api_region: None,
+                api_operation: None,
+            },
+        )
+        .expect("xai oauth responses URL");
+
+        assert_eq!(url, "https://cli-chat-proxy.grok.com/v1/responses");
+    }
+
+    #[test]
+    fn xai_compact_and_using_api_use_official_api() {
+        let mut oauth = sample_transport(
+            "xai",
+            "openai:responses:compact",
+            "https://cli-chat-proxy.grok.com/v1",
+            None,
+        );
+        oauth.key.auth_type = "oauth".to_string();
+        oauth.key.decrypted_auth_config =
+            Some(r#"{"refresh_token":"rt","using_api":false}"#.to_string());
+
+        let compact = build_transport_request_url(
+            &oauth,
+            TransportRequestUrlParams {
+                provider_api_format: "openai:responses:compact",
+                mapped_model: Some("grok-4"),
+                upstream_is_stream: false,
+                request_query: None,
+                kiro_api_region: None,
+                api_operation: None,
+            },
+        )
+        .expect("xai compact URL");
+        assert_eq!(compact, "https://api.x.ai/v1/responses/compact");
+
+        let mut api_key = sample_transport(
+            "xai",
+            "openai:responses",
+            "https://cli-chat-proxy.grok.com/v1",
+            None,
+        );
+        api_key.key.auth_type = "oauth".to_string();
+        api_key.key.decrypted_auth_config = Some(r#"{"using_api":true}"#.to_string());
+
+        let official = build_transport_request_url(
+            &api_key,
+            TransportRequestUrlParams {
+                provider_api_format: "openai:responses",
+                mapped_model: Some("grok-4"),
+                upstream_is_stream: true,
+                request_query: None,
+                kiro_api_region: None,
+                api_operation: None,
+            },
+        )
+        .expect("xai api key URL");
+        assert_eq!(official, "https://api.x.ai/v1/responses");
     }
 }

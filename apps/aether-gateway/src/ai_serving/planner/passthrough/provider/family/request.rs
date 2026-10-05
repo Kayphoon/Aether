@@ -24,7 +24,9 @@ use crate::ai_serving::transport::{
     SameFormatProviderCompatibilityEditAction, SameFormatProviderHeadersInput,
     GEMINI_CLI_USER_AGENT, GROK_CHAT_PATH,
 };
-use crate::ai_serving::{CandidateFailureDiagnostic, GatewayProviderTransportSnapshot};
+use crate::ai_serving::{
+    CandidateFailureDiagnostic, GatewayProviderTransportSnapshot, CODEX_RESPONSES_LITE_HEADER,
+};
 use crate::{AppState, GatewayError};
 
 mod policy;
@@ -255,7 +257,9 @@ pub(crate) async fn resolve_local_same_format_provider_candidate_payload_parts(
         // re-enforce stream-field policy afterward.
         // Kiro behavior classification already hard-requires upstream streaming,
         // and the Kiro envelope does not use a top-level body stream field.
-        if prepared.kiro_auth.is_none() {
+        if prepared.kiro_auth.is_none()
+            && spec.operation != Some(crate::ai_serving::ApiOperation::OpenAiMemoriesSummarize)
+        {
             enforce_provider_body_stream_policy(
                 &mut base_provider_request_body,
                 prepared.provider_api_format.as_str(),
@@ -275,7 +279,8 @@ pub(crate) async fn resolve_local_same_format_provider_candidate_payload_parts(
         prepared.mapped_model.as_str(),
         source_model,
     );
-    if let Err(violation) =
+    if spec.operation != Some(crate::ai_serving::ApiOperation::OpenAiMemoriesSummarize) {
+        if let Err(violation) =
         crate::ai_serving::finalize_openai_provider_request_with_codex_model_capabilities_and_reasoning_replay_policy(
             &mut base_provider_request_body,
             crate::ai_serving::OpenAiProviderRequestFinalization {
@@ -312,6 +317,21 @@ pub(crate) async fn resolve_local_same_format_provider_candidate_payload_parts(
         )
         .await;
         return Ok(None);
+    }
+    }
+
+    // Same-format requests skip `apply_transport_request_body_semantics`, so the opt-in
+    // Claude Code body mimicry has to be applied here as well.
+    if crate::ai_serving::transport::claude_code::apply_claude_code_body_mimicry_for_transport(
+        &mut base_provider_request_body,
+        &transport,
+        prepared.provider_api_format.as_str(),
+    ) {
+        compatibility_edits.push(SameFormatProviderCompatibilityEdit {
+            field: "body".to_string(),
+            action: SameFormatProviderCompatibilityEditAction::ProviderCompatibilityRewrite,
+            detail: "applied Claude Code body mimicry for provider compatibility".to_string(),
+        });
     }
 
     let antigravity_auth = if prepared.is_antigravity {
@@ -582,6 +602,16 @@ pub(crate) async fn resolve_local_same_format_provider_candidate_payload_parts(
         provider_model,
         source_model,
         codex_model_capabilities.as_ref(),
+    );
+    if spec.operation == Some(crate::ai_serving::ApiOperation::OpenAiMemoriesSummarize) {
+        provider_request_headers
+            .retain(|name, _| !name.eq_ignore_ascii_case(CODEX_RESPONSES_LITE_HEADER));
+        provider_request_headers.insert("accept".to_string(), "application/json".to_string());
+    }
+    crate::ai_serving::transport::xai::insert_cli_identity_headers_if_needed(
+        transport.as_ref(),
+        prepared.provider_api_format.as_str(),
+        &mut provider_request_headers,
     );
     request_identity_response_encoding_when_redacted(
         &mut provider_request_headers,

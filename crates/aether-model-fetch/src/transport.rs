@@ -129,6 +129,12 @@ pub async fn build_standard_models_fetch_execution_plan_for_client_version(
         provider_type == "codex" && api_format.starts_with("openai:");
     let is_deepseek_anthropic_models_fetch = api_format.starts_with("claude:")
         && deepseek_anthropic_models_fetch_uses_openai_auth(&transport.endpoint.base_url);
+    if is_codex_openai_models_fetch {
+        if let Some(version) = codex_client_version {
+            aether_ai_formats::CodexClientProfile::cli(version)
+                .map_err(|error| error.to_string())?;
+        }
+    }
     let mut headers =
         standard_models_fetch_headers(&api_format, &provider_type, codex_client_version);
     if is_codex_openai_models_fetch {
@@ -627,28 +633,29 @@ fn standard_models_fetch_headers(
     let api_format = aether_ai_formats::normalize_api_format_alias(api_format);
     let provider_type = provider_type.trim().to_ascii_lowercase();
     if provider_type == "codex" && api_format.starts_with("openai:") {
+        // 模型目录请求也必须使用当前动态画像，不能回退到编译时固定版本。
+        let dynamic_client_version = aether_ai_formats::codex_client_version();
         let client_version = codex_client_version
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .unwrap_or(aether_ai_formats::CODEX_CLIENT_VERSION);
+            .unwrap_or(dynamic_client_version.as_str());
         return BTreeMap::from([
             (
                 "user-agent".to_string(),
-                format!(
-                    "{}/{client_version}",
-                    aether_ai_formats::CODEX_CLIENT_ORIGINATOR
-                ),
+                aether_ai_formats::CodexClientProfile::cli(client_version)
+                    .expect("validated Codex catalog client version")
+                    .user_agent,
             ),
             (
                 "originator".to_string(),
-                aether_ai_formats::CODEX_CLIENT_ORIGINATOR.to_string(),
+                aether_ai_formats::codex_client_originator(),
             ),
         ]);
     }
     match api_format.as_str() {
         "openai:responses" | "openai:responses:compact" => BTreeMap::from([(
             "user-agent".to_string(),
-            aether_ai_formats::CODEX_CLIENT_USER_AGENT.to_string(),
+            aether_ai_formats::codex_client_user_agent(),
         )]),
         "claude:messages" => {
             let mut headers = BTreeMap::from([(
@@ -894,7 +901,7 @@ mod tests {
         assert_eq!(plan.url, "https://example.com/models");
         assert_eq!(
             plan.headers.get("user-agent").map(String::as_str),
-            Some(aether_ai_formats::CODEX_CLIENT_USER_AGENT)
+            Some(aether_ai_formats::codex_client_user_agent().as_str())
         );
         assert_eq!(
             plan.headers.get("authorization").map(String::as_str),
@@ -993,7 +1000,7 @@ mod tests {
             plan.url,
             format!(
                 "https://chatgpt.com/backend-api/codex/models?client_version={}",
-                aether_ai_formats::CODEX_CLIENT_VERSION
+                aether_ai_formats::codex_client_version()
             )
         );
         assert_eq!(
@@ -1018,7 +1025,7 @@ mod tests {
         );
         assert_eq!(
             plan.headers.get("user-agent").map(String::as_str),
-            Some(aether_ai_formats::CODEX_CLIENT_USER_AGENT)
+            Some(aether_ai_formats::codex_client_user_agent().as_str())
         );
         assert!(!plan.headers.contains_key("version"));
     }
@@ -1057,7 +1064,12 @@ mod tests {
         );
         assert_eq!(
             plan.headers.get("user-agent").map(String::as_str),
-            Some("codex_cli_rs/0.145.2")
+            Some(
+                aether_ai_formats::CodexClientProfile::cli("0.145.2")
+                    .unwrap()
+                    .user_agent
+                    .as_str()
+            )
         );
         assert_eq!(
             plan.headers.get("originator").map(String::as_str),

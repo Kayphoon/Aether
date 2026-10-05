@@ -1,3 +1,4 @@
+use aether_ai_formats::normalize_api_format_alias;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -6,6 +7,7 @@ pub const PROVIDER_REASONING_EFFORT_METADATA_KEY: &str = "provider_reasoning_eff
 pub const REQUESTED_REASONING_EFFORT_METADATA_KEY: &str = "requested_reasoning_effort";
 pub const PROVIDER_SERVICE_TIER_METADATA_KEY: &str = "provider_service_tier";
 pub const PROVIDER_ACTUAL_SERVICE_TIER_METADATA_KEY: &str = "provider_actual_service_tier";
+pub const PROVIDER_RESPONSE_MODEL_METADATA_KEY: &str = "provider_response_model";
 pub const PROVIDER_CACHE_TTL_MINUTES_METADATA_KEY: &str = "provider_cache_ttl_minutes";
 pub const ROUTING_CANDIDATE_SKIP_REASON_METADATA_KEY: &str = "routing_candidate_skip_reason";
 pub const ROUTING_FAILURE_DIAGNOSTIC_METADATA_KEY: &str = "routing_failure_diagnostic";
@@ -51,6 +53,75 @@ pub fn extract_provider_reasoning_effort_from_body(value: Option<&Value>) -> Opt
                 .and_then(Value::as_str)
         })
         .and_then(normalize_provider_reasoning_effort)
+        .or_else(|| {
+            // Gemini also nests its payload one level down, so both the flat
+            // `generateContent` body and the `v1internal` envelope that carries it are read.
+            extract_gemini_reasoning_effort_from_body(object).or_else(|| {
+                object
+                    .get("request")
+                    .and_then(Value::as_object)
+                    .and_then(extract_gemini_reasoning_effort_from_body)
+            })
+        })
+}
+
+/// Gemini `generateContent` states its reasoning depth inside
+/// `generationConfig.thinkingConfig`, either as a symbolic `thinkingLevel` or as a token
+/// `thinkingBudget`. Both camelCase and snake_case spellings are read so that a captured client
+/// body and a converted provider body resolve to the same label.
+///
+/// `includeThoughts` alone is a visibility flag, not a depth, so it never produces a label.
+fn extract_gemini_reasoning_effort_from_body(
+    object: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    let generation_config = object
+        .get("generationConfig")
+        .or_else(|| object.get("generation_config"))
+        .and_then(Value::as_object)?;
+    let thinking_config = generation_config
+        .get("thinkingConfig")
+        .or_else(|| generation_config.get("thinking_config"))
+        .and_then(Value::as_object)?;
+
+    if let Some(level) = thinking_config
+        .get("thinkingLevel")
+        .or_else(|| thinking_config.get("thinking_level"))
+        .and_then(Value::as_str)
+        .and_then(normalize_gemini_thinking_level)
+    {
+        return Some(level);
+    }
+
+    thinking_config
+        .get("thinkingBudget")
+        .or_else(|| thinking_config.get("thinking_budget"))
+        .and_then(Value::as_u64)
+        .map(|budget| {
+            // `0` disables reasoning outright. The shared budget ladder collapses it into `low`,
+            // which would report an explicitly disabled request as a shallow one.
+            if budget == 0 {
+                "none".to_string()
+            } else {
+                aether_ai_formats::formats::openai::shared::map_thinking_budget_to_openai_reasoning_effort(budget)
+                    .to_string()
+            }
+        })
+}
+
+/// Gemini also emits the protobuf enum spelling (`THINKING_LEVEL_HIGH`); the level itself is what
+/// the badge vocabulary understands, so the enum prefix is stripped before normalizing.
+///
+/// `THINKING_LEVEL_UNSPECIFIED` is the enum's "no explicit level" member, not a depth. It is
+/// rejected rather than surfaced, otherwise the badge would read `unspecified`.
+fn normalize_gemini_thinking_level(value: &str) -> Option<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let normalized = normalized
+        .strip_prefix("thinking_level_")
+        .unwrap_or(normalized.as_str());
+    if normalized == "unspecified" {
+        return None;
+    }
+    normalize_provider_reasoning_effort(normalized)
 }
 
 fn normalize_provider_reasoning_effort(value: &str) -> Option<String> {
@@ -119,6 +190,141 @@ pub fn normalize_provider_service_tier(value: &str) -> Option<String> {
     Some(value.to_ascii_lowercase())
 }
 
+/// 清洗模型名称，保留大小写，只去除首尾空白。
+pub fn normalize_provider_response_model(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 256 {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn extract_model_at_paths(value: &Value, paths: &[&[&str]]) -> Option<String> {
+    paths.iter().find_map(|path| {
+        let value = path
+            .iter()
+            .try_fold(value, |current, key| current.as_object()?.get(*key))?;
+        value.as_str().and_then(normalize_provider_response_model)
+    })
+}
+
+fn response_model_paths(provider_api_format: Option<&str>) -> &'static [&'static [&'static str]] {
+    match normalize_api_format_alias(provider_api_format.unwrap_or_default()).as_str() {
+        "gemini:generate_content" => {
+            // Gemini 原生响应使用 modelVersion；部分网关会改写为 model。
+            &[&["modelVersion"], &["model_version"], &["model"]]
+        }
+        "gemini:embedding" => {
+            // Gemini Embedding 可能返回 model、modelVersion 或 Vertex 的 deployedModelId。
+            &[
+                &["model"],
+                &["modelVersion"],
+                &["model_version"],
+                &["deployedModelId"],
+                &["deployed_model_id"],
+            ]
+        }
+        "gemini:interactions" => {
+            // Interactions 请求既可能叫 model，也可能叫 agent；响应优先读取 model。
+            &[
+                &["model"],
+                &["modelVersion"],
+                &["model_version"],
+                &["agent"],
+            ]
+        }
+        _ => &[&["model"]],
+    }
+}
+
+fn extract_model_from_known_response_wrappers(
+    response_body: &Value,
+    paths: &[&[&str]],
+) -> Option<String> {
+    // 只展开协议中已知的 response/chunks 包装，避免在候选内容、工具参数等任意嵌套
+    // 对象中搜索同名字段，误把 role="model" 一类内容当成响应模型。
+    extract_model_at_paths(response_body, paths)
+        .or_else(|| {
+            response_body
+                .get("response")
+                .and_then(|response| extract_model_at_paths(response, paths))
+        })
+        .or_else(|| {
+            response_body
+                .get("chunks")
+                .and_then(Value::as_array)
+                .and_then(|chunks| {
+                    chunks.iter().rev().find_map(|chunk| {
+                        extract_model_at_paths(chunk, paths).or_else(|| {
+                            chunk
+                                .get("response")
+                                .and_then(|response| extract_model_at_paths(response, paths))
+                        })
+                    })
+                })
+        })
+        .or_else(|| {
+            response_body
+                .get("response")
+                .and_then(|response| response.get("chunks"))
+                .and_then(Value::as_array)
+                .and_then(|chunks| {
+                    chunks.iter().rev().find_map(|chunk| {
+                        extract_model_at_paths(chunk, paths).or_else(|| {
+                            chunk
+                                .get("response")
+                                .and_then(|response| extract_model_at_paths(response, paths))
+                        })
+                    })
+                })
+        })
+}
+
+fn extract_provider_model_from_response_body(
+    response_body: &Value,
+    provider_api_format: Option<&str>,
+) -> Option<String> {
+    extract_model_from_known_response_wrappers(
+        response_body,
+        response_model_paths(provider_api_format),
+    )
+}
+
+fn extract_provider_model_from_request_body(
+    request_body: &Value,
+    request_api_format: Option<&str>,
+) -> Option<String> {
+    let paths: &[&[&str]] =
+        match normalize_api_format_alias(request_api_format.unwrap_or_default()).as_str() {
+            "gemini:interactions" => &[&["model"], &["agent"]],
+            _ => &[&["model"]],
+        };
+    extract_model_at_paths(request_body, paths)
+}
+
+/// 只有请求体和响应体都可作为完整事实时，才计算响应模型，避免用截断内容猜测。
+pub fn extract_provider_response_model_from_bodies(
+    request_body: Option<&Value>,
+    request_body_state: Option<UsageBodyCaptureState>,
+    request_api_format: Option<&str>,
+    response_body: Option<&Value>,
+    response_body_state: Option<UsageBodyCaptureState>,
+    provider_api_format: Option<&str>,
+) -> Option<String> {
+    if !usage_body_capture_is_authoritative(request_body, request_body_state)
+        || !usage_body_capture_is_authoritative(response_body, response_body_state)
+    {
+        return None;
+    }
+
+    let request_model =
+        extract_provider_model_from_request_body(request_body?, request_api_format)?;
+    let response_model =
+        extract_provider_model_from_response_body(response_body?, provider_api_format)?;
+
+    (request_model != response_model).then_some(response_model)
+}
+
 /// Resolves a provider processing tier exclusively from the final upstream request.
 ///
 /// A complete captured body is authoritative, including when it contains no tier. The metadata
@@ -129,7 +335,7 @@ pub fn resolve_provider_service_tier_from_request_capture(
     provider_request_body_state: Option<UsageBodyCaptureState>,
     request_metadata: Option<&Value>,
 ) -> Option<String> {
-    if request_body_capture_is_authoritative(provider_request_body, provider_request_body_state) {
+    if usage_body_capture_is_authoritative(provider_request_body, provider_request_body_state) {
         return extract_provider_service_tier_from_body(provider_request_body);
     }
 
@@ -153,7 +359,7 @@ pub fn resolve_provider_service_tier_from_request_capture(
         .and_then(normalize_provider_service_tier)
 }
 
-fn request_body_capture_is_authoritative(
+pub fn usage_body_capture_is_authoritative(
     request_body: Option<&Value>,
     request_body_state: Option<UsageBodyCaptureState>,
 ) -> bool {
@@ -184,7 +390,7 @@ fn resolve_reasoning_effort_from_request_capture(
     request_metadata: Option<&Value>,
     metadata_key: &str,
 ) -> Option<String> {
-    if request_body_capture_is_authoritative(request_body, request_body_state) {
+    if usage_body_capture_is_authoritative(request_body, request_body_state) {
         return extract_provider_reasoning_effort_from_body(request_body);
     }
 
@@ -701,6 +907,11 @@ impl StoredRequestUsageAudit {
             })
     }
 
+    pub fn provider_response_model(&self) -> Option<String> {
+        self.request_metadata_string(PROVIDER_RESPONSE_MODEL_METADATA_KEY)
+            .and_then(normalize_provider_response_model)
+    }
+
     pub fn provider_cache_ttl_minutes(&self) -> Option<i64> {
         resolve_provider_cache_ttl_minutes(
             self.endpoint_api_format
@@ -995,6 +1206,24 @@ pub struct StoredProviderApiKeyWindowUsageSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct UsageAuditListQuery {
+    #[serde(default)]
+    pub slow_threshold_ms: Option<u64>,
+    #[serde(default)]
+    pub endpoint_kind: Option<String>,
+    #[serde(default)]
+    pub request_type: Option<String>,
+    #[serde(default)]
+    pub has_format_conversion: Option<bool>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub api_key_id: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub attribution_kind: Option<String>,
+    #[serde(default)]
+    pub actor_user_id: Option<String>,
     pub created_from_unix_secs: Option<u64>,
     pub created_until_unix_secs: Option<u64>,
     pub user_id: Option<String>,
@@ -1015,6 +1244,24 @@ pub struct UsageAuditListQuery {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct UsageAuditKeywordSearchQuery {
+    #[serde(default)]
+    pub slow_threshold_ms: Option<u64>,
+    #[serde(default)]
+    pub endpoint_kind: Option<String>,
+    #[serde(default)]
+    pub request_type: Option<String>,
+    #[serde(default)]
+    pub has_format_conversion: Option<bool>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub api_key_id: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub attribution_kind: Option<String>,
+    #[serde(default)]
+    pub actor_user_id: Option<String>,
     pub created_from_unix_secs: Option<u64>,
     pub created_until_unix_secs: Option<u64>,
     pub user_id: Option<String>,
@@ -1060,9 +1307,15 @@ pub struct UsageAuditAggregationQuery {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct UsageAuditSummaryQuery {
+    /// Optional provider-name allowlist, intersected with provider_name; empty matches nothing.
+    #[serde(default)]
+    pub provider_names: Option<Vec<String>>,
     pub created_from_unix_secs: u64,
     pub created_until_unix_secs: u64,
     pub user_id: Option<String>,
+    /// Optional bulk user scope used by current user-group reporting.
+    /// An empty list intentionally matches no usage rows.
+    pub user_ids: Option<Vec<String>>,
     pub provider_name: Option<String>,
     pub model: Option<String>,
 }
@@ -1450,11 +1703,17 @@ pub enum UsageTimeSeriesGranularity {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct UsageTimeSeriesQuery {
+    /// Optional provider-name allowlist, intersected with provider_name; empty matches nothing.
+    #[serde(default)]
+    pub provider_names: Option<Vec<String>>,
     pub created_from_unix_secs: u64,
     pub created_until_unix_secs: u64,
     pub granularity: UsageTimeSeriesGranularity,
     pub tz_offset_minutes: i32,
     pub user_id: Option<String>,
+    /// Optional bulk user scope used by current user-group reporting.
+    /// An empty list intentionally matches no usage rows.
+    pub user_ids: Option<Vec<String>>,
     pub provider_name: Option<String>,
     pub model: Option<String>,
 }
@@ -1481,10 +1740,16 @@ pub enum UsageLeaderboardGroupBy {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct UsageLeaderboardQuery {
+    /// Optional provider-name allowlist, intersected with provider_name; empty matches nothing.
+    #[serde(default)]
+    pub provider_names: Option<Vec<String>>,
     pub created_from_unix_secs: u64,
     pub created_until_unix_secs: u64,
     pub group_by: UsageLeaderboardGroupBy,
     pub user_id: Option<String>,
+    /// Optional bulk user scope used by current user-group reporting.
+    /// An empty list intentionally matches no usage rows.
+    pub user_ids: Option<Vec<String>>,
     pub provider_name: Option<String>,
     pub model: Option<String>,
 }
@@ -1740,6 +2005,42 @@ pub enum StoredUsageBodyPayload {
 
 #[async_trait]
 pub trait UsageReadRepository: Send + Sync {
+    async fn query_dashboard_summary(
+        &self,
+        _query: &super::UsageDashboardAnalyticsQuery,
+    ) -> Result<super::StoredDashboardSummary, crate::DataLayerError> {
+        Err(crate::DataLayerError::UnexpectedValue(
+            "dashboard summary repository unavailable".into(),
+        ))
+    }
+
+    async fn query_dashboard_analytics(
+        &self,
+        _query: &super::UsageDashboardAnalyticsQuery,
+    ) -> Result<super::StoredUsageDashboardAnalytics, crate::DataLayerError> {
+        Err(crate::DataLayerError::UnexpectedValue(
+            "dashboard analytics repository unavailable".into(),
+        ))
+    }
+
+    async fn summarize_health_observations(
+        &self,
+        _query: &super::HealthObservationQuery,
+    ) -> Result<super::HealthObservationSummary, crate::DataLayerError> {
+        Err(crate::DataLayerError::UnexpectedValue(
+            "health observations repository unavailable".into(),
+        ))
+    }
+
+    async fn query_usage_analytics(
+        &self,
+        _query: &super::UsageAnalyticsQuery,
+    ) -> Result<super::StoredUsageAnalytics, crate::DataLayerError> {
+        Err(crate::DataLayerError::UnexpectedValue(
+            "usage analytics repository unavailable".into(),
+        ))
+    }
+
     async fn find_by_id(
         &self,
         id: &str,
@@ -2637,7 +2938,8 @@ fn parse_timestamp(value: i64, field_name: &str) -> Result<u64, crate::DataLayer
 mod tests {
     use super::{
         canonical_usage_body_ref_for, extract_provider_actual_service_tier_from_response,
-        extract_provider_service_tier_from_body, normalize_provider_reasoning_effort,
+        extract_provider_response_model_from_bodies, extract_provider_service_tier_from_body,
+        normalize_provider_reasoning_effort, normalize_provider_response_model,
         normalize_provider_service_tier, resolve_provider_cache_ttl_minutes, usage_body_ref,
         StoredRequestUsageAudit, UpsertUsageRecord, UsageBodyCaptureState, UsageBodyCaptureStorage,
         UsageBodyField, UsageProviderPerformanceQuery, REALTIME_SESSION_METADATA_KEY,
@@ -2661,6 +2963,122 @@ mod tests {
             );
             assert_eq!(normalize(&"A".repeat(65)), None);
         }
+    }
+
+    #[test]
+    fn response_model_requires_authoritative_different_top_level_models() {
+        let request = json!({"model": " gpt-5 "});
+        let response = json!({"model": " gpt-5.1 "});
+        assert_eq!(
+            extract_provider_response_model_from_bodies(
+                Some(&request),
+                Some(UsageBodyCaptureState::Inline),
+                Some("openai:chat"),
+                Some(&response),
+                Some(UsageBodyCaptureState::Inline),
+                Some("openai:chat"),
+            ),
+            Some("gpt-5.1".to_string())
+        );
+        assert_eq!(
+            extract_provider_response_model_from_bodies(
+                Some(&request),
+                Some(UsageBodyCaptureState::Inline),
+                Some("openai:responses"),
+                Some(&json!({"model": "gpt-5"})),
+                Some(UsageBodyCaptureState::Inline),
+                Some("openai:responses"),
+            ),
+            None
+        );
+        assert_eq!(
+            extract_provider_response_model_from_bodies(
+                Some(&request),
+                Some(UsageBodyCaptureState::Truncated),
+                Some("openai:chat"),
+                Some(&response),
+                Some(UsageBodyCaptureState::Inline),
+                Some("openai:chat"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn response_model_keeps_case_and_rejects_invalid_values() {
+        assert_eq!(
+            normalize_provider_response_model("  GPT-5.1  "),
+            Some("GPT-5.1".to_string())
+        );
+        assert_eq!(normalize_provider_response_model("  "), None);
+        assert_eq!(normalize_provider_response_model(&"x".repeat(257)), None);
+        assert_eq!(
+            extract_provider_response_model_from_bodies(
+                Some(&json!({"model": "gpt-5"})),
+                None,
+                Some("openai:chat"),
+                Some(&json!({"model": 42})),
+                None,
+                Some("openai:chat"),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn response_model_uses_provider_format_specific_nested_paths() {
+        let request = json!({"model": "gemini-2.5-flash"});
+        let response = json!({
+            "response": {
+                "modelVersion": "gemini-2.5-flash-001",
+                "candidates": [{"content": {"role": "model"}}]
+            }
+        });
+        assert_eq!(
+            extract_provider_response_model_from_bodies(
+                Some(&request),
+                Some(UsageBodyCaptureState::Inline),
+                Some("gemini:generate_content"),
+                Some(&response),
+                Some(UsageBodyCaptureState::Inline),
+                Some("gemini:generate_content"),
+            ),
+            Some("gemini-2.5-flash-001".to_string())
+        );
+
+        let wrapped_chunks = json!({
+            "chunks": [
+                {"response": {"modelVersion": "gemini-old"}},
+                {"response": {"modelVersion": "gemini-final"}}
+            ]
+        });
+        assert_eq!(
+            extract_provider_response_model_from_bodies(
+                Some(&request),
+                Some(UsageBodyCaptureState::Inline),
+                Some("gemini:generate_content"),
+                Some(&wrapped_chunks),
+                Some(UsageBodyCaptureState::Inline),
+                Some("gemini:generate_content"),
+            ),
+            Some("gemini-final".to_string())
+        );
+
+        let ambiguous = json!({
+            "metadata": {"model": "do-not-use"},
+            "candidates": [{"content": {"role": "model"}}]
+        });
+        assert_eq!(
+            extract_provider_response_model_from_bodies(
+                Some(&request),
+                Some(UsageBodyCaptureState::Inline),
+                Some("gemini:generate_content"),
+                Some(&ambiguous),
+                Some(UsageBodyCaptureState::Inline),
+                Some("gemini:generate_content"),
+            ),
+            None
+        );
     }
 
     #[test]
@@ -3237,6 +3655,157 @@ mod tests {
 
         assert_eq!(usage.provider_reasoning_effort(), None);
         assert_eq!(usage.provider_service_tier(), None);
+    }
+
+    #[test]
+    fn gemini_thinking_level_supplies_reasoning_effort_for_both_body_spellings() {
+        let mut usage = sample_usage();
+        usage.provider_request_body = Some(json!({
+            "generationConfig": {
+                "thinkingConfig": { "includeThoughts": true, "thinkingLevel": "HIGH" }
+            }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort().as_deref(), Some("high"));
+
+        // The converted provider body keeps snake_case keys, and the client body may carry the
+        // protobuf enum spelling. Both must land on the same badge vocabulary.
+        usage.provider_request_body = Some(json!({
+            "generation_config": {
+                "thinking_config": { "thinking_level": "thinking_level_medium" }
+            }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort().as_deref(), Some("medium"));
+
+        usage.provider_request_body = Some(json!({
+            "generationConfig": {
+                "thinkingConfig": { "thinkingLevel": "  low  " }
+            }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort().as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn gemini_thinking_budget_supplies_reasoning_effort_without_collapsing_zero() {
+        let mut usage = sample_usage();
+        usage.provider_request_body = Some(json!({
+            "generationConfig": { "thinkingConfig": { "thinkingBudget": 8192 } }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort().as_deref(), Some("xhigh"));
+
+        // `0` disables reasoning. The shared budget ladder maps 0..=1664 to `low`, which would
+        // report an explicitly disabled request as shallow, so the Gemini path reports `none`.
+        usage.provider_request_body = Some(json!({
+            "generationConfig": { "thinkingConfig": { "thinkingBudget": 0 } }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort().as_deref(), Some("none"));
+
+        usage.provider_request_body = Some(json!({
+            "generation_config": { "thinking_config": { "thinking_budget": 1280 } }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort().as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn gemini_thinking_config_without_level_or_budget_yields_no_reasoning_effort() {
+        let mut usage = sample_usage();
+        usage.provider_request_body = Some(json!({
+            "generationConfig": { "thinkingConfig": { "includeThoughts": true } }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort(), None);
+
+        // A level-less, budget-less config must not fall back to metadata either: the captured
+        // body is authoritative and it says nothing about depth.
+        usage.request_metadata = Some(json!({ "provider_reasoning_effort": "max" }));
+        assert_eq!(usage.provider_reasoning_effort(), None);
+
+        // `THINKING_LEVEL_UNSPECIFIED` is the enum's "no explicit level" member, not a depth.
+        usage.request_metadata = None;
+        usage.provider_request_body = Some(json!({
+            "generationConfig": {
+                "thinkingConfig": { "thinkingLevel": "THINKING_LEVEL_UNSPECIFIED" }
+            }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort(), None);
+    }
+
+    /// The v1internal envelope nests the real `generateContent` payload under `request`. This is
+    /// the shape the Antigravity/Gemini CLI transports actually send upstream, so the extraction
+    /// has to descend into it or every converted `openai:chat -> gemini` request loses its badge.
+    #[test]
+    fn gemini_thinking_config_is_read_from_the_v1internal_envelope() {
+        let mut usage = sample_usage();
+        usage.provider_request_body = Some(json!({
+            "model": "gemini-3.8-flash-tiered",
+            "project": "aicode-consumers",
+            "requestId": "req-1",
+            "requestType": "agent",
+            "userAgent": "vscode/1.X.X (Antigravity/4.3.0)",
+            "request": {
+                "contents": [{ "role": "user", "parts": [{ "text": "hi" }] }],
+                "generationConfig": {
+                    "maxOutputTokens": 65536,
+                    "thinkingConfig": { "includeThoughts": true, "thinkingLevel": "high" }
+                }
+            }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort().as_deref(), Some("high"));
+
+        usage.provider_request_body = Some(json!({
+            "model": "gemini-3.8-flash-tiered",
+            "request": {
+                "generation_config": {
+                    "thinking_config": { "include_thoughts": true, "thinking_budget": 32768 }
+                }
+            }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort().as_deref(), Some("xhigh"));
+
+        usage.provider_request_body = Some(json!({
+            "model": "gemini-3.8-flash-tiered",
+            "request": {
+                "generationConfig": { "thinkingConfig": { "thinkingBudget": 0 } }
+            }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort().as_deref(), Some("none"));
+    }
+
+    /// A converted request that carries only `maxOutputTokens` must stay badge-less rather than
+    /// picking up a depth from somewhere else in the envelope.
+    #[test]
+    fn v1internal_envelope_without_thinking_config_yields_no_reasoning_effort() {
+        let mut usage = sample_usage();
+        usage.provider_request_body = Some(json!({
+            "model": "gemini-3.8-flash-tiered",
+            "project": "aicode-consumers",
+            "request": {
+                "contents": [{ "role": "user", "parts": [{ "text": "hi" }] }],
+                "generationConfig": { "maxOutputTokens": 65536 }
+            }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort(), None);
+    }
+
+    #[test]
+    fn gemini_thinking_config_does_not_shadow_explicit_effort_fields() {
+        let mut usage = sample_usage();
+        usage.provider_request_body = Some(json!({
+            "reasoning_effort": "max",
+            "generationConfig": { "thinkingConfig": { "thinkingLevel": "low" } }
+        }));
+
+        assert_eq!(usage.provider_reasoning_effort().as_deref(), Some("max"));
     }
 
     #[test]

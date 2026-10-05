@@ -567,6 +567,7 @@ fn build_users_me_usage_record_payload(
         "id": item.id,
         "model": item.model,
         "target_model": serde_json::Value::Null,
+        "response_model": item.provider_response_model(),
         "api_format": item.api_format,
         "endpoint_api_format": item.endpoint_api_format,
         "has_format_conversion": item.has_format_conversion,
@@ -681,6 +682,7 @@ fn build_users_me_usage_active_payload(item: &StoredRequestUsageAudit) -> serde_
         "client_ip": users_me_usage_metadata_string(item, "client_ip"),
         "user_agent": users_me_usage_metadata_string(item, "user_agent"),
         "target_model": item.target_model,
+        "response_model": item.provider_response_model(),
         "has_fallback": item.has_fallback(),
     });
     payload["end_to_end_time_ms"] = json!(users_me_usage_metadata_u64(item, "end_to_end_time_ms"));
@@ -1209,6 +1211,7 @@ pub(super) async fn handle_users_me_usage_get(
                 limit: None,
                 offset: None,
                 newest_first: true,
+                ..Default::default()
             };
             total_record_count = match state
                 .count_usage_audits_by_keyword_search(&keyword_query)
@@ -1259,6 +1262,7 @@ pub(super) async fn handle_users_me_usage_get(
                     limit: None,
                     offset: None,
                     newest_first: true,
+                    ..Default::default()
                 })
                 .await
             {
@@ -1289,6 +1293,7 @@ pub(super) async fn handle_users_me_usage_get(
                     limit: Some(limit),
                     offset: Some(offset),
                     newest_first: true,
+                    ..Default::default()
                 })
                 .await
             {
@@ -1434,6 +1439,7 @@ pub(super) async fn handle_users_me_usage_active_get(
                 limit: Some(50),
                 offset: None,
                 newest_first: true,
+                ..Default::default()
             })
             .await
         {
@@ -1862,6 +1868,25 @@ mod tests {
     }
 
     #[test]
+    fn user_usage_payloads_expose_response_model_separately_from_mapping() {
+        let item = StoredRequestUsageAudit {
+            target_model: Some("provider-mapped-model".to_string()),
+            request_metadata: Some(json!({
+                "provider_response_model": "gpt-5.1"
+            })),
+            ..sample_usage("completed")
+        };
+
+        let record = build_users_me_usage_record_payload(&item, false, &BTreeMap::new(), false);
+        let active = build_users_me_usage_active_payload(&item);
+
+        for payload in [&record, &active] {
+            assert_eq!(payload["target_model"], "provider-mapped-model");
+            assert_eq!(payload["response_model"], "gpt-5.1");
+        }
+    }
+
+    #[test]
     fn user_usage_payloads_project_end_to_end_timings_from_metadata() {
         let item = StoredRequestUsageAudit {
             response_time_ms: Some(626),
@@ -1903,6 +1928,29 @@ mod tests {
         assert_eq!(active["requested_reasoning_effort"], "xhigh");
         assert_eq!(record["reasoning_effort"], "max");
         assert_eq!(active["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn user_usage_payloads_expose_gemini_thinking_config_reasoning_mapping() {
+        let item = StoredRequestUsageAudit {
+            request_body: Some(json!({
+                "generationConfig": {
+                    "thinkingConfig": { "includeThoughts": true, "thinkingLevel": "HIGH" }
+                }
+            })),
+            provider_request_body: Some(json!({
+                "generationConfig": { "thinkingConfig": { "thinkingBudget": 8192 } }
+            })),
+            ..sample_usage("completed")
+        };
+
+        let record = build_users_me_usage_record_payload(&item, false, &BTreeMap::new(), false);
+        let active = build_users_me_usage_active_payload(&item);
+
+        assert_eq!(record["requested_reasoning_effort"], "high");
+        assert_eq!(active["requested_reasoning_effort"], "high");
+        assert_eq!(record["reasoning_effort"], "xhigh");
+        assert_eq!(active["reasoning_effort"], "xhigh");
     }
 
     #[test]

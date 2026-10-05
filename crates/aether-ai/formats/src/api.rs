@@ -33,7 +33,7 @@ pub use crate::contracts::{
     OPENAI_IMAGE_STREAM_PLAN_KIND, OPENAI_IMAGE_STREAM_SUCCESS_REPORT_KIND,
     OPENAI_IMAGE_SYNC_ERROR_REPORT_KIND, OPENAI_IMAGE_SYNC_FINALIZE_REPORT_KIND,
     OPENAI_IMAGE_SYNC_PLAN_KIND, OPENAI_IMAGE_SYNC_SUCCESS_REPORT_KIND,
-    OPENAI_REALTIME_STREAM_PLAN_KIND, OPENAI_RERANK_SYNC_PLAN_KIND,
+    OPENAI_MEMORIES_SYNC_PLAN_KIND, OPENAI_REALTIME_STREAM_PLAN_KIND, OPENAI_RERANK_SYNC_PLAN_KIND,
     OPENAI_RESPONSES_COMPACT_STREAM_PLAN_KIND, OPENAI_RESPONSES_COMPACT_STREAM_SUCCESS_REPORT_KIND,
     OPENAI_RESPONSES_COMPACT_SYNC_ERROR_REPORT_KIND,
     OPENAI_RESPONSES_COMPACT_SYNC_FINALIZE_REPORT_KIND, OPENAI_RESPONSES_COMPACT_SYNC_PLAN_KIND,
@@ -208,6 +208,10 @@ pub use crate::formats::{
                 resolve_stream_spec as resolve_openai_responses_stream_spec,
                 resolve_sync_spec as resolve_openai_responses_sync_spec, LocalOpenAiResponsesSpec,
             },
+            xai::{
+                apply_xai_upstream_payload_edits, apply_xai_upstream_payload_edits_with_client,
+                xai_supports_native_image_generation,
+            },
         },
     },
     shared::{
@@ -220,9 +224,11 @@ pub use crate::formats::{
         standard_normalize::{
             build_cross_format_openai_chat_request_body,
             build_cross_format_openai_chat_request_body_with_model_directives,
+            build_cross_format_openai_chat_request_body_with_provider_context,
             build_cross_format_openai_responses_request_body,
             build_cross_format_openai_responses_request_body_with_model_directives,
             build_cross_format_openai_responses_request_body_with_model_directives_and_history_scope,
+            build_cross_format_openai_responses_request_body_with_provider_context,
             build_local_openai_chat_request_body,
             build_local_openai_chat_request_body_with_model_directives,
             build_local_openai_responses_request_body,

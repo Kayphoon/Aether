@@ -8,9 +8,10 @@ use serde_json::{Map, Value};
 use crate::repository::candidates::sanitize_request_candidate_skip_reason;
 
 use super::{
-    LIVE_SESSION_METADATA_KEY, PLAN_USAGE_RESERVATION_DEFERRED_METADATA_KEY,
-    PROVIDER_ACTUAL_SERVICE_TIER_METADATA_KEY, PROVIDER_CACHE_TTL_MINUTES_METADATA_KEY,
-    PROVIDER_REASONING_EFFORT_METADATA_KEY, PROVIDER_SERVICE_TIER_METADATA_KEY,
+    normalize_provider_response_model, LIVE_SESSION_METADATA_KEY,
+    PLAN_USAGE_RESERVATION_DEFERRED_METADATA_KEY, PROVIDER_ACTUAL_SERVICE_TIER_METADATA_KEY,
+    PROVIDER_CACHE_TTL_MINUTES_METADATA_KEY, PROVIDER_REASONING_EFFORT_METADATA_KEY,
+    PROVIDER_RESPONSE_MODEL_METADATA_KEY, PROVIDER_SERVICE_TIER_METADATA_KEY,
     REALTIME_SESSION_METADATA_KEY, REQUESTED_REASONING_EFFORT_METADATA_KEY,
     ROUTING_CANDIDATE_SKIP_REASON_METADATA_KEY, ROUTING_FAILURE_DIAGNOSTIC_METADATA_KEY,
     USAGE_AVAILABLE_METADATA_KEY, USAGE_PRICING_AVAILABLE_METADATA_KEY,
@@ -44,6 +45,40 @@ pub fn sanitize_usage_request_metadata_ref(value: Option<&Value>) -> Option<Valu
 
 pub fn sanitize_usage_request_metadata_object(source: &Map<String, Value>) -> Option<Value> {
     let mut target = Map::new();
+    if let Some(source) = source
+        .get("analytics_measurement")
+        .and_then(|value| value.get("source"))
+        .and_then(Value::as_str)
+        .filter(|source| matches!(*source, "reported" | "estimated" | "mixed" | "unknown"))
+    {
+        target.insert(
+            "analytics_measurement".into(),
+            serde_json::json!({"source":source}),
+        );
+    }
+    for (key, fields) in [
+        (
+            "analytics_attribution",
+            &["record_kind", "parent_request_id"][..],
+        ),
+        ("analytics_failure", &["origin", "stage", "reason"][..]),
+    ] {
+        if let Some(object) = source.get(key).and_then(Value::as_object) {
+            let mut projected = Map::new();
+            for field in fields {
+                insert_token(object, &mut projected, field, 128);
+            }
+            if key == "analytics_attribution" {
+                if let Some(value) = object.get("is_standalone").and_then(Value::as_bool) {
+                    projected.insert("is_standalone".into(), Value::Bool(value));
+                }
+            }
+            insert_bounded_u64(object, &mut projected, "schema_version", 1);
+            if !projected.is_empty() {
+                target.insert(key.into(), Value::Object(projected));
+            }
+        }
+    }
 
     insert_token(source, &mut target, "trace_id", 128);
     insert_ip_address(source, &mut target, "client_ip");
@@ -94,6 +129,12 @@ pub fn sanitize_usage_request_metadata_object(source: &Map<String, Value>) -> Op
     ] {
         insert_known_string(source, &mut target, key, sanitize_service_tier);
     }
+    insert_known_string(
+        source,
+        &mut target,
+        PROVIDER_RESPONSE_MODEL_METADATA_KEY,
+        normalize_provider_response_model,
+    );
     insert_bounded_u64(
         source,
         &mut target,
@@ -1225,6 +1266,27 @@ mod tests {
     use super::{sanitize_usage_request_metadata, sanitize_usage_request_metadata_ref};
 
     #[test]
+    fn account_attribution_preserves_key_flag_without_custom_identity_or_purpose() {
+        let metadata = sanitize_usage_request_metadata(Some(json!({
+            "analytics_attribution": {
+                "is_standalone": false,
+                "record_kind": "request",
+                "actor_user_id": "another-member",
+                "credential_kind": "personal",
+                "source": "trusted_identity"
+            }
+        })))
+        .unwrap();
+        assert_eq!(
+            metadata["analytics_attribution"],
+            json!({
+                "is_standalone": false,
+                "record_kind": "request"
+            })
+        );
+    }
+
+    #[test]
     fn persistence_projection_drops_credentials_and_free_diagnostics() {
         let metadata = sanitize_usage_request_metadata(Some(json!({
             "trace_id": "trace-1",
@@ -1277,6 +1339,23 @@ mod tests {
         ] {
             assert!(metadata.get(key).is_none(), "{key} must not be persisted");
         }
+    }
+
+    #[test]
+    fn persistence_projection_keeps_bounded_response_model_only_as_a_string() {
+        let metadata = sanitize_usage_request_metadata(Some(json!({
+            "provider_response_model": "  GPT-5.1  "
+        })))
+        .expect("response model should remain");
+        assert_eq!(metadata["provider_response_model"], "GPT-5.1");
+        assert!(sanitize_usage_request_metadata(Some(json!({
+            "provider_response_model": 42
+        })))
+        .is_none());
+        assert!(sanitize_usage_request_metadata(Some(json!({
+            "provider_response_model": "x".repeat(257)
+        })))
+        .is_none());
     }
 
     #[test]

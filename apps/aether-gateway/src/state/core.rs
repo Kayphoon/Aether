@@ -38,8 +38,9 @@ use super::super::async_task::{
 };
 use super::super::cache::{
     AuthApiKeyLastUsedCache, AuthContextCache, AuthSnapshotCache, DashboardResponseCache,
-    DirectPlanBypassCache, JsonValueCache, SchedulerAffinityCache, SchedulerAffinitySnapshotEntry,
-    SchedulerAffinityTarget, SystemConfigCache, SystemConfigInflightRegistration, ValueCache,
+    DirectPlanBypassCache, JsonValueCache, OverviewTotalCache, SchedulerAffinityCache,
+    SchedulerAffinitySnapshotEntry, SchedulerAffinityTarget, SystemConfigCache,
+    SystemConfigInflightRegistration, ValueCache,
 };
 use super::super::data::{GatewayDataConfig, GatewayDataState};
 use super::super::fallback_metrics;
@@ -53,6 +54,7 @@ use super::super::router::RequestAdmissionError;
 use super::super::{control::GatewayControlDecision, error::GatewayError};
 use super::super::{provider_transport, usage};
 
+use crate::codex_profile::spawn_worker as spawn_codex_client_profile_worker;
 use crate::maintenance::spawn_account_self_check_worker;
 use crate::maintenance::spawn_audit_cleanup_worker;
 use crate::maintenance::spawn_db_maintenance_worker;
@@ -74,6 +76,7 @@ use crate::maintenance::spawn_stats_hourly_aggregation_worker;
 use crate::maintenance::spawn_usage_cleanup_worker;
 use crate::maintenance::spawn_usage_counter_flush_worker;
 use crate::maintenance::spawn_wallet_daily_usage_aggregation_worker;
+use crate::xai_profile::spawn_worker as spawn_xai_client_profile_worker;
 
 const SYSTEM_CONFIG_CACHE_TTL: Duration = Duration::from_secs(30);
 // Requests may use a stale value after the fresh window until the entry reaches
@@ -148,6 +151,14 @@ fn system_config_key_affects_provider_transport_snapshot(key: &str) -> bool {
 }
 
 impl AppState {
+    pub async fn prewarm_codex_client_profile(&self) -> Result<String, String> {
+        crate::codex_profile::prewarm(self.runtime_state()).await
+    }
+
+    pub async fn prewarm_xai_client_profile(&self) -> Result<String, String> {
+        crate::xai_profile::prewarm(self.runtime_state()).await
+    }
+
     pub async fn prewarm_chat_pii_redaction_runtime_config(&self) -> Result<bool, String> {
         crate::privacy::read_chat_pii_redaction_runtime_config(self)
             .await
@@ -254,6 +265,7 @@ impl AppState {
     }
 
     fn replace_foreground_data_state(&mut self, data: Arc<GatewayDataState>) {
+        self.overview_total_cache = Arc::new(OverviewTotalCache::default());
         self.clear_provider_transport_snapshot_cache();
         self.invalidate_scheduler_affinity_cache();
         self.invalidate_auth_context_cache();
@@ -351,6 +363,8 @@ impl AppState {
             runtime_state: runtime_state.clone(),
             internal_gateway_auth,
             usage_runtime: Arc::new(usage::UsageRuntime::disabled()),
+            request_activity: Arc::new(crate::request_activity::RequestActivity::default()),
+            execution_activity: Arc::new(crate::execution_activity::ExecutionActivity::default()),
             video_tasks: Arc::new(VideoTaskService::new(
                 VideoTaskTruthSourceMode::PythonSyncReport,
             )),
@@ -402,6 +416,7 @@ impl AppState {
             scheduler_affinity_cache: Arc::new(SchedulerAffinityCache::default()),
             scheduler_affinity_epoch: Arc::new(AtomicU64::new(0)),
             dashboard_response_cache: Arc::new(DashboardResponseCache::default()),
+            overview_total_cache: Arc::new(OverviewTotalCache::default()),
             system_config_cache: Arc::new(SystemConfigCache::default()),
             endpoint_response_header_rules_cache: Arc::new(JsonValueCache::default()),
             candidate_row_page_cache: Arc::new(crate::cache::CandidateRowPageCache::default()),
@@ -465,6 +480,16 @@ impl AppState {
             auth_user_model_capability_store: Some(Arc::new(StdMutex::new(HashMap::new()))),
             #[cfg(test)]
             auth_wallet_store: Some(Arc::new(StdMutex::new(HashMap::new()))),
+            #[cfg(test)]
+            auth_wallet_adjustment_error_for_tests: None,
+            #[cfg(test)]
+            auth_wallet_lookup_error_for_tests: None,
+            #[cfg(test)]
+            auth_wallet_batch_store_for_tests: Some(Arc::new(StdMutex::new(HashMap::new()))),
+            #[cfg(test)]
+            auth_wallet_batch_operation_lock_for_tests: Arc::new(TokioMutex::new(())),
+            #[cfg(test)]
+            auth_wallet_batch_failure_record_error_for_tests: None,
             #[cfg(test)]
             admin_wallet_payment_order_store: Some(Arc::new(StdMutex::new(HashMap::new()))),
             #[cfg(test)]
@@ -2331,6 +2356,14 @@ impl AppState {
         supervise_worker(
             crate::task_runtime::TASK_KEY_MODEL_FETCH_WORKER,
             spawn_model_fetch_worker(background_state.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_CODEX_CLIENT_PROFILE,
+            Some(spawn_codex_client_profile_worker(background_state.clone())),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_XAI_CLIENT_PROFILE,
+            Some(spawn_xai_client_profile_worker(background_state.clone())),
         );
         supervise_worker(
             crate::task_runtime::TASK_KEY_VIDEO_TASK_POLLER,

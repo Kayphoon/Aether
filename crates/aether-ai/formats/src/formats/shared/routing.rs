@@ -11,13 +11,13 @@ use crate::contracts::{
     GEMINI_INTERACTIONS_STREAM_PLAN_KIND, GEMINI_INTERACTIONS_SYNC_PLAN_KIND,
     GEMINI_VIDEO_CANCEL_SYNC_PLAN_KIND, GEMINI_VIDEO_CREATE_SYNC_PLAN_KIND,
     OPENAI_CHAT_STREAM_PLAN_KIND, OPENAI_CHAT_SYNC_PLAN_KIND, OPENAI_EMBEDDING_SYNC_PLAN_KIND,
-    OPENAI_IMAGE_STREAM_PLAN_KIND, OPENAI_IMAGE_SYNC_PLAN_KIND, OPENAI_REALTIME_STREAM_PLAN_KIND,
-    OPENAI_RERANK_SYNC_PLAN_KIND, OPENAI_RESPONSES_COMPACT_STREAM_PLAN_KIND,
-    OPENAI_RESPONSES_COMPACT_SYNC_PLAN_KIND, OPENAI_RESPONSES_STREAM_PLAN_KIND,
-    OPENAI_RESPONSES_SYNC_PLAN_KIND, OPENAI_SEARCH_SYNC_PLAN_KIND,
-    OPENAI_VIDEO_CANCEL_SYNC_PLAN_KIND, OPENAI_VIDEO_CONTENT_PLAN_KIND,
-    OPENAI_VIDEO_CREATE_SYNC_PLAN_KIND, OPENAI_VIDEO_DELETE_SYNC_PLAN_KIND,
-    OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND,
+    OPENAI_IMAGE_STREAM_PLAN_KIND, OPENAI_IMAGE_SYNC_PLAN_KIND, OPENAI_MEMORIES_SYNC_PLAN_KIND,
+    OPENAI_REALTIME_STREAM_PLAN_KIND, OPENAI_RERANK_SYNC_PLAN_KIND,
+    OPENAI_RESPONSES_COMPACT_STREAM_PLAN_KIND, OPENAI_RESPONSES_COMPACT_SYNC_PLAN_KIND,
+    OPENAI_RESPONSES_STREAM_PLAN_KIND, OPENAI_RESPONSES_SYNC_PLAN_KIND,
+    OPENAI_SEARCH_SYNC_PLAN_KIND, OPENAI_VIDEO_CANCEL_SYNC_PLAN_KIND,
+    OPENAI_VIDEO_CONTENT_PLAN_KIND, OPENAI_VIDEO_CREATE_SYNC_PLAN_KIND,
+    OPENAI_VIDEO_DELETE_SYNC_PLAN_KIND, OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND,
 };
 use crate::formats::openai::image::request::is_openai_image_stream_request;
 
@@ -49,6 +49,10 @@ pub fn resolve_execution_runtime_stream_plan_kind_with_client_surface(
     method: &Method,
     path: &str,
 ) -> Option<&'static str> {
+    let path = path
+        .strip_prefix("/openai")
+        .filter(|p| *p == "/v1/videos" || p.starts_with("/v1/videos/"))
+        .unwrap_or(path);
     if route_class != Some("ai_public") {
         return None;
     }
@@ -181,8 +185,20 @@ pub fn resolve_execution_runtime_sync_plan_kind_with_client_surface(
     method: &Method,
     path: &str,
 ) -> Option<&'static str> {
+    let path = path
+        .strip_prefix("/openai")
+        .filter(|p| *p == "/v1/videos" || p.starts_with("/v1/videos/"))
+        .unwrap_or(path);
     if route_class != Some("ai_public") {
         return None;
+    }
+
+    if route_family == Some("openai")
+        && route_kind == Some("memories")
+        && *method == Method::POST
+        && path == "/v1/memories/trace_summarize"
+    {
+        return Some(OPENAI_MEMORIES_SYNC_PLAN_KIND);
     }
 
     if route_family == Some("openai")
@@ -206,7 +222,10 @@ pub fn resolve_execution_runtime_sync_plan_kind_with_client_surface(
     if route_family == Some("openai")
         && route_kind == Some("video")
         && *method == Method::POST
-        && path == "/v1/videos"
+        && matches!(
+            path,
+            "/v1/videos" | "/v1/videos/generations" | "/v1/videos/edits" | "/v1/videos/extensions"
+        )
     {
         return Some(OPENAI_VIDEO_CREATE_SYNC_PLAN_KIND);
     }
@@ -569,6 +588,7 @@ pub fn supports_sync_execution_decision_kind(plan_kind: &str) -> bool {
     matches!(
         plan_kind,
         OPENAI_CHAT_SYNC_PLAN_KIND
+            | OPENAI_MEMORIES_SYNC_PLAN_KIND
             | OPENAI_EMBEDDING_SYNC_PLAN_KIND
             | OPENAI_RERANK_SYNC_PLAN_KIND
             | OPENAI_SEARCH_SYNC_PLAN_KIND

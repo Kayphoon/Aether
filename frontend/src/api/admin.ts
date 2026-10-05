@@ -709,6 +709,8 @@ export interface LeaderboardItem {
   requests: number
   tokens: number
   cost: number
+  member_count?: number
+  active_member_count?: number
 }
 
 export interface LeaderboardResponse {
@@ -717,6 +719,7 @@ export interface LeaderboardResponse {
   metric: string
   start_date?: string | null
   end_date?: string | null
+  attribution?: 'current_membership'
 }
 
 export interface CostForecastResponse {
@@ -1285,6 +1288,8 @@ export const adminApi = {
 
   // Stats / Leaderboards
   async getLeaderboardUsers(params?: {
+    from?: string
+    to?: string
     start_date?: string
     end_date?: string
     preset?: string
@@ -1298,7 +1303,8 @@ export const adminApi = {
     model?: string
     include_inactive?: boolean
     exclude_admin?: boolean
-  }): Promise<LeaderboardResponse> {
+    user_group_id?: string
+  }, options?: AdminAnalyticsRequestOptions): Promise<LeaderboardResponse> {
     const cacheKey = buildCacheKey('admin:stats:leaderboard:users', params)
     return cachedRequest(
       cacheKey,
@@ -1308,7 +1314,38 @@ export const adminApi = {
         })
         return response.data
       },
-      20 * 1000
+      options?.skipCache ? 0 : 20 * 1000
+    )
+  },
+
+  async getLeaderboardUserGroups(params?: {
+    from?: string
+    to?: string
+    start_date?: string
+    end_date?: string
+    preset?: string
+    timezone?: string
+    tz_offset_minutes?: number
+    metric?: 'requests' | 'tokens' | 'cost'
+    order?: 'asc' | 'desc'
+    limit?: number
+    offset?: number
+    provider_name?: string
+    model?: string
+    include_inactive?: boolean
+    exclude_admin?: boolean
+  }, options?: AdminAnalyticsRequestOptions): Promise<LeaderboardResponse> {
+    const cacheKey = buildCacheKey('admin:stats:leaderboard:user-groups', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<LeaderboardResponse>(
+          '/api/admin/stats/leaderboard/user-groups',
+          { params }
+        )
+        return response.data
+      },
+      options?.skipCache ? 0 : 20 * 1000
     )
   },
 
@@ -1588,6 +1625,8 @@ export const adminApi = {
 
   async getTimeSeries(
     params?: {
+      from?: string
+      to?: string
       start_date?: string
       end_date?: string
       preset?: string
@@ -1595,6 +1634,7 @@ export const adminApi = {
       timezone?: string
       tz_offset_minutes?: number
       user_id?: string
+      user_group_id?: string
       model?: string
       provider_name?: string
     },

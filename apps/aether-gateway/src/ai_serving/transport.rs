@@ -58,6 +58,10 @@ pub(crate) mod windsurf {
     pub(crate) use aether_provider_transport::windsurf::*;
 }
 
+pub(crate) mod xai {
+    pub(crate) use aether_provider_transport::xai::*;
+}
+
 pub(crate) use aether_provider_transport::{
     append_transport_diagnostics_to_value, apply_codex_fingerprint_convergence,
     apply_codex_fingerprint_convergence_with_context, apply_local_auth_config_header_overrides,
@@ -74,7 +78,7 @@ pub(crate) use aether_provider_transport::{
     build_local_openai_chat_upstream_url, build_local_openai_responses_upstream_url,
     build_openai_image_headers, build_openai_image_upstream_url, build_passthrough_headers,
     build_request_trace_proxy_value, build_same_format_provider_headers,
-    build_same_format_provider_request_body,
+    build_same_format_provider_request_body, build_same_format_provider_request_body_for_operation,
     build_same_format_provider_request_body_with_compatibility_report,
     build_same_format_provider_request_body_with_compatibility_report_and_reasoning_replay_policy,
     build_same_format_provider_upstream_url, build_standard_plan_fallback_headers,

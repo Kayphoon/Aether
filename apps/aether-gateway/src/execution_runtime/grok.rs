@@ -1114,6 +1114,7 @@ fn grok_canonical_usage(usage: GrokUsageEstimate) -> StreamingCanonicalUsage {
 
 fn grok_standardized_usage(usage: GrokUsageEstimate) -> StandardizedUsage {
     let mut standardized = StandardizedUsage::new();
+    standardized.token_source = Some(aether_contracts::UsageTokenSource::Estimated);
     standardized.input_tokens = i64::try_from(usage.input_tokens).unwrap_or(i64::MAX);
     standardized.output_tokens = i64::try_from(usage.output_tokens).unwrap_or(i64::MAX);
     standardized.reasoning_tokens = i64::try_from(usage.reasoning_tokens).unwrap_or(i64::MAX);
@@ -3198,13 +3199,15 @@ fn openai_responses_body(
     let response_id = format!("resp_{}", Uuid::new_v4());
     let mut output = Vec::new();
     if !collected.thinking.trim().is_empty() {
+        let thinking = collected.thinking.trim();
         output.push(json!({
             "id": openai_responses_synthetic_reasoning_item_id(&response_id, 0),
             "type": "reasoning",
             "status": "completed",
-            "summary": [{
-                "type": "summary_text",
-                "text": collected.thinking.trim(),
+            "summary": [],
+            "content": [{
+                "type": "reasoning_text",
+                "text": thinking,
             }],
         }));
     }
@@ -4575,6 +4578,101 @@ mod tests {
     }
 
     #[test]
+    fn grok_usage_reports_preserve_estimated_provenance_after_wire_roundtrip() {
+        use aether_usage_runtime::{
+            build_stream_terminal_usage_event, build_sync_terminal_usage_event,
+            GatewayStreamReportRequest, GatewaySyncReportRequest, UsageEventType,
+        };
+
+        for (format, report_prefix) in [
+            ("openai:chat", "openai_chat"),
+            ("openai:responses", "openai_responses"),
+        ] {
+            let mut plan = sample_plan(
+                serde_json::json!({
+                    "messages": [{"role": "user", "content": "hello"}]
+                }),
+                format,
+            );
+            plan.stream = false;
+            plan.provider_api_format = format.to_string();
+            // The trusted planner binds this hint to the Grok runtime adapter.
+            // Exercise its transport through the same serialized report as usage.
+            let context = serde_json::json!({
+                "provider_type": "grok",
+                "provider_api_format": format,
+                "client_api_format": format,
+                "usage_token_source": "estimated"
+            });
+            let collected = GrokCollected {
+                status_code: 200,
+                text: "hello back".to_string(),
+                thinking: "short reasoning".to_string(),
+                ..GrokCollected::default()
+            };
+            let expected = grok_usage_estimate(&plan, &collected);
+            let result = grok_execution_result(&plan, collected, Some(&context));
+            let sync_report = GatewaySyncReportRequest {
+                trace_id: plan.request_id.clone(),
+                report_kind: format!("{report_prefix}_sync_success"),
+                report_context: Some(context.clone()),
+                status_code: result.status_code,
+                headers: result.headers,
+                body_json: result.body.and_then(|body| body.json_body),
+                client_body_json: None,
+                body_base64: None,
+                telemetry: result.telemetry,
+            };
+            let sync_report: GatewaySyncReportRequest =
+                serde_json::from_slice(&serde_json::to_vec(&sync_report).unwrap()).unwrap();
+            let sync_event = build_sync_terminal_usage_event(
+                &plan,
+                sync_report.report_context.as_ref(),
+                &sync_report,
+            )
+            .unwrap();
+
+            plan.stream = true;
+            let stream_report = GatewayStreamReportRequest {
+                trace_id: plan.request_id.clone(),
+                report_kind: format!("{report_prefix}_stream_success"),
+                report_context: Some(context),
+                status_code: 200,
+                headers: BTreeMap::new(),
+                provider_body_base64: None,
+                provider_body_state: None,
+                client_body_base64: None,
+                client_body_state: None,
+                terminal_summary: Some(super::grok_stream_terminal_summary(&plan, expected)),
+                telemetry: None,
+            };
+            let stream_report: GatewayStreamReportRequest =
+                serde_json::from_slice(&serde_json::to_vec(&stream_report).unwrap()).unwrap();
+            let stream_event = build_stream_terminal_usage_event(
+                &plan,
+                stream_report.report_context.as_ref(),
+                &stream_report,
+            )
+            .unwrap();
+
+            // Sync honors the response's explicit total. The existing stream
+            // summary has no explicit total, so its fallback also adds reasoning.
+            let sync_total = expected.input_tokens + expected.output_tokens;
+            let stream_total = sync_total + expected.reasoning_tokens;
+            for (event, expected_total) in [(sync_event, sync_total), (stream_event, stream_total)]
+            {
+                assert_eq!(event.event_type, UsageEventType::Completed, "{format}");
+                assert_eq!(event.data.input_tokens, Some(expected.input_tokens));
+                assert_eq!(event.data.output_tokens, Some(expected.output_tokens));
+                assert_eq!(event.data.total_tokens, Some(expected_total));
+                let metadata = event.data.request_metadata.unwrap();
+                assert_eq!(metadata["analytics_measurement"]["source"], "estimated");
+                assert!(metadata.get("usage_token_source").is_none());
+            }
+        }
+    }
+
+    #[test]
     fn openai_chat_body_includes_estimated_usage() {
         let plan = sample_plan(
             serde_json::json!({
@@ -4627,6 +4725,15 @@ mod tests {
             serde_json::json!(usage.reasoning_tokens)
         );
         assert_eq!(body["output"][0]["type"], serde_json::json!("reasoning"));
+        assert_eq!(
+            body["output"][0]["content"][0]["type"],
+            serde_json::json!("reasoning_text")
+        );
+        assert_eq!(
+            body["output"][0]["content"][0]["text"],
+            serde_json::json!("short reasoning")
+        );
+        assert_eq!(body["output"][0]["summary"], serde_json::json!([]));
         assert_eq!(body["output"][1]["type"], serde_json::json!("message"));
         assert!(body["output"][1]["id"]
             .as_str()
@@ -4810,7 +4917,12 @@ mod tests {
 
         assert!(body.contains("event: response.created"));
         assert!(body.contains("event: response.in_progress"));
-        assert!(body.contains("event: response.reasoning_summary_part.added"));
+        // Thinking must stay off the summary channel or clients that render
+        // both (Codex) print the raw chain-of-thought twice.
+        assert!(!body.contains("event: response.reasoning_summary_part.added"));
+        assert!(!body.contains("event: response.reasoning_summary_text.delta"));
+        assert!(!body.contains("event: response.reasoning_summary_text.done"));
+        assert!(body.contains("\"type\":\"reasoning_text\""));
         assert!(body.contains("event: response.content_part.added"));
         assert!(body.contains("event: response.output_text.done"));
         assert!(body.contains("event: response.completed"));

@@ -4,6 +4,7 @@ mod codex;
 mod generic;
 mod kiro;
 mod windsurf;
+mod xai;
 
 pub use antigravity::{AntigravityProviderOAuthAdapter, ANTIGRAVITY_USER_INFO_URL};
 pub use claude_code::{
@@ -11,7 +12,7 @@ pub use claude_code::{
     CLAUDE_CODE_COOKIE_SCOPE, CLAUDE_CODE_OAUTH_SCOPES, CLAUDE_CODE_PROVIDER_TYPE,
     CLAUDE_CODE_REDIRECT_URI, CLAUDE_CODE_TOKEN_URL, CLAUDE_CODE_WEB_BASE_URL,
 };
-pub use codex::CodexProviderOAuthAdapter;
+pub use codex::{CodexProviderOAuthAdapter, CODEX_OAUTH_SCOPES};
 pub use generic::{
     derive_codex_identity_fingerprint, GenericProviderOAuthAdapter, GenericProviderOAuthTemplate,
     ANTIGRAVITY_OAUTH_CLIENT_ID_ENV, ANTIGRAVITY_OAUTH_CLIENT_SECRET_ENV,
@@ -26,4 +27,8 @@ pub use kiro::{
 pub use windsurf::{
     WindsurfProviderOAuthAdapter, WINDSURF_CLIENT_ID, WINDSURF_PROVIDER_TYPE,
     WINDSURF_SHOW_AUTH_TOKEN_REDIRECT, WINDSURF_SIGNIN_URL,
+};
+pub use xai::{
+    XaiDevicePollOutcome, XaiProviderOAuthAdapter, XAI_CLIENT_ID, XAI_DEVICE_CODE_GRANT_TYPE,
+    XAI_DEVICE_CODE_URL, XAI_OAUTH_SCOPES, XAI_PROVIDER_TYPE, XAI_TOKEN_URL,
 };

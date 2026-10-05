@@ -82,4 +82,44 @@ describe('adminApi analytics cache options', () => {
     })
     expect(getMock).toHaveBeenNthCalledWith(4, '/api/admin/stats/errors/distribution', { params })
   })
+
+  it('requests the user group leaderboard with scoped cache parameters', async () => {
+    const groupParams = {
+      ...params,
+      metric: 'cost' as const,
+      offset: 10,
+      limit: 10,
+      include_inactive: true,
+    }
+    getMock.mockResolvedValueOnce({
+      data: { items: [], total: 0, metric: 'cost', attribution: 'current_membership' },
+    })
+
+    await expect(adminApi.getLeaderboardUserGroups(groupParams)).resolves.toMatchObject({
+      attribution: 'current_membership',
+    })
+
+    expect(buildCacheKeyMock).toHaveBeenCalledWith(
+      'admin:stats:leaderboard:user-groups',
+      groupParams
+    )
+    expect(cachedRequestMock).toHaveBeenCalledWith(
+      'admin:stats:leaderboard:user-groups',
+      expect.any(Function),
+      20 * 1000
+    )
+    expect(getMock).toHaveBeenCalledWith('/api/admin/stats/leaderboard/user-groups', {
+      params: groupParams,
+    })
+  })
+
+  it('refreshes both leaderboards for the same precise period as user accounts', async () => {
+    const range = { from: '2026-09-10T15:20:42Z', to: '2026-09-10T16:20:42Z', timezone: 'Asia/Shanghai' }
+    await adminApi.getLeaderboardUsers(range, { skipCache: true })
+    await adminApi.getLeaderboardUserGroups(range, { skipCache: true })
+    expect(getMock).toHaveBeenCalledWith('/api/admin/stats/leaderboard/users', { params: range })
+    expect(getMock).toHaveBeenCalledWith('/api/admin/stats/leaderboard/user-groups', { params: range })
+    for (const call of cachedRequestMock.mock.calls as unknown[][]) expect(call[2]).toBe(0)
+  })
+
 })

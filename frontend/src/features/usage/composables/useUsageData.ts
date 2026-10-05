@@ -36,6 +36,15 @@ export interface PaginationParams {
 }
 
 export interface FilterParams {
+  provider_id?: string
+  api_key_id?: string
+  request_id?: string
+  attribution_kind?: string
+  endpoint_kind?: string
+  request_type?: string
+  is_stream?: boolean
+  has_format_conversion?: boolean
+  slow_threshold_ms?: number
   search?: string
   user_id?: string
   model?: string
@@ -399,6 +408,12 @@ export function useUsageData(options: UseUsageDataOptions) {
 
       if (isAdminPage.value) {
         // 管理员页面：使用管理员 API
+        for (const key of ['provider_id', 'api_key_id', 'request_id', 'attribution_kind', 'endpoint_kind', 'request_type'] as const) {
+          if (filters?.[key]) params[key] = filters[key]
+        }
+        for (const key of ['is_stream', 'has_format_conversion', 'slow_threshold_ms'] as const) {
+          if (filters?.[key] !== undefined) params[key] = filters[key]
+        }
         if (filters?.user_id) {
           params.user_id = filters.user_id
         }
@@ -716,7 +731,13 @@ export function useUsageData(options: UseUsageDataOptions) {
           ? (typeof record.actual_service_tier === 'string' && record.actual_service_tier.trim()
               ? record.actual_service_tier
               : null)
-          : existing.actual_service_tier
+          : existing.actual_service_tier,
+        // 终态列表快照是最终候选的权威事实；空值必须清除旧候选的响应模型。
+        response_model: statusProgressed
+          ? (typeof record.response_model === 'string' && record.response_model.trim()
+              ? record.response_model
+              : null)
+          : existing.response_model
       }
     })
   }
