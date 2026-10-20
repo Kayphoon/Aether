@@ -60,110 +60,119 @@ pub(crate) async fn acquire_provider_pool_execution_guard(
     )))
 }
 
-pub(crate) async fn acquire_provider_pool_execution_guard_unobserved(
-    state: &AppState,
-    plan: &ExecutionPlan,
-) -> Result<ProviderPoolInFlightAdmission, GatewayError> {
-    if let Some(admission) = PREPARED_ADMISSION
-        .try_with(|prepared| {
-            let mut slot = prepared.lock().unwrap_or_else(|error| error.into_inner());
-            if slot.as_ref().is_some_and(|prepared| {
-                prepared.request_id == plan.request_id
-                    && prepared.provider_id == plan.provider_id
-                    && prepared.key_id == plan.key_id
-            }) {
-                slot.take().map(|prepared| prepared.admission)
-            } else {
-                None
-            }
-        })
-        .ok()
-        .flatten()
-    {
-        return validate_admission(state, plan, admission).await;
-    }
-    let (providers, keys) = tokio::try_join!(
-        state.read_provider_catalog_providers_by_ids(std::slice::from_ref(&plan.provider_id)),
-        state.read_provider_catalog_keys_by_ids(std::slice::from_ref(&plan.key_id)),
-    )?;
-    let limits = [
-        (
-            PROVIDER_KEY_CONCURRENCY_GATE,
-            plan.key_id.as_str(),
-            keys.into_iter()
-                .find(|key| key.id == plan.key_id)
-                .and_then(|key| key.concurrent_limit),
-        ),
-        (
-            "provider",
-            plan.provider_id.as_str(),
-            providers
-                .into_iter()
-                .find(|provider| provider.id == plan.provider_id)
-                .and_then(|provider| provider.concurrent_limit),
-        ),
-    ];
-    let mut gates = Vec::with_capacity(2);
-    for (name, resource, limit) in limits {
-        if let Some(limit) = limit
-            .filter(|limit| *limit > 0)
-            .and_then(|limit| usize::try_from(limit).ok())
+pub(crate) fn acquire_provider_pool_execution_guard_unobserved<'a>(
+    state: &'a AppState,
+    plan: &'a ExecutionPlan,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<ProviderPoolInFlightAdmission, GatewayError>>
+            + Send
+            + 'a,
+    >,
+> {
+    // Keep catalog revalidation and queue state off the nested HTTP/WS futures.
+    Box::pin(async move {
+        if let Some(admission) = PREPARED_ADMISSION
+            .try_with(|prepared| {
+                let mut slot = prepared.lock().unwrap_or_else(|error| error.into_inner());
+                if slot.as_ref().is_some_and(|prepared| {
+                    prepared.request_id == plan.request_id
+                        && prepared.provider_id == plan.provider_id
+                        && prepared.key_id == plan.key_id
+                }) {
+                    slot.take().map(|prepared| prepared.admission)
+                } else {
+                    None
+                }
+            })
+            .ok()
+            .flatten()
         {
-            gates.push(
-                state
-                    .runtime_state
-                    .keyed_semaphore(name, resource, limit, RuntimeSemaphoreConfig::default())
-                    .map_err(|error| GatewayError::Internal(error.to_string()))?,
-            );
+            return validate_admission(state, plan, admission).await;
         }
-    }
-    let _queue_wait = crate::execution_runtime::StreamCandidateWatchdogProgress::current()
-        .map(|progress| progress.begin_queue_wait());
-    let permits = match state
-        .provider_concurrency_queue
-        .acquire(&gates, &plan.key_id)
+        let (providers, keys) = tokio::try_join!(
+            state.read_provider_catalog_providers_by_ids(std::slice::from_ref(&plan.provider_id)),
+            state.read_provider_catalog_keys_by_ids(std::slice::from_ref(&plan.key_id)),
+        )?;
+        let limits = [
+            (
+                PROVIDER_KEY_CONCURRENCY_GATE,
+                plan.key_id.as_str(),
+                keys.into_iter()
+                    .find(|key| key.id == plan.key_id)
+                    .and_then(|key| key.concurrent_limit),
+            ),
+            (
+                "provider",
+                plan.provider_id.as_str(),
+                providers
+                    .into_iter()
+                    .find(|provider| provider.id == plan.provider_id)
+                    .and_then(|provider| provider.concurrent_limit),
+            ),
+        ];
+        let mut gates = Vec::with_capacity(2);
+        for (name, resource, limit) in limits {
+            if let Some(limit) = limit
+                .filter(|limit| *limit > 0)
+                .and_then(|limit| usize::try_from(limit).ok())
+            {
+                gates.push(
+                    state
+                        .runtime_state
+                        .keyed_semaphore(name, resource, limit, RuntimeSemaphoreConfig::default())
+                        .map_err(|error| GatewayError::Internal(error.to_string()))?,
+                );
+            }
+        }
+        let _queue_wait = crate::execution_runtime::StreamCandidateWatchdogProgress::current()
+            .map(|progress| progress.begin_queue_wait());
+        let permits = match state
+            .provider_concurrency_queue
+            .acquire(&gates, &plan.key_id)
+            .await
+        {
+            Ok(permits) => permits,
+            Err(RuntimeSemaphoreError::Saturated { gate, limit }) => {
+                let reason = if gate == "provider" {
+                    "provider_concurrency_limit_reached"
+                } else {
+                    "provider_key_concurrency_limit_reached"
+                };
+                return Ok(ProviderPoolInFlightAdmission::Rejected {
+                    reason,
+                    status: 429,
+                    message: format!("{gate} concurrency admission exhausted: {limit}"),
+                });
+            }
+            Err(error) => return Err(GatewayError::Internal(error.to_string())),
+        };
+        drop(_queue_wait);
+        let guard = acquire_provider_pool_in_flight_guard_with_key_limit(
+            Arc::clone(&state.runtime_state),
+            &plan.provider_id,
+            &plan.request_id,
+            plan.candidate_id.as_deref(),
+            &plan.key_id,
+            None,
+        )
         .await
-    {
-        Ok(permits) => permits,
-        Err(RuntimeSemaphoreError::Saturated { gate, limit }) => {
-            let reason = if gate == "provider" {
-                "provider_concurrency_limit_reached"
-            } else {
-                "provider_key_concurrency_limit_reached"
-            };
-            return Ok(ProviderPoolInFlightAdmission::Rejected {
-                reason,
-                status: 429,
-                message: format!("{gate} concurrency admission exhausted: {limit}"),
-            });
-        }
-        Err(error) => return Err(GatewayError::Internal(error.to_string())),
-    };
-    drop(_queue_wait);
-    let guard = acquire_provider_pool_in_flight_guard_with_key_limit(
-        Arc::clone(&state.runtime_state),
-        &plan.provider_id,
-        &plan.request_id,
-        plan.candidate_id.as_deref(),
-        &plan.key_id,
-        None,
-    )
-    .await
-    .map_err(|error| GatewayError::Internal(error.to_string()))?;
-    let mut guard = guard.unwrap_or(ProviderPoolInFlightGuard {
-        kind: ProviderPoolInFlightGuardKind::Disabled,
-        provider_key_permit: None,
-        concurrency_permits: Vec::new(),
-        observed_activity: None,
-        released: false,
-    });
-    guard.concurrency_permits = permits;
-    validate_admission(
-        state,
-        plan,
-        ProviderPoolInFlightAdmission::Acquired(Some(guard)),
-    )
-    .await
+        .map_err(|error| GatewayError::Internal(error.to_string()))?;
+        let mut guard = guard.unwrap_or(ProviderPoolInFlightGuard {
+            kind: ProviderPoolInFlightGuardKind::Disabled,
+            provider_key_permit: None,
+            concurrency_permits: Vec::new(),
+            observed_activity: None,
+            released: false,
+        });
+        guard.concurrency_permits = permits;
+        validate_admission(
+            state,
+            plan,
+            ProviderPoolInFlightAdmission::Acquired(Some(guard)),
+        )
+        .await
+    })
 }
 
 async fn validate_admission(
