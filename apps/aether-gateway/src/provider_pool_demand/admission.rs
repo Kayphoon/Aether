@@ -144,13 +144,13 @@ fn acquire_provider_pool_execution_guard_with_context<'a>(
             state.read_provider_catalog_providers_by_ids(std::slice::from_ref(&plan.provider_id)),
             state.read_provider_catalog_keys_by_ids(std::slice::from_ref(&plan.key_id)),
         )?;
+        let key = keys.into_iter().find(|key| key.id == plan.key_id);
+        let queue_enabled = key.as_ref().is_none_or(|key| key.concurrency_queue_enabled);
         let limits = [
             (
                 PROVIDER_KEY_CONCURRENCY_GATE,
                 plan.key_id.as_str(),
-                keys.into_iter()
-                    .find(|key| key.id == plan.key_id)
-                    .and_then(|key| key.concurrent_limit),
+                key.and_then(|key| key.concurrent_limit),
             ),
             (
                 "provider",
@@ -179,7 +179,12 @@ fn acquire_provider_pool_execution_guard_with_context<'a>(
             .map(|progress| progress.begin_queue_wait());
         let permits = match state
             .provider_concurrency_queue
-            .acquire_observed(&gates, &plan.key_id, Some((state, plan, report_context)))
+            .acquire_observed(
+                &gates,
+                &plan.key_id,
+                queue_enabled,
+                Some((state, plan, report_context)),
+            )
             .await
         {
             Ok(permits) => permits,

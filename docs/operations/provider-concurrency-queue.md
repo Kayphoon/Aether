@@ -6,6 +6,8 @@ The scheduler tries selectable candidates before concurrency-blocked candidates.
 
 ## Configuration
 
+Each upstream key has a `concurrency_queue_enabled` boolean setting beside its concurrency limit in the ordinary key, OAuth key and shared import settings forms. It defaults to `true` for existing and new keys. Setting it to `false` makes that key attempt both key and provider capacity once without waiting; other candidates can still be tried. The setting is persisted and included in key responses and configuration exports. Updating other key fields without this property preserves its current value. Only JSON booleans are accepted.
+
 `AETHER_GATEWAY_PROVIDER_CONCURRENCY_QUEUE_TIMEOUT_MS` defaults to `15000` (15 seconds), with a maximum of `120000`. This is the budget for each candidate admission, not the entire request across retries.
 
 `AETHER_GATEWAY_PROVIDER_CONCURRENCY_QUEUE_CAPACITY` defaults to `100` waiting requests per upstream credential, with a maximum of `10000`. Executing requests do not consume waiting capacity. Setting either value to `0` disables waiting and retains immediate capacity rejection. Configuration is loaded when the gateway starts.

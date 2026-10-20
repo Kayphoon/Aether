@@ -236,6 +236,74 @@ fn provider_concurrency_queue_http_sync_and_stream_resume_after_release() {
 }
 
 #[test]
+fn provider_concurrency_queue_key_opt_out_http_rejects_without_queue_status() {
+    crate::tests::run_async_test_on_large_stack(
+        "provider-queue-key-opt-out",
+        16 * 1024 * 1024,
+        || async {
+            let hits = Arc::new(AtomicUsize::new(0));
+            let (provider_url, provider) = crate::tests::start_server(Router::new().route(
+                "/chat/completions",
+                any({
+                    let hits = hits.clone();
+                    move || {
+                        let hits = hits.clone();
+                        async move {
+                            hits.fetch_add(1, Ordering::SeqCst);
+                            response(false)
+                        }
+                    }
+                }),
+            ))
+            .await;
+            let state = queue_state(provider_url, Duration::from_secs(15), 2);
+            let mut key = state
+                .read_provider_catalog_keys_by_ids(&[KEY.to_string()])
+                .await
+                .unwrap()
+                .remove(0);
+            key.concurrency_queue_enabled = false;
+            assert!(state
+                .update_provider_catalog_key(&key)
+                .await
+                .unwrap()
+                .is_some());
+            let gate = state
+                .runtime_state
+                .keyed_semaphore(
+                    "provider_key",
+                    KEY,
+                    1,
+                    aether_runtime_state::RuntimeSemaphoreConfig::default(),
+                )
+                .unwrap();
+            let held = gate.try_acquire().await.unwrap();
+            let (url, gateway) =
+                crate::tests::start_server(crate::build_router_with_state(state.clone())).await;
+            for stream in [false, true] {
+                let (status, body) =
+                    tokio::time::timeout(Duration::from_secs(2), request(url.clone(), stream))
+                        .await
+                        .expect("disabled key must not wait for the 15-second queue timeout");
+                assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+                assert!(!state.provider_concurrency_queue.is_waiting(KEY));
+                assert_eq!(hits.load(Ordering::SeqCst), 0);
+            }
+            let records = usage_api(&url, "records").await;
+            for row in records["records"].as_array().unwrap() {
+                assert_eq!(row["is_queued"], false, "{records}");
+            }
+            held.release().await.unwrap();
+            let (status, body) = request(url, false).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(hits.load(Ordering::SeqCst), 1);
+            gateway.abort();
+            provider.abort();
+        },
+    );
+}
+
+#[test]
 fn provider_concurrency_queue_http_full_and_timeout_return_429() {
     crate::tests::run_async_test_on_large_stack(
         "provider-queue-http-429",
@@ -494,7 +562,12 @@ fn provider_concurrency_queue_cancelled_and_failed_admission_are_terminal_in_htt
                     } else {
                         waiter_state
                             .provider_concurrency_queue
-                            .acquire_observed(&[gate], KEY, Some((&waiter_state, &plan, None)))
+                            .acquire_observed(
+                                &[gate],
+                                KEY,
+                                true,
+                                Some((&waiter_state, &plan, None)),
+                            )
                             .await
                             .map(|_| ())
                             .map_err(|error| GatewayError::Internal(error.to_string()))

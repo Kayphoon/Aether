@@ -20,6 +20,8 @@ Reuse existing table cells and mobile status clusters, their spacing utilities a
 
 The reusable `Badge` primitive is `src/components/ui/badge.vue`. Its outline variant is a rounded-full neutral hairline and tonal card surface. Request status remains in the existing `UsageRecordsTable` desktop status column and mobile model cluster. “排队中” appears only while the backend reports an active concurrency wait. Terminal outcomes take precedence. Ordinary pending requests keep their existing waiting label. Queue state is transient and must clear when admission succeeds, times out or is cancelled.
 
+Concurrency settings reuse `ConcurrencyQueueSetting`, a visible label and the existing `Switch` primitive next to the concurrency limit in normal key, OAuth key, batch-import and both pool batch forms. Normal and OAuth forms use two columns on mobile and four on desktop; the concurrency group spans two columns to keep its label readable. The label “并发满时排队” names the enabled behavior; supporting text explains immediate fallback when disabled. Default is enabled, including older keys without an explicit setting. The switch keeps its setting when the limit is unlimited. Batch changes require independently selecting this setting; otherwise existing values remain unchanged. Labels associate with the switch, keyboard focus remains visible, and no new colors, motion or surface layers are introduced.
+
 ## 6. Motion & interaction
 
 The queue indicator is static text without pulse, timer, queue position or new controls. Existing unrelated interactions remain unchanged. Text identifies state without relying on motion or color.

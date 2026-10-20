@@ -35,6 +35,40 @@ async fn queued_requests_acquire_in_arrival_order() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn key_queue_opt_out_rejects_saturation_without_waiting_or_leaking_permits() {
+    let runtime = RuntimeState::memory(MemoryRuntimeStateConfig::default());
+    let gates = [gate(&runtime, "key"), gate(&runtime, "provider")];
+    let queue = ProviderConcurrencyQueue::new(Duration::from_secs(10), 3);
+    for saturated_index in [0, 1] {
+        let held = gates[saturated_index].try_acquire().await.unwrap();
+        let started = Instant::now();
+        let rejected = queue.acquire_observed(&gates, "key", false, None).await;
+        assert!(matches!(
+            rejected,
+            Err(RuntimeSemaphoreError::Saturated { .. })
+        ));
+        assert_eq!(Instant::now(), started);
+        assert!(!queue.is_waiting("key"));
+        assert_eq!(
+            gates[1 - saturated_index]
+                .snapshot()
+                .await
+                .unwrap()
+                .in_flight,
+            0
+        );
+        held.release().await.unwrap();
+    }
+    release(
+        queue
+            .acquire_observed(&gates, "key", false, None)
+            .await
+            .unwrap(),
+    )
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn full_queue_rejects_and_cancellation_returns_waiting_capacity() {
     let runtime = RuntimeState::memory(MemoryRuntimeStateConfig::default());
     let gates = [gate(&runtime, "full")];

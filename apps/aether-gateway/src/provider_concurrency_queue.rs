@@ -75,13 +75,14 @@ impl ProviderConcurrencyQueue {
         gates: &[RuntimeSemaphore],
         resource: &str,
     ) -> Result<Vec<RuntimeSemaphorePermit>, RuntimeSemaphoreError> {
-        self.acquire_observed(gates, resource, None).await
+        self.acquire_observed(gates, resource, true, None).await
     }
 
     pub(crate) async fn acquire_observed(
         &self,
         gates: &[RuntimeSemaphore],
         resource: &str,
+        queue_enabled: bool,
         request: Option<(
             &crate::AppState,
             &aether_contracts::ExecutionPlan,
@@ -91,7 +92,7 @@ impl ProviderConcurrencyQueue {
         let Some(first_gate) = gates.first() else {
             return Ok(Vec::new());
         };
-        if !self.enabled() {
+        if !queue_enabled || !self.enabled() {
             return try_acquire_all(gates).await;
         }
         let lane = {
