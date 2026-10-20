@@ -10,26 +10,61 @@ pub(crate) struct PreparedProviderAdmission {
     provider_id: String,
     key_id: String,
     admission: ProviderPoolInFlightAdmission,
+    cancellation: Option<crate::provider_concurrency_queue::QueueCancellationGuard>,
 }
 
 impl PreparedProviderAdmission {
-    pub(crate) async fn scope<F: std::future::Future>(self, future: F) -> F::Output {
-        PREPARED_ADMISSION
+    pub(crate) fn was_queued(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|guard| guard.is_armed())
+    }
+
+    pub(crate) async fn scope<F, T>(mut self, future: F) -> Result<T, GatewayError>
+    where
+        F: std::future::Future<Output = Result<T, GatewayError>>,
+    {
+        let cancellation = self.cancellation.take();
+        let result = PREPARED_ADMISSION
             .scope(std::sync::Mutex::new(Some(self)), future)
-            .await
+            .await;
+        if let Some(cancellation) = cancellation {
+            match &result {
+                Ok(_) => cancellation.disarm(),
+                Err(error) => cancellation.fail(error).await,
+            }
+        }
+        result
     }
 }
 
 pub(crate) async fn prepare_provider_execution_admission(
     state: &AppState,
     plan: &ExecutionPlan,
+    report_context: Option<&serde_json::Value>,
 ) -> Result<PreparedProviderAdmission, GatewayError> {
-    let admission = acquire_provider_pool_execution_guard_unobserved(state, plan).await?;
+    let cancellation =
+        crate::provider_concurrency_queue::QueueCancellationGuard::new(state, plan, report_context);
+    let admission = cancellation
+        .scope(acquire_provider_pool_execution_guard_with_context(
+            state,
+            plan,
+            report_context,
+        ))
+        .await;
+    let admission = match admission {
+        Ok(admission) => admission,
+        Err(error) => {
+            cancellation.fail(&error).await;
+            return Err(error);
+        }
+    };
     Ok(PreparedProviderAdmission {
         request_id: plan.request_id.clone(),
         provider_id: plan.provider_id.clone(),
         key_id: plan.key_id.clone(),
         admission,
+        cancellation: Some(cancellation),
     })
 }
 
@@ -38,7 +73,8 @@ pub(crate) async fn acquire_provider_pool_execution_guard(
     plan: &ExecutionPlan,
     report_context: Option<&serde_json::Value>,
 ) -> Result<ProviderPoolInFlightAdmission, GatewayError> {
-    let admission = acquire_provider_pool_execution_guard_unobserved(state, plan).await?;
+    let admission =
+        acquire_provider_pool_execution_guard_with_context(state, plan, report_context).await?;
     let ProviderPoolInFlightAdmission::Acquired(guard) = admission else {
         return Ok(admission);
     };
@@ -63,6 +99,20 @@ pub(crate) async fn acquire_provider_pool_execution_guard(
 pub(crate) fn acquire_provider_pool_execution_guard_unobserved<'a>(
     state: &'a AppState,
     plan: &'a ExecutionPlan,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<ProviderPoolInFlightAdmission, GatewayError>>
+            + Send
+            + 'a,
+    >,
+> {
+    acquire_provider_pool_execution_guard_with_context(state, plan, None)
+}
+
+fn acquire_provider_pool_execution_guard_with_context<'a>(
+    state: &'a AppState,
+    plan: &'a ExecutionPlan,
+    report_context: Option<&'a serde_json::Value>,
 ) -> std::pin::Pin<
     Box<
         dyn std::future::Future<Output = Result<ProviderPoolInFlightAdmission, GatewayError>>
@@ -129,7 +179,7 @@ pub(crate) fn acquire_provider_pool_execution_guard_unobserved<'a>(
             .map(|progress| progress.begin_queue_wait());
         let permits = match state
             .provider_concurrency_queue
-            .acquire(&gates, &plan.key_id)
+            .acquire_observed(&gates, &plan.key_id, Some((state, plan, report_context)))
             .await
         {
             Ok(permits) => permits,

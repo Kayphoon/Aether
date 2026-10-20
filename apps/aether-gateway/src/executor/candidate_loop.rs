@@ -350,9 +350,12 @@ where
             return Ok(AiAttemptExecutionOutcome::Responded(response));
         }
         prewarm_direct_reqwest_candidate_client(plan);
-        let provider_admission =
-            crate::provider_pool_demand::prepare_provider_execution_admission(self.state, plan)
-                .await;
+        let provider_admission = crate::provider_pool_demand::prepare_provider_execution_admission(
+            self.state,
+            plan,
+            report_context.as_ref(),
+        )
+        .await;
         let provider_admission = match provider_admission {
             Ok(admission) => admission,
             Err(error) => {
@@ -367,90 +370,108 @@ where
                 return Err(error);
             }
         };
-        let _permit = match acquire_upstream_execution_gate(self.state, self.trace_id).await {
-            Ok(permit) => permit,
-            Err(error) => {
-                release_plan_usage_policy_cost_best_effort(
+        let was_queued = provider_admission.was_queued();
+        provider_admission
+            .scope(async {
+                let _permit = match acquire_upstream_execution_gate(self.state, self.trace_id).await
+                {
+                    Ok(permit) => permit,
+                    Err(error) => {
+                        release_plan_usage_policy_cost_best_effort(
+                            self.state,
+                            self.decision,
+                            plan,
+                            self.transfer_tracker,
+                            "upstream_admission_error",
+                        )
+                        .await;
+                        return Err(error);
+                    }
+                };
+                if let Some(mut response) = execution_plan_cost_capacity_response(
                     self.state,
+                    self.trace_id,
                     self.decision,
                     plan,
+                    report_context.as_ref(),
                     self.transfer_tracker,
-                    "upstream_admission_error",
                 )
-                .await;
-                return Err(error);
-            }
-        };
-        if let Some(response) = execution_plan_cost_capacity_response(
-            self.state,
-            self.trace_id,
-            self.decision,
-            plan,
-            report_context.as_ref(),
-            self.transfer_tracker,
-        )
-        .await?
-        {
-            return Ok(AiAttemptExecutionOutcome::Responded(response));
-        }
-        let report_context = crate::usage::attach_plan_wallet_fallback_context(
-            self.state,
-            report_context,
-            self.transfer_tracker.uses_wallet_fallback(),
-        )
-        .await?;
-        let upstream_execution_gate_held_started_at = std::time::Instant::now();
-        let deferred_report_context = report_context.clone();
-        let execution = provider_admission
-            .scope(execute_execution_runtime_sync_with_retry_scope(
-                self.state,
-                self.parts.uri.path(),
-                plan.clone(),
-                self.trace_id,
-                self.decision,
-                self.plan_kind,
-                attempt.report_kind(),
-                report_context,
-            ))
-            .await;
-        let execution = match execution {
-            Ok(execution) => execution,
-            Err(error) => {
-                release_plan_usage_policy_cost_best_effort(
+                .await?
+                {
+                    if was_queued {
+                        attach_deferred_usage_context(&mut response, plan, report_context.as_ref());
+                    }
+                    return Ok(AiAttemptExecutionOutcome::Responded(response));
+                }
+                let report_context = crate::usage::attach_plan_wallet_fallback_context(
                     self.state,
+                    report_context,
+                    self.transfer_tracker.uses_wallet_fallback(),
+                )
+                .await?;
+                let upstream_execution_gate_held_started_at = std::time::Instant::now();
+                let deferred_report_context = report_context.clone();
+                let execution = execute_execution_runtime_sync_with_retry_scope(
+                    self.state,
+                    self.parts.uri.path(),
+                    plan.clone(),
+                    self.trace_id,
                     self.decision,
-                    plan,
-                    self.transfer_tracker,
-                    "sync_execution_error",
+                    self.plan_kind,
+                    attempt.report_kind(),
+                    report_context,
                 )
                 .await;
-                return Err(error);
-            }
-        };
-        observe_gateway_stage_ms(
-            "upstream_execution_gate_held",
-            upstream_execution_gate_held_started_at
-                .elapsed()
-                .as_millis() as u64,
-        );
-        let mut execution = execution;
-        match &mut execution {
-            AiAttemptExecutionOutcome::Responded(response) => {
-                attach_redaction_execution_candidate(response, plan.candidate_id.as_deref());
-            }
-            AiAttemptExecutionOutcome::Retry {
-                fallback_response: Some(response),
-                ..
-            } => {
-                attach_redaction_execution_candidate(response, plan.candidate_id.as_deref());
-                attach_deferred_usage_context(response, plan, deferred_report_context.as_ref());
-            }
-            AiAttemptExecutionOutcome::Retry {
-                fallback_response: None,
-                ..
-            } => {}
-        }
-        Ok(execution)
+                let execution = match execution {
+                    Ok(execution) => execution,
+                    Err(error) => {
+                        release_plan_usage_policy_cost_best_effort(
+                            self.state,
+                            self.decision,
+                            plan,
+                            self.transfer_tracker,
+                            "sync_execution_error",
+                        )
+                        .await;
+                        return Err(error);
+                    }
+                };
+                observe_gateway_stage_ms(
+                    "upstream_execution_gate_held",
+                    upstream_execution_gate_held_started_at
+                        .elapsed()
+                        .as_millis() as u64,
+                );
+                let mut execution = execution;
+                match &mut execution {
+                    AiAttemptExecutionOutcome::Responded(response) => {
+                        attach_redaction_execution_candidate(
+                            response,
+                            plan.candidate_id.as_deref(),
+                        );
+                    }
+                    AiAttemptExecutionOutcome::Retry {
+                        fallback_response: Some(response),
+                        ..
+                    } => {
+                        attach_redaction_execution_candidate(
+                            response,
+                            plan.candidate_id.as_deref(),
+                        );
+                        attach_deferred_usage_context(
+                            response,
+                            plan,
+                            deferred_report_context.as_ref(),
+                        );
+                    }
+                    AiAttemptExecutionOutcome::Retry {
+                        fallback_response: None,
+                        ..
+                    } => {}
+                }
+                Ok(execution)
+            })
+            .await
     }
 
     async fn mark_unused_attempts(&self, attempts: Vec<T>) -> Result<(), Self::Error> {
@@ -1401,9 +1422,12 @@ where
             LocalFailoverDecision::StopLocalFailover
         );
         let watchdog_started_at = std::time::Instant::now();
-        let provider_admission =
-            crate::provider_pool_demand::prepare_provider_execution_admission(self.state, plan)
-                .await;
+        let provider_admission = crate::provider_pool_demand::prepare_provider_execution_admission(
+            self.state,
+            plan,
+            report_context.as_ref(),
+        )
+        .await;
         let provider_admission = match provider_admission {
             Ok(admission) => admission,
             Err(error) => {

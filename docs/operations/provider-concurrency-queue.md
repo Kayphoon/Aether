@@ -16,6 +16,8 @@ FIFO ordering is process-local. With the Redis runtime backend, active concurren
 
 The `provider_concurrency_queue_wait` stage metric records admission wait time.
 
+Usage records display a static “排队中” (Queued) badge while a request is waiting for provider concurrency admission. The admin and user usage list/active APIs expose the transient `is_queued` flag without changing the request lifecycle status. Ordinary pending requests retain their existing waiting label; admitted, timed-out and cancelled requests no longer display the queue badge. This does not add queue positions, wait timers or client-facing SSE progress events.
+
 ## Reference
 
 The per-credential FIFO, bounded waiting and cancellation behavior is inspired by [yetone/magpie concurrency admission](https://github.com/yetone/magpie/blob/d9c6a60d8a0b023f77bdf16d4d896316c67ec7c6/internal/gateway/concurrency.go). Unlike Magpie's optional unlimited queue and wait, Aether defaults to finite capacity and timeout and reuses its runtime semaphore backend.

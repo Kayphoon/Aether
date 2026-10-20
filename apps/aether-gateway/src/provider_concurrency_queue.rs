@@ -8,6 +8,10 @@ use aether_runtime_state::{RuntimeSemaphore, RuntimeSemaphoreError, RuntimeSemap
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use tokio::time::{sleep, timeout, Instant};
 
+mod observation;
+pub(crate) use observation::queued_request_ids;
+pub(crate) use observation::QueueCancellationGuard;
+
 pub(crate) fn is_concurrency_skip_reason(reason: Option<&str>) -> bool {
     matches!(
         reason,
@@ -65,10 +69,24 @@ impl ProviderConcurrencyQueue {
 
     /// FIFO is local to a credential; the permits enforce shared runtime limits.
     /// Dropping this future removes its place and releases partial admissions.
+    #[cfg(test)]
     pub(crate) async fn acquire(
         &self,
         gates: &[RuntimeSemaphore],
         resource: &str,
+    ) -> Result<Vec<RuntimeSemaphorePermit>, RuntimeSemaphoreError> {
+        self.acquire_observed(gates, resource, None).await
+    }
+
+    pub(crate) async fn acquire_observed(
+        &self,
+        gates: &[RuntimeSemaphore],
+        resource: &str,
+        request: Option<(
+            &crate::AppState,
+            &aether_contracts::ExecutionPlan,
+            Option<&serde_json::Value>,
+        )>,
     ) -> Result<Vec<RuntimeSemaphorePermit>, RuntimeSemaphoreError> {
         let Some(first_gate) = gates.first() else {
             return Ok(Vec::new());
@@ -107,13 +125,37 @@ impl ProviderConcurrencyQueue {
         let _place = lane.waiting.try_acquire().map_err(|_| saturated())?;
         let started = Instant::now();
         let mut last_saturated = saturated();
+        let mut observation = None;
         let result = timeout(self.timeout, async {
-            let _turn = lane.turn.lock().await;
+            let _turn = match lane.turn.try_lock() {
+                Ok(turn) => turn,
+                Err(_) => {
+                    if let Some((state, plan, context)) = request {
+                        observation = Some(observation::QueueObservation::begin(
+                            state,
+                            plan,
+                            context,
+                            self.timeout,
+                        ));
+                    }
+                    lane.turn.lock().await
+                }
+            };
             loop {
                 match try_acquire_all(gates).await {
                     Ok(permits) => return Ok(permits),
                     Err(error @ RuntimeSemaphoreError::Saturated { .. }) => {
                         last_saturated = error;
+                        if observation.is_none() {
+                            if let Some((state, plan, context)) = request {
+                                observation = Some(observation::QueueObservation::begin(
+                                    state,
+                                    plan,
+                                    context,
+                                    self.timeout,
+                                ));
+                            }
+                        }
                         sleep(Duration::from_millis(50)).await;
                     }
                     Err(error) => return Err(error),
@@ -122,6 +164,9 @@ impl ProviderConcurrencyQueue {
         })
         .await
         .unwrap_or_else(|_| Err(last_saturated));
+        if let Some(observation) = observation {
+            observation.finish().await;
+        }
         crate::stage_metrics::observe_gateway_stage_ms(
             "provider_concurrency_queue_wait",
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
